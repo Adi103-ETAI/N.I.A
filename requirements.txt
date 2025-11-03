@@ -1,0 +1,33 @@
+# Runtime dependencies (minimal)
+numpy>=1.23
+# OpenAI client (optional, only if you use OpenAI services)
+openai==0.28
+
+# FAISS is optional and platform-dependent. See README for Windows/conda instructions.
+# On Linux/macOS you can often install `faiss-cpu` via pip; on Windows prefer conda.
+# faiss-cpu==1.7.4
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-core>=0.3.0
+langchain-openai>=0.3.0
+
+
+# Utility libraries
+python-dotenv>=1.0
+
+# Dev / test dependencies
+pytest>=7.0
+pytest-mock>=3.10
+mypy>=1.0
+black>=24.0
+isort>=5.11
+flake8>=6.1
+
+# Optional: tools used during development
+typing-extensions>=4.0
+
+# Optional: for speech output (tts)
+pyttsx3>=2.90
+# Optional: for speech recognition (asr)
+speechrecognition>=3.10.0
+
