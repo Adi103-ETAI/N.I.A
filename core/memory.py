@@ -162,9 +162,9 @@ class VectorStore:
                 for key in expired:
                     self._remove_vector(key)
 
-            D, I = self.index.search(np.asarray([query_vector], dtype=np.float32), k)
+            D, idxs = self.index.search(np.asarray([query_vector], dtype=np.float32), k)
             out: List[Tuple[str, float]] = []
-            for idx, dist in zip(I[0], D[0]):
+            for idx, dist in zip(idxs[0], D[0]):
                 if idx == -1:
                     continue
                 key = self._vector_map.get(int(idx))

@@ -1,7 +1,8 @@
 import pytest
 from core.brain import CognitiveLoop
 from core.memory import InMemoryMemory
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 class DummyModel:
@@ -11,7 +12,8 @@ class DummyModel:
 class DummyTool:
     name = "dummy"
     def run(self, params):
-        if params.get("fail"): raise ValueError("fail")
+        if params.get("fail"):
+            raise ValueError("fail")
         return {"worked": True}
 
 class ToolMgr:
@@ -44,6 +46,6 @@ def test_tool_error(loop):
     assert r # just needs to not crash
 
 def test_reflection_memory(loop):
-    resp = loop.run("run dummy test")
+    loop.run("run dummy test")
     traces = [s for s in loop.memory._store if s["collection"]=="execution_traces"]
     assert len(traces) > 0

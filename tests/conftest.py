@@ -1,4 +1,5 @@
 """Pytest configuration and fixtures for NIA tests."""
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 

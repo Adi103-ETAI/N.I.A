@@ -1,9 +1,8 @@
-import pytest
 from core.memory import MemoryManager, InMemoryMemory
 import tempfile
 import os
 import time
-import sys, os
+import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 def test_inmemory_basic_crud():
@@ -25,7 +24,8 @@ def test_sqlite_memorymanager_crud():
         mgr._remove_memory('col', 'k')
         assert mgr.get_memory('col', 'k') is None
     finally:
-        import gc; gc.collect()
+        import gc
+        gc.collect()
         if os.path.exists(path):
             os.unlink(path)
 
@@ -39,7 +39,8 @@ def test_ttl_expiry_and_cleanup():
         time.sleep(1.2)
         assert mgr.get_memory('col', 'old') is None
     finally:
-        import gc; gc.collect()
+        import gc
+        gc.collect()
         if os.path.exists(path):
             os.unlink(path)
 
@@ -56,6 +57,7 @@ def test_stats_and_clear():
         count = mgr.clear_collection('bucket')
         assert count == 5
     finally:
-        import gc; gc.collect()
+        import gc
+        gc.collect()
         if os.path.exists(path):
             os.unlink(path)

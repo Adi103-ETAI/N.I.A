@@ -1,7 +1,7 @@
-import pytest
 from core.tools import ToolManager
 import asyncio
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 class TestTool:
