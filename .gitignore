@@ -25,6 +25,7 @@ wheels/
 venv/
 ENV/
 env/
+.venv_tests/
 
 # IDE
 .vscode/
@@ -58,4 +59,8 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+ 
+# Ignore non-Python language folders
+services/
+frontend/
 
