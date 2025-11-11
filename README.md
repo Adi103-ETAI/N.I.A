@@ -1,4 +1,4 @@
-# N.I.A — Notebook for Intelligent Assistant
+# N.I.A — Neural Intelligent Assistant
 
 This repository contains the N.I.A modular assistant core components (brain, tools, memory, model manager).
 
