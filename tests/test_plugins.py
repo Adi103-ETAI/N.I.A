@@ -2,8 +2,6 @@ import tempfile
 import shutil
 import os
 from core.tools import ToolManager
-import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Write out a test plugin
 PLUGIN_CODE = """

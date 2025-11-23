@@ -26,6 +26,7 @@ venv/
 ENV/
 env/
 .venv_tests/
+test_venv/
 
 # IDE
 .vscode/

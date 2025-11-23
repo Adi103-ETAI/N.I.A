@@ -73,14 +73,22 @@ class CognitiveLoop:
             self.tool_manager = tool_manager
         else:
             self.tool_manager = ToolManager()
-            # Register simple tools only when we created the manager
-            self.tool_manager.register("echo", lambda text: text)
+            # Register dev tools if missing, avoiding duplicates
             try:
-                self.tool_manager.register_tool(EchoTool)
+                if not self.tool_manager.has_tool("echo"):
+                    self.tool_manager.register_tool(EchoTool)
             except Exception:
-                # best-effort: if EchoTool cannot be registered it's ok for tests
-                pass
-            self.tool_manager.register("hello", lambda name="user": f"Hello, {name}!")
+                # Fallback: minimal echo to ensure core loop works
+                if not self.tool_manager.has_tool("echo"):
+                    self.tool_manager.register("echo", lambda text=None, message=None: message or text or "")
+            # Optional hello utility
+            try:
+                from core.tools.hello_tool import HelloTool
+                if not self.tool_manager.has_tool("hello"):
+                    self.tool_manager.register_tool(HelloTool)
+            except Exception:
+                if not self.tool_manager.has_tool("hello"):
+                    self.tool_manager.register("hello", lambda name="user": f"Hello, {name}!")
 
         self.model_manager = model_manager
         self.config = config or {}
@@ -118,20 +126,6 @@ class CognitiveLoop:
                 return Intent(name=name, confidence=conf, 
                             entities={}, raw_input=text)
         
-        # Fallback to model-based classification
-        try:
-            if hasattr(self.model_manager, 'classify'):
-                result = self.model_manager.classify(text)
-                if isinstance(result, dict):
-                    return Intent(
-                        name=result.get('intent', 'chat'),
-                        confidence=result.get('confidence', 0.5),
-                        entities=result.get('entities', {}),
-                        raw_input=text
-                    )
-        except Exception as exc:
-            self.logger.debug("Model classification failed: %s", exc)
-            
         # Default to chat intent with low confidence
         return Intent(name='chat', confidence=0.3, 
                      entities={}, raw_input=text)
@@ -170,19 +164,6 @@ class CognitiveLoop:
             "turn": self._turn_counter,
             "conversation_id": self._conversation_id,
         }
-
-        # Enhance with model-based entity extraction
-        try:
-            if hasattr(self.model_manager, "interpret"):
-                interp = self.model_manager.interpret(user_input)
-                if isinstance(interp, dict):
-                    perception["entities"].update(interp.get("entities", {}))
-                    # Only override intent if model is confident
-                    if interp.get("confidence", 0) > intent.confidence:
-                        perception["intent"] = interp.get("intent", intent.name)
-                        perception["confidence"] = interp.get("confidence", intent.confidence)
-        except Exception as exc:  # keep robust - model may not be wired yet
-            self.logger.debug("model_manager.interpret failed: %s", exc)
 
         return perception
 
@@ -237,35 +218,28 @@ class CognitiveLoop:
                 ]
             }
         else:
-            # Default safe plan: echo input
+            # Default safe plan: try LLM first, then echo fallback
+            steps = []
+            if hasattr(self.model_manager, "reason"):
+                steps.append({
+                    "tool": "__llm__",
+                    "params": {
+                        "prompt": raw_input,
+                        "mode": self.config.get("default_reason_mode", "default"),
+                    }
+                })
+            steps.append({
+                "tool": "echo",
+                "params": {"text": raw_input}
+            })
             plan = {
                 "goal": "respond",
-                "steps": [
-                    {
-                        "tool": "echo",
-                        "params": {"text": raw_input}
-                    }
-                ]
+                "steps": steps,
+                "stop_after_success": True,
             }
 
-        # Allow model to enhance or override the plan
-        try:
-            if hasattr(self.model_manager, "plan"):
-                model_plan = self.model_manager.plan(
-                    perception,
-                    available_tools=available_tools
-                )
-                if isinstance(model_plan, dict) and model_plan.get("steps"):
-                    # Validate each step references an available tool
-                    if all(s.get("tool") in available_tools 
-                          for s in model_plan["steps"]):
-                        plan = model_plan
-        except Exception as exc:
-            self.logger.debug("Model planning failed: %s", exc)
-
-        # Add metadata for tracing
         plan.update({
-            "source": "model" if "model_plan" in locals() else "rules",
+            "source": "rules",
             "confidence": confidence,
             "fallback_enabled": True
         })
@@ -289,6 +263,9 @@ class CognitiveLoop:
         params = step.get("params", {})
         
         try:
+            if tool == "__llm__":
+                return self._execute_llm_step(step, context)
+
             # Inject context into params if tool accepts it
             if hasattr(self.tool_manager, "accepts_context"):
                 if self.tool_manager.accepts_context(tool):
@@ -323,6 +300,25 @@ class CognitiveLoop:
         
         return result
 
+    def _execute_llm_step(self, step: Dict[str, Any], context: ExecutionContext) -> Dict[str, Any]:
+        """Execute a virtual LLM step using the model manager."""
+        if not self.model_manager:
+            raise RuntimeError("Model manager is not configured")
+
+        params = step.get("params", {})
+        prompt = params.get("prompt") or params.get("text") or params.get("message")
+        if not prompt:
+            raise ValueError("LLM step requires a prompt")
+
+        mode = params.get("mode", "default")
+        response = self.model_manager.reason(prompt, mode=mode)
+        return {
+            "output": response,
+            "success": True,
+            "provider": getattr(self.model_manager, "provider", "unknown"),
+            "step": step,
+        }
+
     def perform_action(self, plan: Dict[str, Any]) -> Dict[str, Any]:
         """Action phase: execute the plan using the Tool Manager.
 
@@ -346,6 +342,8 @@ class CognitiveLoop:
             result = self._execute_step(step, context)
             results.append(result)
             
+            if result["success"] and plan.get("stop_after_success"):
+                break
             # Break on failure unless fallbacks are enabled
             if not result["success"] and not plan.get("fallback_enabled"):
                 break

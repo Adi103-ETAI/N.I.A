@@ -150,6 +150,21 @@ class HelloTool:
 - ModelManager and Memory are injectable; core has no hard deps on any single backend.
 - Reflection and trace logging are robust and extensible for future LLM-driven improvements.
 
+## ToolManager APIs and Usage
+
+- Preferred API: `core.tool_manager.ToolManager` (raw result API). Methods:
+  - `register(name, func)` — register callable tools
+  - `register_tool(cls_or_instance)` — register class/instance with `name` and `run`
+  - `execute(tool_name, params, timeout=None)` — returns raw tool output or raises
+  - `execute_async(tool_name, params, timeout=None)` — async variant
+  - `list_tools()`, `has_tool()`, plugin helpers
+
+- Legacy adapter: `core.tools.ToolManager` (dict-wrapped API). Methods mirror the preferred API but `execute`/`aexecute` return `{"success": bool, "output": any, "error": str}`.
+
+- Dev tool registration is explicit via `core.tools.register_dev_tools(mgr)` and called in `interface/chat.py` on startup. Import-time auto-registration is disabled by default. To enable gated auto-registration, set `NIA_AUTO_REGISTER_DEV_TOOLS=1` in the environment.
+
+- Internal code (brain, chat) uses the preferred API. Tests include both APIs to validate compatibility. For new code, use `core.tool_manager.ToolManager` and call `register_dev_tools` when you need built-in tools.
+
 ## Plugin System: Extending NIA with Hot-Plug Tools
 
 - Place any `.py` tool file in the `plugins/` directory. Each file must contain at least one class with `name` and `run(params)` attributes (see below).
@@ -176,3 +191,33 @@ class HelloPlugin:
 
 See built-in `plugins/demo_plugin.py` as a reference.
 # N.I.A
+
+## GitHub Copilot Configuration & Usage
+
+This project includes guidance for GitHub Copilot under `.github/copilot-instructions.md`.
+
+Purpose
+- Provide Copilot with architectural guardrails to generate code consistent with NIA’s patterns.
+- Reinforce the preferred `ToolManager` API, explicit tool registration, and no import-time side effects.
+
+Usage Guidelines
+- Read `.github/copilot-instructions.md` before using Copilot on this repo.
+- Prefer `core.tool_manager.ToolManager` (raw API) for new code; use `core.tools.ToolManager` adapter only when legacy dict-wrapped results are required.
+- Do not register tools at import time. Call `core.tools.register_dev_tools(mgr)` explicitly from startup code (see `interface/chat.py`).
+- Optional environment gating for demos: set `NIA_AUTO_REGISTER_DEV_TOOLS` to enable best-effort dev tool registration at import time.
+
+Relevant Configuration
+- Environment variable: `NIA_AUTO_REGISTER_DEV_TOOLS` controls import-time dev tool auto-registration.
+
+```powershell
+# Disabled by default (recommended for production/testing)
+$env:NIA_AUTO_REGISTER_DEV_TOOLS = "0"
+
+# Enable for local demos (best-effort, safe to leave off)
+$env:NIA_AUTO_REGISTER_DEV_TOOLS = "1"
+```
+
+Maintenance & Version Control
+- Keep `.github/copilot-instructions.md` up to date when refactoring architecture (tool registration policies, API changes).
+- Changes should be reviewed via pull requests together with code updates that alter `ToolManager` behavior or registration flow.
+- Ensure tests remain aligned with the documented behavior (no import-time side effects, idempotent registration).

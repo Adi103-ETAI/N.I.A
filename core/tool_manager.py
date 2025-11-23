@@ -163,6 +163,24 @@ class ToolManager:
             count += 1
         return count
 
+    def reload_plugins(self, directory: str) -> int:
+        """Reload plugins from `directory`.
+
+        This unloads any currently loaded plugin tools and attempts to load
+        plugins from the provided directory. It returns the number of plugin
+        tools successfully loaded. Errors during unload/load are logged but
+        do not raise.
+        """
+        try:
+            self.unload_all_plugins()
+        except Exception:
+            self.logger.exception("Failed to unload plugins during reload")
+        try:
+            return self.load_plugins_from_directory(directory)
+        except Exception:
+            self.logger.exception("Failed to load plugins during reload")
+            return 0
+
     def plugin_tools(self) -> List[str]:
         return list(self._plugin_sources)
 

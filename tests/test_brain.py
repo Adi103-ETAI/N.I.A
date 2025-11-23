@@ -1,9 +1,6 @@
 import pytest
 from core.brain import CognitiveLoop
 from core.memory import InMemoryMemory
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 class DummyModel:
     def render_response(self, summary):
