@@ -136,6 +136,30 @@ You can enable 'talk' and 'listen' by plugging in 3rd-party libraries to ToolMan
 
 Default CLI accepts `--voice` to enable voice mode (falls back silently if not available).
 
+### Audio device troubleshooting (Windows)
+
+Audio input/output issues on Windows usually stem from missing PortAudio/PyAudio bindings or driver conflicts. Helpful tips:
+
+- If you're using `speech_recognition` (microphone capture) and `pyaudio` isn't found, try installing via `pipwin` (this fetches prebuilt Windows wheels):
+
+```powershell
+pip install pipwin
+pipwin install pyaudio
+```
+
+- If using `whisper`/other heavy ASR backends, prefer running them in a separate process or container (they may need AVX/CPU features or GPU drivers).
+
+- For `pyttsx3` TTS problems on Windows, ensure the SAPI5 voices are installed and accessible by the current user; `pyttsx3` uses the OS TTS subsystem.
+
+- If you see `OSError: PortAudio library not found` on import, try installing system PortAudio or use conda on Windows:
+
+```powershell
+conda install -c conda-forge portaudio
+pip install pyaudio
+```
+
+- In CI, avoid relying on a physical microphone — use the typed fallback (`typed` param for ASR plugins) or test via subprocess JSON I/O.
+
 ### Async vs Sync Usage
 - Implement `arun(self, params)` for asynchronous tools, or `run(self, params)` for synchronous ones.
 - Use `ToolManager.execute_async(...)` to run tools concurrently with other async tasks.

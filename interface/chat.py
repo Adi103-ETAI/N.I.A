@@ -9,49 +9,78 @@ from core.brain import CognitiveLoop
 from core.memory import InMemoryMemory
 from core.tool_manager import ToolManager
 from core.tools import register_dev_tools
+from typing import Optional
+from core.voice_manager import BackgroundListener, normalize_listen_result
 import os
 from pathlib import Path
 from models.model_manager import ModelManager
 from persona.profile import build_persona_config
 import argparse
+import asyncio
+import threading
+import queue
+import time
+import sys
+try:
+    import msvcrt
+    _HAS_MSVCRT = True
+except Exception:
+    _HAS_MSVCRT = False
 from dotenv import load_dotenv
 
 
-def main() -> None:
-    # Load environment variables from .env file at runtime rather than at
-    # import time to avoid mutating process state during simple imports.
-    load_dotenv()
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger("nia")
+def _listen_result_to_text(res: object) -> Optional[str]:
+    """Normalize listen tool results into a plain text string or None.
 
+    Accepts strings or dict-like responses from plugins and returns the
+    recognized text, or None when no usable text is present.
+    """
+    if res is None:
+        return None
+    if isinstance(res, str):
+        return res
+    if isinstance(res, dict):
+        # Legacy flags that indicate a failed listen
+        if 'ok' in res and res.get('ok') is False:
+            return None
+        if 'success' in res and res.get('success') is False:
+            return None
+
+        for key in ('text', 'output', 'transcript', 'message'):
+            if key in res and res.get(key):
+                return res.get(key)
+
+    return None
+
+
+def main(argv: Optional[list] = None) -> None:
+    """Entry point for the simple CLI demo."""
     parser = argparse.ArgumentParser()
-    parser.add_argument('--voice', action='store_true', help='Use microphone and speech output')
-    args = parser.parse_args()
+    parser.add_argument('--voice', action='store_true', help='Enable voice mode')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    args = parser.parse_args(args=argv)
+
+    # Load .env at runtime to avoid import-time side effects
+    load_dotenv()
+
+    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
+    logger = logging.getLogger(__name__)
 
     memory = InMemoryMemory()
-    tools = ToolManager(logger=logger)
-    try:
-        tools.discover_and_register()
-    except Exception as exc:
-        logger.warning(f'Tool auto-discovery failed: {exc}')
+    tools = ToolManager()
 
-    # Project root and plugin directory
-    PROJECT_ROOT = Path(__file__).resolve().parents[1]
-    PLUGIN_DIR = os.path.join(PROJECT_ROOT, "plugins")
-
-    # Load any plugins from the plugins directory (best-effort)
-    try:
-        tools.load_plugins_from_directory(PLUGIN_DIR)
-    except Exception as exc:
-        logger.debug("Plugin load failed at startup: %s", exc)
-
-    # Register a small set of development/demo tools. In production this
-    # would be dynamic and policy-driven. Use explicit helper to avoid
-    # import-time side-effects and keep registration explicit.
+    # Optional dev tool registration — non-fatal if it fails
     try:
         register_dev_tools(tools)
     except Exception as exc:
         logger.debug("register_dev_tools failed: %s", exc)
+
+    # Plugin directory and initial load
+    PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugins"
+    try:
+        tools.reload_plugins(PLUGIN_DIR)
+    except Exception as exc:
+        logger.debug("initial plugin load failed: %s", exc)
 
     persona_config = build_persona_config()
     model_config = {
@@ -74,59 +103,105 @@ def main() -> None:
     # Voice mode is enabled only if both 'listen' and 'speak' tools are available
     voice_mode = args.voice and tools.has_tool('listen') and tools.has_tool('speak')
 
-    while True:
-        try:
-            if voice_mode:
-                # run the listen tool and fall back to stdin if it fails or returns falsy
+    # Background listener queue and thread (used only in voice mode)
+    voice_queue: "queue.Queue[str]" = queue.Queue()
+    listener = None
+    if voice_mode:
+        # Use the VoiceManager-agnostic BackgroundListener. We pass a tiny
+        # adapter that exposes `listen(**kwargs)` using the underlying tools
+        class _ToolAdapter:
+            def __init__(self, tools):
+                self._tools = tools
+
+            def listen(self, **kwargs):
+                # Keep compatibility with both sync execute and voice manager
                 try:
-                    li = tools.execute('listen', {})
+                    return self._tools.execute('listen', kwargs)
                 except Exception:
-                    li = None
-                user_input = li or input('> ')
-            else:
-                user_input = input('> ')
-        except (KeyboardInterrupt, EOFError):
-            print("\nExiting.")
-            break
+                    # Fallback to async execution if plugin expects it
+                    try:
+                        return asyncio.run(self._tools.execute_async('listen', kwargs, timeout=kwargs.get('_timeout', 2)))
+                    except Exception:
+                        return None
 
-        if not user_input:
-            continue
-        cmd = user_input.strip().lower()
-        if cmd in ("exit", "quit"):
-            print("Goodbye")
-            break
-        if cmd == "list plugins":
-            print("Plugin tool(s):", tools.plugin_tools())
-            continue
-        if cmd == "reload plugins":
+        listener = BackgroundListener(_ToolAdapter(tools), output_queue=voice_queue, poll_interval=0.1, timeout=2)
+        listener.start()
+
+    try:
+        while True:
             try:
-                count = tools.reload_plugins(PLUGIN_DIR)
-                logger.info("Reloaded %d plugins", count)
-            except Exception as exc:
-                logger.warning("Reloading plugins failed: %s", exc)
-            print("Plugins reloaded. Plugin tool(s):", tools.plugin_tools())
-            continue
-        if cmd.startswith("unload plugin"):
-            parts = cmd.split()
-            if len(parts) == 3:
+                if voice_mode:
+                    # run the listen tool with a short timeout and fall back to stdin
+                    # if it fails or returns nothing. Use execute_async with a timeout
+                    # to allow the plugin to be interruptible and non-blocking.
+                    try:
+                        li = asyncio.run(tools.execute_async('listen', {}, timeout=3))
+                    except Exception:
+                        li = None
+                    # Normalize plugin responses (dict/object) to a plain string
+                    text = _listen_result_to_text(li)
+                    if text:
+                        user_input = text
+                    else:
+                        # fallback to typed input if listen produced no text
+                        # Accept 'type' or 't' prefix as a keyboard override while in voice mode
+                        typed = input('[voice] Press Enter to type or wait for speech:\n> ')
+                        if typed.strip().startswith('type '):
+                            user_input = typed.strip()[5:]
+                        elif typed.strip().startswith('t '):
+                            user_input = typed.strip()[2:]
+                        else:
+                            user_input = typed
+                else:
+                    user_input = input('> ')
+            except (KeyboardInterrupt, EOFError):
+                print("\nExiting.")
+                break
+
+            if not user_input:
+                continue
+            cmd = user_input.strip().lower()
+            if cmd in ("exit", "quit"):
+                print("Goodbye")
+                break
+            if cmd == "list plugins":
+                print("Plugin tool(s):", tools.plugin_tools())
+                continue
+            if cmd == "reload plugins":
                 try:
-                    ok = tools.unload_plugin(parts[2])
+                    count = tools.reload_plugins(PLUGIN_DIR)
+                    logger.info("Reloaded %d plugins", count)
                 except Exception as exc:
-                    ok = False
-                    logger.warning("Failed to unload plugin %s: %s", parts[2], exc)
-                print(f"Plugin '{parts[2]}' unloaded: {ok}. Plugin tools:", tools.plugin_tools())
-            else:
-                print("Usage: unload plugin <tool_name>")
-            continue
+                    logger.warning("Reloading plugins failed: %s", exc)
+                print("Plugins reloaded. Plugin tool(s):", tools.plugin_tools())
+                continue
+            if cmd.startswith("unload plugin"):
+                parts = cmd.split()
+                if len(parts) == 3:
+                    try:
+                        ok = tools.unload_plugin(parts[2])
+                    except Exception as exc:
+                        ok = False
+                        logger.warning("Failed to unload plugin %s: %s", parts[2], exc)
+                    print(f"Plugin '{parts[2]}' unloaded: {ok}. Plugin tools:", tools.plugin_tools())
+                else:
+                    print("Usage: unload plugin <tool_name>")
+                continue
 
-        response = brain.run(user_input)
-        print(response)
-        if voice_mode:
-            # call the speak tool and ignore errors
-            try:
-                tools.execute('speak', {'text': response})
-            except Exception as exc:
-                logger.debug("speak tool failed: %s", exc)
+            response = brain.run(user_input)
+            print(response)
+            if voice_mode:
+                # call the speak tool and ignore errors
+                try:
+                    tools.execute('speak', {'text': response})
+                except Exception as exc:
+                    logger.debug("speak tool failed: %s", exc)
+    finally:
+        if listener:
+            listener.stop()
+    # finally:
+    #     if listener:
+    #         listener.stop()
 
 
 if __name__ == "__main__":

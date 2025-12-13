@@ -166,7 +166,7 @@ class ToolManager:
         return loaded
 
     # ---------------- Subprocess-based safe plugins -----------------
-    def register_subprocess_plugin(self, path: str, name: Optional[str] = None, timeout: int = 5) -> None:
+    def register_subprocess_plugin(self, path: str, name: Optional[str] = None, timeout: int = 15) -> None:
         """Register a plugin file to be executed in a subprocess for isolation.
 
         The plugin file should accept JSON on stdin and print JSON on stdout.
@@ -188,7 +188,7 @@ class ToolManager:
         self._plugin_sources[tool_name] = str(p)
         self.logger.info(f"Registered subprocess plugin wrapper: {tool_name} -> {path}")
 
-    def register_subprocess_plugins_from_directory(self, directory: str, timeout: int = 5) -> int:
+    def register_subprocess_plugins_from_directory(self, directory: str, timeout: int = 15) -> int:
         loaded = 0
         if not os.path.isdir(directory):
             self.logger.warning("Plugin directory not found: %s", directory)
