@@ -229,10 +229,55 @@ class HelloPlugin:
 ```
 - These are loaded and become callable tool names in NIA automatically.
 
+### Add & reload a sample plugin (runtime)
+Create `plugins/my_plugin.py`:
+
+```python
+class MyPlugin:
+  name = "my_plugin"
+  def run(self, params):
+    return {"ok": True, "params": params}
+```
+
+Reload from Python at runtime (hot-reload):
+
+```python
+from core.tool_manager import ToolManager
+
+mgr = ToolManager()
+# load plugins (or reload existing ones)
+loaded_count = mgr.reload_plugins('plugins')
+print(f"Reloaded {loaded_count} plugin(s)")
+
+# run the plugin after reload
+result = mgr.execute('my_plugin', params={"x": 1})
+print(result)
+```
+
+Reload via the CLI sample flow (when running `python -m interface.chat`):
+
+```powershell
+python -m interface.chat
+> reload plugins
+Reloaded 1 plugin(s)
+> run my_plugin {"x": 1}
+{"ok": true, "params": {"x": 1}}
+```
+
 ### Best Practices and Safety
 - Only keep trusted plugins in the plugins directory (plugins are Python code and execute in-process).
 - Use exception handling inside your plugin's `run()` for stability.
 - Keep plugin dependencies to a minimum or handle imports inside plugin classes.
+
+### Is the plugin system production-ready?
+- Short answer: the plugin system is ready for development and local testing, including hot-reload; it is not hardened for running untrusted plugins in production.
+
+- Why: plugins execute in-process with the main application. This makes them efficient for development but places no sandboxing boundary around code — a malicious or buggy plugin can access the app's memory, file system, and environment.
+
+- Recommendations for production use:
+  - Use `NIA_PLUGIN_SAFE_MODE=1` and maintain a vetted allowlist (`plugins/ALLOWLIST.txt`).
+  - Review plugin code or adopt a signed-plugin model for trust.
+  - Run untrusted plugins in a separate process or container and communicate via IPC or RPC if you need strong isolation (future improvement).
 
 See built-in `plugins/demo_plugin.py` as a reference.
 # N.I.A
