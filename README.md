@@ -170,10 +170,40 @@ class HelloTool:
   - `list_tools()`, `has_tool()`, plugin helpers
 
 - Legacy adapter removed: use only `core.tool_manager.ToolManager` for all new and existing code.
-
 - Dev tool registration is explicit via `core.tools.register_dev_tools(mgr)` and called in `interface/chat.py` on startup. Import-time auto-registration is disabled by default. To enable gated auto-registration, set `NIA_AUTO_REGISTER_DEV_TOOLS=1` in the environment.
-
 - Internal code (brain, chat) uses the preferred API. For all code, use `core.tool_manager.ToolManager` and call `register_dev_tools` when you need built-in tools.
+
+Notes and examples (2025 updates)
+
+- Explicit dev tool registration: The project now uses an explicit helper `core.tools.register_dev_tools(mgr)` to register the small set of local "dev" tools (echo, hello, etc.). This avoids import-time side effects. Call this from a startup path (for example, `interface.chat.main()` registers them at runtime).
+
+Example (register dev tools):
+
+```python
+from core.tool_manager import ToolManager
+from core.tools import register_dev_tools
+
+mgr = ToolManager()
+register_dev_tools(mgr)
+```
+
+- Plugin reload helper: `ToolManager` now provides a `reload_plugins(directory: str) -> int` helper to centralize unload-and-load semantics. Use it to hot-reload plugins safely from the running process.
+
+Example (reload plugins):
+
+```python
+from core.tool_manager import ToolManager
+
+mgr = ToolManager()
+loaded = mgr.reload_plugins('plugins')
+print(f"Reloaded {loaded} plugin(s)")
+```
+
+- Import-time side effects and dotenv: Loading environment variables (via `load_dotenv()`) was moved to runtime in `interface.chat.main()` to avoid mutating global state on import. Also, `interface.main()` is now a lazy wrapper that imports `interface.chat` only when executed — keep imports lightweight for tests and library consumers.
+
+- Lazy imports for optional dependencies: Heavy optional dependencies such as `numpy` and `faiss` are now lazy-imported inside the `VectorStore` constructor. `MemoryManager` will attempt to instantiate a FAISS-backed `VectorStore` only when requested and will fall back gracefully if the packages are not installed. Add tests that simulate missing modules to ensure fallback behavior remains stable.
+
+- Backwards compatibility: A small legacy adapter remains available for compatibility in `core.tools.__init__` to reduce test friction; prefer `core.tool_manager.ToolManager` for all new code.
 
 ## Plugin System: Extending NIA with Hot-Plug Tools
 
