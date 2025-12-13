@@ -15,6 +15,7 @@ import pkgutil
 import asyncio
 from typing import Any, Callable, Dict, Optional, List
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from pathlib import Path
 
 
 class ToolManager:
@@ -162,6 +163,63 @@ class ToolManager:
             except Exception as exc:
                 self.logger.warning("Failed to load plugin %s: %s", fname, exc)
         self.logger.info("Loaded %d plugin tools from %s", loaded, directory)
+        return loaded
+
+    # ---------------- Subprocess-based safe plugins -----------------
+    def register_subprocess_plugin(self, path: str, name: Optional[str] = None, timeout: int = 5) -> None:
+        """Register a plugin file to be executed in a subprocess for isolation.
+
+        The plugin file should accept JSON on stdin and print JSON on stdout.
+        The registered tool will be callable via `execute(tool_name, params=...)`.
+        """
+        p = Path(path)
+        if not p.exists():
+            raise ValueError(f"Plugin file not found: {path}")
+
+        tool_name = name or p.stem
+
+        def wrapper(params: dict):
+            # Import locally to avoid top-level dependency
+            from core.plugin_runner import execute_plugin_file
+
+            return execute_plugin_file(str(p), params=params, timeout=timeout)
+
+        self.register(tool_name, wrapper)
+        self._plugin_sources[tool_name] = str(p)
+        self.logger.info(f"Registered subprocess plugin wrapper: {tool_name} -> {path}")
+
+    def register_subprocess_plugins_from_directory(self, directory: str, timeout: int = 5) -> int:
+        loaded = 0
+        if not os.path.isdir(directory):
+            self.logger.warning("Plugin directory not found: %s", directory)
+            return loaded
+        safe_mode = os.environ.get("NIA_PLUGIN_SAFE_MODE", "").lower() in {"1", "true", "yes"}
+        allowlist: Optional[set[str]] = None
+        if safe_mode:
+            allow_path = os.path.join(directory, "ALLOWLIST.txt")
+            if os.path.exists(allow_path):
+                try:
+                    with open(allow_path, "r", encoding="utf-8") as f:
+                        allowlist = {line.strip() for line in f if line.strip()}
+                except Exception:
+                    allowlist = set()
+            else:
+                self.logger.warning("Safe mode enabled but no ALLOWLIST.txt found in %s", directory)
+                allowlist = set()
+        for fname in os.listdir(directory):
+            if not fname.endswith(".py") or fname.startswith("__"):
+                continue
+            base = os.path.splitext(fname)[0]
+            if safe_mode and allowlist is not None and base not in allowlist:
+                self.logger.info("Skipping plugin %s due to safe mode allowlist", fname)
+                continue
+            path = os.path.join(directory, fname)
+            try:
+                self.register_subprocess_plugin(path, name=base, timeout=timeout)
+                loaded += 1
+            except Exception as exc:
+                self.logger.warning("Failed to register subprocess plugin %s: %s", fname, exc)
+        self.logger.info("Registered %d subprocess plugin wrappers from %s", loaded, directory)
         return loaded
 
     def unload_plugin(self, tool_name: str) -> bool:
