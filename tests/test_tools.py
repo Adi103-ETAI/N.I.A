@@ -1,4 +1,4 @@
-from core.tools import ToolManager
+from core.tool_manager import ToolManager
 import asyncio
 
 class TestTool:
@@ -11,23 +11,21 @@ def test_register_list_execute():
     mgr.register_tool(TestTool)
     assert 'hello' in mgr.list_tools()
     out = mgr.execute('hello', {'x': 'bob'})
-    assert out['success']
-    assert out['output']['msg'] == 'hi bob'
+    assert out['msg'] == 'hi bob'
 
 def test_permission_denied():
     mgr = ToolManager()
     mgr.register_tool(TestTool)
     mgr.set_permission('hello', lambda user,params: False)
-    out = mgr.execute('hello', {}, user='bob')
-    assert not out['success']
-    assert 'denied' in out['error']
+    import pytest
+    with pytest.raises(PermissionError):
+        mgr.execute('hello', {}, user='bob')
 
 def test_async_tool():
     mgr = ToolManager()
     mgr.register_tool(TestTool)
-    result = asyncio.run(mgr.aexecute('hello', {}))
-    assert result['success']
-    assert result['output']['msg'] == 'async hi'
+    result = asyncio.run(mgr.execute_async('hello', {}))
+    assert result['msg'] == 'async hi'
 
 def test_error_returns():
     class Bad:
@@ -35,6 +33,6 @@ def test_error_returns():
         def run(self, p): raise Exception('oops')
     mgr = ToolManager()
     mgr.register_tool(Bad)
-    out = mgr.execute('fail', {})
-    assert not out['success']
-    assert 'oops' in out['error']
+    import pytest
+    with pytest.raises(RuntimeError):
+        mgr.execute('fail', {})

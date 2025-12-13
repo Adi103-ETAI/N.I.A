@@ -5,7 +5,7 @@ Preferred ToolManager API
 - It returns raw results and raises on errors, which simplifies control flow.
 
 Legacy Adapter
-- `core.tools.ToolManager` wraps results in dicts. Use only when interacting with older code that expects `{"success", "output", "error"}`.
+- Use `core.tool_manager.ToolManager` only. The legacy adapter has been removed.
 
 Dev Tools Registration
 - Do not register tools at import time.

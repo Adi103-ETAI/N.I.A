@@ -1,9 +1,7 @@
-"""Top-level tools package exports and legacy adapter.
+"""Top-level tools package exports.
 
-This module exports `HelloTool` and `EchoTool` for convenience, and it
-provides a legacy `ToolManager` adapter that wraps the consolidated
-`core.tool_manager.ToolManager` but preserves the older dict-wrapping
-API used by existing code and tests.
+This module exports `HelloTool`, `EchoTool`, and `register_dev_tools` for
+convenience. Use `core.tool_manager.ToolManager` as the single API.
 """
 
 
@@ -21,10 +19,9 @@ __all__ = ["ToolManager", "HelloTool", "EchoTool", "register_dev_tools"]
 class ToolManager:
     """Legacy adapter over `core.tool_manager.ToolManager`.
 
-    This adapter keeps the old behavior where `execute` and `aexecute`
-    return a dict: {"success": bool, "output": ..., "error": ...}.
-    Internally it delegates to the raw ToolManager which raises on error
-    and returns raw results.
+    This adapter preserves the older dict-wrapping API where `execute`
+    and `aexecute` return a dict with keys like `success` and `output`.
+    Internally it delegates to the raw `ToolManager` implementation.
     """
 
     def __init__(self, logger: Optional[logging.Logger] = None) -> None:
@@ -88,24 +85,17 @@ class ToolManager:
             return {"success": False, "error": str(exc)}
 
 
+
+
+
 def register_dev_tools(mgr: Any = None) -> Any:
-    """Register built-in development tools (HelloTool, EchoTool).
-
-    If `mgr` is None a new legacy `ToolManager` adapter instance is created and
-    returned with the dev tools registered. If a manager is provided the
-    function will attempt to register the tools on it. This is a best-effort
-    helper and will ignore registration errors to remain safe during imports.
-    """
     if mgr is None:
-        mgr = ToolManager()
-
+        mgr = RawToolManager()
     for tool_cls in (HelloTool, EchoTool):
         try:
             mgr.register_tool(tool_cls)
         except Exception:
-            # best-effort: skip failing registrations
             continue
-
     return mgr
 
 # Optional environment-gated auto-registration to avoid hidden side effects.

@@ -127,11 +127,28 @@ class ToolManager:
         if not os.path.isdir(directory):
             self.logger.warning("Plugin directory not found: %s", directory)
             return loaded
+        safe_mode = os.environ.get("NIA_PLUGIN_SAFE_MODE", "").lower() in {"1", "true", "yes"}
+        allowlist: Optional[set[str]] = None
+        if safe_mode:
+            allow_path = os.path.join(directory, "ALLOWLIST.txt")
+            if os.path.exists(allow_path):
+                try:
+                    with open(allow_path, "r", encoding="utf-8") as f:
+                        allowlist = {line.strip() for line in f if line.strip()}
+                except Exception:
+                    allowlist = set()
+            else:
+                self.logger.warning("Safe mode enabled but no ALLOWLIST.txt found in %s", directory)
+                allowlist = set()
         for fname in os.listdir(directory):
             if not fname.endswith(".py") or fname.startswith("__"):
                 continue
+            base = os.path.splitext(fname)[0]
+            if safe_mode and allowlist is not None and base not in allowlist:
+                self.logger.info("Skipping plugin %s due to safe mode allowlist", fname)
+                continue
             path = os.path.join(directory, fname)
-            mod_name = f"nia_plugin_{os.path.splitext(fname)[0]}"
+            mod_name = f"nia_plugin_{base}"
             try:
                 spec = importlib.util.spec_from_file_location(mod_name, path)
                 module = importlib.util.module_from_spec(spec)

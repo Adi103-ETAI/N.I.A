@@ -16,11 +16,11 @@ from persona.profile import build_persona_config
 import argparse
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
-
 
 def main() -> None:
+    # Load environment variables from .env file at runtime rather than at
+    # import time to avoid mutating process state during simple imports.
+    load_dotenv()
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("nia")
 

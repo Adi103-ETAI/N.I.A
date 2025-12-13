@@ -17,15 +17,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    import numpy as np
-except Exception:
-    np = None  # type: ignore
-
-try:
-    import faiss  # type: ignore
-except Exception:
-    faiss = None  # type: ignore
+# Avoid heavy or platform-specific imports at module import time. VectorStore
+# will perform lazy imports of numpy and faiss when instantiated.
 
 
 logger = logging.getLogger(__name__)
@@ -97,10 +90,21 @@ class SqliteBackend(MemoryBackend):
 
 class VectorStore:
     def __init__(self, dimension: int, index_path: Optional[str] = None, cache_size: int = 10000, save_interval: int = 300, vector_ttl: Optional[int] = None) -> None:
-        if faiss is None:
-            raise ImportError("FAISS is required for VectorStore")
-        if np is None:
+        # Lazy import numpy and faiss to avoid heavy imports when the module
+        # itself is imported but VectorStore is not used.
+        try:
+            import numpy as np
+        except Exception:
             raise ImportError("numpy is required for VectorStore")
+        try:
+            import faiss
+        except Exception:
+            raise ImportError("FAISS is required for VectorStore")
+
+        # Save modules on instance to prefer instance-level references rather
+        # than relying on module-level variables.
+        self.np = np
+        self.faiss = faiss
 
         self.dimension = int(dimension)
         self.index_path = index_path
@@ -112,9 +116,9 @@ class VectorStore:
         self._last_save = time.time()
 
         if index_path and os.path.exists(index_path):
-            self.index = faiss.read_index(index_path)
+            self.index = self.faiss.read_index(index_path)
         else:
-            self.index = faiss.IndexFlatL2(self.dimension)
+            self.index = self.faiss.IndexFlatL2(self.dimension)
 
         self._vector_map: Dict[int, str] = {}
         self._key_map: Dict[str, int] = {}
@@ -128,7 +132,7 @@ class VectorStore:
             raise ValueError(f"Vector dimension mismatch: expected {self.dimension}")
 
         with self._lock:
-            arr = np.asarray([vector], dtype=np.float32)
+            arr = self.np.asarray([vector], dtype=self.np.float32)
             self.index.add(arr)
 
             vid = self._next_id
@@ -146,7 +150,7 @@ class VectorStore:
 
             if self.index_path and (time.time() - self._last_save) > self.save_interval:
                 try:
-                    faiss.write_index(self.index, self.index_path)
+                    self.faiss.write_index(self.index, self.index_path)
                     self._last_save = time.time()
                 except Exception:
                     logger.exception("Failed to auto-save FAISS index")
@@ -162,7 +166,7 @@ class VectorStore:
                 for key in expired:
                     self._remove_vector(key)
 
-            D, idxs = self.index.search(np.asarray([query_vector], dtype=np.float32), k)
+            D, idxs = self.index.search(self.np.asarray([query_vector], dtype=self.np.float32), k)
             out: List[Tuple[str, float]] = []
             for idx, dist in zip(idxs[0], D[0]):
                 if idx == -1:
@@ -201,20 +205,28 @@ class MemoryQuery:
 
 
 class MemoryManager:
-    def __init__(self, db_path: str, model_dim: int = 1536, index_path: Optional[str] = None, max_memories: int = 1_000_000, cache_size: int = 10000, save_interval: int = 300, memory_ttl: Optional[int] = None) -> None:
+    def __init__(self, db_path: str, model_dim: int = 1536, index_path: Optional[str] = None, max_memories: int = 1_000_000, cache_size: int = 10000, save_interval: int = 300, memory_ttl: Optional[int] = None, vector_backend: str = "faiss") -> None:
         self.store = SqliteBackend(db_path)
         self.db_path = db_path
         self.max_memories = int(max_memories)
         self.memory_ttl = int(memory_ttl) if memory_ttl is not None else None
 
-        try:
-            if faiss is not None and np is not None:
+        backend = (vector_backend or "faiss").lower()
+        # Attempt to instantiate a VectorStore only when the backend is
+        # 'faiss'. VectorStore performs its own lazy import of numpy/faiss
+        # and will raise ImportError on missing deps; handle that gracefully.
+        if backend == "faiss":
+            try:
                 self.vectors = VectorStore(dimension=model_dim, index_path=index_path, cache_size=cache_size, save_interval=save_interval, vector_ttl=memory_ttl)
                 self._has_vectors = True
-            else:
+            except Exception:
+                # Missing optional dependencies or init failure: fall back
                 self.vectors = None
                 self._has_vectors = False
-        except ImportError:
+        elif backend in {"pinecone", "weaviate", "external"}:
+            self.vectors = None
+            self._has_vectors = False
+        else:
             self.vectors = None
             self._has_vectors = False
 
@@ -277,7 +289,7 @@ class MemoryManager:
 
     def search_similar(self, collection: str, query_embedding: List[float], limit: int = 10) -> List[Dict[str, Any]]:
         if not self._has_vectors or self.vectors is None:
-            raise RuntimeError("Vector search not available")
+            raise RuntimeError("Vector search not available (configure `vector_backend` or integrate an external provider)")
         hits = self.vectors.search(query_embedding, k=limit)
         results: List[Dict[str, Any]] = []
         for key, score in hits:

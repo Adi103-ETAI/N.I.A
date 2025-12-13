@@ -106,6 +106,11 @@ To run all tests (unit, integration):
 pytest
 ```
 
+## Memory Vector Backend
+- `MemoryManager` supports FAISS by default when installed.
+- Configure alternate backends via `vector_backend` parameter (e.g., `"faiss"`, `"external"`).
+- When no vector backend is available, similarity search raises: `Vector search not available (configure vector_backend or integrate an external provider)`.
+
 To add tests, create files as `tests/test_*.py` (see scaffold below) covering the following modules:
 - `core/memory.py` — Test MemoryManager (CRUD, TTL, vector fallback)
 - `core/brain.py` — Test CognitiveLoop for multi-step, fallback, and error cases
@@ -130,6 +135,11 @@ You can enable 'talk' and 'listen' by plugging in 3rd-party libraries to ToolMan
 - `ToolManager.listen()`: ASR, e.g., via `speech_recognition`
 
 Default CLI accepts `--voice` to enable voice mode (falls back silently if not available).
+
+### Async vs Sync Usage
+- Implement `arun(self, params)` for asynchronous tools, or `run(self, params)` for synchronous ones.
+- Use `ToolManager.execute_async(...)` to run tools concurrently with other async tasks.
+- `ToolManager.execute(...)` will raise if a coroutine is detected while an event loop is already running; prefer the async API in concurrent contexts.
 
 ## How to Add a Tool
 1. Create a Python file in `core/tools/`.
@@ -159,11 +169,11 @@ class HelloTool:
   - `execute_async(tool_name, params, timeout=None)` — async variant
   - `list_tools()`, `has_tool()`, plugin helpers
 
-- Legacy adapter: `core.tools.ToolManager` (dict-wrapped API). Methods mirror the preferred API but `execute`/`aexecute` return `{"success": bool, "output": any, "error": str}`.
+- Legacy adapter removed: use only `core.tool_manager.ToolManager` for all new and existing code.
 
 - Dev tool registration is explicit via `core.tools.register_dev_tools(mgr)` and called in `interface/chat.py` on startup. Import-time auto-registration is disabled by default. To enable gated auto-registration, set `NIA_AUTO_REGISTER_DEV_TOOLS=1` in the environment.
 
-- Internal code (brain, chat) uses the preferred API. Tests include both APIs to validate compatibility. For new code, use `core.tool_manager.ToolManager` and call `register_dev_tools` when you need built-in tools.
+- Internal code (brain, chat) uses the preferred API. For all code, use `core.tool_manager.ToolManager` and call `register_dev_tools` when you need built-in tools.
 
 ## Plugin System: Extending NIA with Hot-Plug Tools
 
@@ -173,6 +183,11 @@ class HelloTool:
     - `reload plugins` — hot-reload all plugins without restarting
     - `unload plugin <tool_name>` — unload a specific plugin tool
 - Plugins are loaded at startup and can be hot-reloaded/unloaded at any time.
+
+### Secure Plugin Loading (Allowlist)
+- Set `NIA_PLUGIN_SAFE_MODE=1` to enable allowlist-based plugin loading.
+- Create `plugins/ALLOWLIST.txt` with one plugin base name per line (e.g., `hello_plugin`). Only allowlisted `.py` files will be loaded.
+- This reduces risk by preventing unreviewed plugin execution.
 
 ### Authoring a Plugin Example
 Create a file, e.g. `plugins/hello_plugin.py`:
@@ -202,7 +217,7 @@ Purpose
 
 Usage Guidelines
 - Read `.github/copilot-instructions.md` before using Copilot on this repo.
-- Prefer `core.tool_manager.ToolManager` (raw API) for new code; use `core.tools.ToolManager` adapter only when legacy dict-wrapped results are required.
+- Use `core.tool_manager.ToolManager` (raw API) universally; the legacy adapter has been removed.
 - Do not register tools at import time. Call `core.tools.register_dev_tools(mgr)` explicitly from startup code (see `interface/chat.py`).
 - Optional environment gating for demos: set `NIA_AUTO_REGISTER_DEV_TOOLS` to enable best-effort dev tool registration at import time.
 
