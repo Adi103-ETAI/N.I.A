@@ -1,207 +1,331 @@
-"""Minimal CLI to demo the CognitiveLoop.
+"""NIA CLI - Alternative interface using the NIA brain.
 
-This script demonstrates how to wire the core components together with
-the default in-memory/tool/model stubs. It is intentionally simple so
-developers can replace pieces with real implementations as they build.
+This script provides a CLI interface to the NIA assistant, with optional
+voice mode powered by NOLA (Non-blocking Operator for Language & Audio).
+
+This is the legacy CLI interface. For the main application, use main.py.
+
+Voice I/O is powered by the NOLA package, which provides non-blocking
+async speech recognition and synthesis.
 """
-import logging
-from core.brain import CognitiveLoop
-from core.memory import InMemoryMemory
-from core.tool_manager import ToolManager
-from core.tools import register_dev_tools
-from typing import Optional
-from core.voice_manager import BackgroundListener, normalize_listen_result
-import os
-from pathlib import Path
-from models.model_manager import ModelManager
-from persona.profile import build_persona_config
+from __future__ import annotations
+
 import argparse
-import asyncio
-import threading
-import queue
-import time
+import logging
+import os
 import sys
-try:
-    import msvcrt
-    _HAS_MSVCRT = True
-except Exception:
-    _HAS_MSVCRT = False
+from pathlib import Path
+from typing import Optional
+
 from dotenv import load_dotenv
 
+# Import NIA brain (the new architecture)
+try:
+    from nia import process_input, get_conversation_history, clear_conversation
+    _HAS_NIA = True
+except ImportError:
+    _HAS_NIA = False
+    process_input = None  # type: ignore
+    get_conversation_history = None  # type: ignore
+    clear_conversation = None  # type: ignore
 
-def _listen_result_to_text(res: object) -> Optional[str]:
-    """Normalize listen tool results into a plain text string or None.
-
-    Accepts strings or dict-like responses from plugins and returns the
-    recognized text, or None when no usable text is present.
-    """
-    if res is None:
-        return None
-    if isinstance(res, str):
-        return res
-    if isinstance(res, dict):
-        # Legacy flags that indicate a failed listen
-        if 'ok' in res and res.get('ok') is False:
-            return None
-        if 'success' in res and res.get('success') is False:
-            return None
-
-        for key in ('text', 'output', 'transcript', 'message'):
-            if key in res and res.get(key):
-                return res.get(key)
-
-    return None
+# Import NOLA for voice I/O
+try:
+    from nola import NOLAManager, NOLAConfig
+    _HAS_NOLA = True
+except ImportError:
+    _HAS_NOLA = False
+    NOLAManager = None  # type: ignore
+    NOLAConfig = None  # type: ignore
 
 
 def main(argv: Optional[list] = None) -> None:
-    """Entry point for the simple CLI demo."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--voice', action='store_true', help='Enable voice mode')
-    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    """Entry point for the NIA CLI."""
+    parser = argparse.ArgumentParser(
+        description="NIA CLI - Neural Intelligence Assistant",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Voice Mode:
+  When --voice is enabled, NIA uses NOLA for speech recognition and synthesis.
+  Wake words: 'jarvis', 'nia', 'hey nia'
+  
+  You can also type commands while in voice mode.
+  Prefix with 'type ' or 't ' to force typed input.
+
+Examples:
+  python -m interface.chat                    # Text-only mode
+  python -m interface.chat --voice            # Voice mode with wake words
+  python -m interface.chat --voice --no-wake  # Voice mode without wake words
+  python -m interface.chat --thread-id user1  # Use specific conversation thread
+        """
+    )
+    parser.add_argument(
+        '--voice', action='store_true',
+        help='Enable voice mode (requires microphone and speakers)'
+    )
+    parser.add_argument(
+        '--no-wake', action='store_true',
+        help='Disable wake word requirement in voice mode'
+    )
+    parser.add_argument(
+        '--wake-words', type=str, default='jarvis,nia,hey nia',
+        help='Comma-separated wake words (default: jarvis,nia,hey nia)'
+    )
+    parser.add_argument(
+        '--thread-id', '-t', type=str, default='cli',
+        help='Conversation thread ID for persistence (default: cli)'
+    )
+    parser.add_argument(
+        '--debug', action='store_true',
+        help='Enable debug logging'
+    )
     args = parser.parse_args(args=argv)
 
     # Load .env at runtime to avoid import-time side effects
     load_dotenv()
 
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
+    # Ensure data directory exists
+    data_dir = Path(__file__).parent.parent / "data"
+    data_dir.mkdir(exist_ok=True)
+
+    # Configure logging
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
     logger = logging.getLogger(__name__)
 
-    memory = InMemoryMemory()
-    tools = ToolManager()
+    # Check if NIA is available
+    if not _HAS_NIA:
+        logger.error("NIA package not available. Install dependencies first.")
+        print("[ERROR] NIA brain not available. Please check installation.")
+        return
 
-    # Optional dev tool registration — non-fatal if it fails
-    try:
-        register_dev_tools(tools)
-    except Exception as exc:
-        logger.debug("register_dev_tools failed: %s", exc)
+    # =========================================================================
+    # Voice Mode Setup (using NOLA)
+    # =========================================================================
+    voice_mode = False
+    nola: Optional[NOLAManager] = None
+    thread_id = args.thread_id
 
-    # Plugin directory and initial load
-    PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugins"
-    try:
-        tools.reload_plugins(PLUGIN_DIR)
-    except Exception as exc:
-        logger.debug("initial plugin load failed: %s", exc)
+    if args.voice:
+        if not _HAS_NOLA:
+            logger.error("NOLA package not available. Install with: pip install speechrecognition pyttsx3 pyaudio")
+            print("[WARN] Voice mode unavailable. Starting in text-only mode.")
+        else:
+            # Parse wake words
+            wake_words = [w.strip() for w in args.wake_words.split(',') if w.strip()]
+            
+            # Configure NOLA
+            nola_config = NOLAConfig(
+                wake_word_enabled=not args.no_wake,
+                wake_words=wake_words,
+                wake_word_timeout=30.0,
+                security_enabled=True,  # Enable command sanitization
+                pause_ear_while_speaking=True,  # Echo cancellation
+            )
+            
+            nola = NOLAManager(config=nola_config)
+            
+            if nola.start():
+                voice_mode = True
+                logger.info("NOLA voice system started")
+                if not args.no_wake:
+                    print(f"[VOICE] Enabled. Wake words: {', '.join(wake_words)}")
+                else:
+                    print("[VOICE] Enabled (no wake word required)")
+            else:
+                logger.error("Failed to start NOLA voice system")
+                print("[WARN] Voice mode failed to start. Starting in text-only mode.")
+                nola = None
 
-    persona_config = build_persona_config()
-    model_config = {
-        "fallback_providers": ["openai"],
-        "provider_models": {
-            "nvidia": "meta/llama-4-maverick-17b-128e-instruct",
-            "openai": "gpt-4o",
-        },
-        **persona_config,
-    }
-    models = ModelManager(
-        provider="nvidia",
-        model_name=model_config["provider_models"]["nvidia"],
-        config=model_config,
-    )
-
-    brain = CognitiveLoop(memory=memory, tool_manager=tools, model_manager=models, logger=logger)
-
-    print("NIA CognitiveLoop demo (type 'exit' to quit)")
-    # Voice mode is enabled only if both 'listen' and 'speak' tools are available
-    voice_mode = args.voice and tools.has_tool('listen') and tools.has_tool('speak')
-
-    # Background listener queue and thread (used only in voice mode)
-    voice_queue: "queue.Queue[str]" = queue.Queue()
-    listener = None
-    if voice_mode:
-        # Use the VoiceManager-agnostic BackgroundListener. We pass a tiny
-        # adapter that exposes `listen(**kwargs)` using the underlying tools
-        class _ToolAdapter:
-            def __init__(self, tools):
-                self._tools = tools
-
-            def listen(self, **kwargs):
-                # Keep compatibility with both sync execute and voice manager
-                try:
-                    return self._tools.execute('listen', kwargs)
-                except Exception:
-                    # Fallback to async execution if plugin expects it
-                    try:
-                        return asyncio.run(self._tools.execute_async('listen', kwargs, timeout=kwargs.get('_timeout', 2)))
-                    except Exception:
-                        return None
-
-        listener = BackgroundListener(_ToolAdapter(tools), output_queue=voice_queue, poll_interval=0.1, timeout=2)
-        listener.start()
+    # =========================================================================
+    # Main Chat Loop
+    # =========================================================================
+    print("\n" + "=" * 50)
+    print("  NIA - Neural Intelligence Assistant")
+    print(f"  Thread: {thread_id}")
+    print("  Type 'help' for commands, 'exit' to quit")
+    print("=" * 50 + "\n")
 
     try:
         while True:
+            user_input = None
+            
             try:
-                if voice_mode:
-                    # run the listen tool with a short timeout and fall back to stdin
-                    # if it fails or returns nothing. Use execute_async with a timeout
-                    # to allow the plugin to be interruptible and non-blocking.
-                    try:
-                        li = asyncio.run(tools.execute_async('listen', {}, timeout=3))
-                    except Exception:
-                        li = None
-                    # Normalize plugin responses (dict/object) to a plain string
-                    text = _listen_result_to_text(li)
-                    if text:
-                        user_input = text
+                if voice_mode and nola:
+                    # =========================================================
+                    # Voice Mode: Use NOLA for input
+                    # =========================================================
+                    # Try to get voice input with a short timeout
+                    result = nola.get_input(timeout=0.3)
+                    
+                    if result and result.text:
+                        # Got voice input
+                        user_input = result.text
+                        print(f"[VOICE] {user_input}")
+                        
+                        # Check for security blocks
+                        if result.is_blocked:
+                            print(f"[BLOCKED] Security: {result.blocked_reason}")
+                            continue
                     else:
-                        # fallback to typed input if listen produced no text
-                        # Accept 'type' or 't' prefix as a keyboard override while in voice mode
-                        typed = input('[voice] Press Enter to type or wait for speech:\n> ')
-                        if typed.strip().startswith('type '):
-                            user_input = typed.strip()[5:]
-                        elif typed.strip().startswith('t '):
-                            user_input = typed.strip()[2:]
-                        else:
-                            user_input = typed
+                        # No voice input, check for keyboard input
+                        try:
+                            if sys.stdin in _select_stdin():
+                                typed = input()
+                                if typed.strip():
+                                    # Handle 'type ' or 't ' prefix
+                                    if typed.strip().startswith('type '):
+                                        user_input = typed.strip()[5:]
+                                    elif typed.strip().startswith('t '):
+                                        user_input = typed.strip()[2:]
+                                    else:
+                                        user_input = typed.strip()
+                        except Exception:
+                            pass
+                        
+                        if not user_input:
+                            continue
                 else:
+                    # =========================================================
+                    # Text Mode: Standard input
+                    # =========================================================
                     user_input = input('> ')
-            except (KeyboardInterrupt, EOFError):
-                print("\nExiting.")
+                    
+            except KeyboardInterrupt:
+                print("\n\nExiting...")
                 break
+            except EOFError:
+                print("\n(EOF received - ignoring)")
+                continue
 
             if not user_input:
                 continue
+
+            # Process commands
             cmd = user_input.strip().lower()
-            if cmd in ("exit", "quit"):
-                print("Goodbye")
+            
+            if cmd in ("exit", "quit", "bye"):
+                if voice_mode and nola:
+                    nola.speak("Goodbye!")
+                print("Goodbye!")
                 break
-            if cmd == "list plugins":
-                print("Plugin tool(s):", tools.plugin_tools())
-                continue
-            if cmd == "reload plugins":
-                try:
-                    count = tools.reload_plugins(PLUGIN_DIR)
-                    logger.info("Reloaded %d plugins", count)
-                except Exception as exc:
-                    logger.warning("Reloading plugins failed: %s", exc)
-                print("Plugins reloaded. Plugin tool(s):", tools.plugin_tools())
-                continue
-            if cmd.startswith("unload plugin"):
-                parts = cmd.split()
-                if len(parts) == 3:
-                    try:
-                        ok = tools.unload_plugin(parts[2])
-                    except Exception as exc:
-                        ok = False
-                        logger.warning("Failed to unload plugin %s: %s", parts[2], exc)
-                    print(f"Plugin '{parts[2]}' unloaded: {ok}. Plugin tools:", tools.plugin_tools())
-                else:
-                    print("Usage: unload plugin <tool_name>")
+
+            if cmd == "help":
+                _print_help(voice_mode, thread_id)
                 continue
 
-            response = brain.run(user_input)
-            print(response)
-            if voice_mode:
-                # call the speak tool and ignore errors
+            if cmd == "history":
+                # Show conversation history
+                if get_conversation_history:
+                    try:
+                        history = get_conversation_history(thread_id)
+                        if history:
+                            print(f"\n[HISTORY] Thread '{thread_id}' ({len(history)} messages):")
+                            for msg in history[-10:]:  # Show last 10
+                                role = getattr(msg, 'type', 'unknown')
+                                content = getattr(msg, 'content', str(msg))[:80]
+                                print(f"  [{role}]: {content}...")
+                        else:
+                            print("[HISTORY] No conversation history yet.")
+                    except Exception as exc:
+                        print(f"[ERROR] Could not retrieve history: {exc}")
+                else:
+                    print("[WARN] History function not available")
+                continue
+
+            if cmd == "clear":
+                # Clear conversation history
+                if clear_conversation:
+                    try:
+                        if clear_conversation(thread_id):
+                            print(f"[OK] Cleared history for thread '{thread_id}'")
+                        else:
+                            print("[WARN] Could not clear history")
+                    except Exception as exc:
+                        print(f"[ERROR] {exc}")
+                else:
+                    print("[WARN] Clear function not available")
+                continue
+
+            if cmd == "voice on" and _HAS_NOLA and not voice_mode:
+                # Enable voice mode mid-session
+                nola_config = NOLAConfig(wake_word_enabled=False)
+                nola = NOLAManager(config=nola_config)
+                if nola.start():
+                    voice_mode = True
+                    print("[VOICE] Enabled")
+                continue
+
+            if cmd == "voice off" and voice_mode and nola:
+                # Disable voice mode mid-session
+                nola.stop()
+                nola = None
+                voice_mode = False
+                print("[VOICE] Disabled")
+                continue
+
+            # =================================================================
+            # Process with NIA Brain
+            # =================================================================
+            print("[THINKING]...")
+            
+            try:
+                response = process_input(user_input, thread_id=thread_id)
+                print(f"\nNIA: {response}\n")
+            except Exception as exc:
+                logger.exception("NIA processing error: %s", exc)
+                print(f"\n[ERROR] {exc}\n")
+                continue
+
+            # Speak the response in voice mode
+            if voice_mode and nola:
                 try:
-                    tools.execute('speak', {'text': response})
+                    nola.speak(response)
                 except Exception as exc:
-                    logger.debug("speak tool failed: %s", exc)
+                    logger.debug("TTS failed: %s", exc)
+
     finally:
-        if listener:
-            listener.stop()
-    # finally:
-    #     if listener:
-    #         listener.stop()
+        # Cleanup
+        if nola:
+            logger.info("Stopping NOLA...")
+            nola.stop()
+
+
+def _select_stdin():
+    """Check if stdin has data available (cross-platform best-effort)."""
+    try:
+        import select
+        readable, _, _ = select.select([sys.stdin], [], [], 0)
+        return readable
+    except Exception:
+        return []
+
+
+def _print_help(voice_mode: bool, thread_id: str) -> None:
+    """Print help information."""
+    print(f"""
+NIA CLI Help
+============
+Thread ID: {thread_id}
+
+Commands:
+  exit, quit, bye  - End the session
+  help             - Show this help
+  history          - Show conversation history
+  clear            - Clear conversation history
+""")
+    if voice_mode:
+        print("""Voice Mode Commands:
+  voice off        - Disable voice mode
+  type <text>      - Force typed input
+  t <text>         - Short form of 'type'
+""")
+    else:
+        print("""  voice on         - Enable voice mode (if NOLA available)
+""")
 
 
 if __name__ == "__main__":

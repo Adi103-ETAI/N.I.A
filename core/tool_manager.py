@@ -178,11 +178,14 @@ class ToolManager:
 
         tool_name = name or p.stem
 
+        # TODO: Refactor for NIA/TARA architecture
+        # plugin_runner.py was deprecated in cleanup v2
+        # The wrapper below is disabled until a new plugin execution system is implemented
         def wrapper(params: dict):
-            # Import locally to avoid top-level dependency
-            from core.plugin_runner import execute_plugin_file
-
-            return execute_plugin_file(str(p), params=params, timeout=timeout)
+            # Import disabled - plugin_runner deprecated
+            # from core.plugin_runner import execute_plugin_file
+            # return execute_plugin_file(str(p), params=params, timeout=timeout)
+            return f"Plugin execution disabled: {tool_name}. Migrate to TARA tools."
 
         self.register(tool_name, wrapper)
         self._plugin_sources[tool_name] = str(p)
