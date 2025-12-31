@@ -1,337 +1,213 @@
-# N.I.A — Neural Intelligent Assistant
+# N.I.A. - Neural Intelligence Assistant
 
-This repository contains the N.I.A modular assistant core components (brain, tools, memory, model manager).
+A voice-enabled AI assistant combining **LangGraph-based reasoning** with **real-time speech I/O**.
 
-This README provides quick setup instructions, notes for FAISS on Windows, and how to run tests and static checks.
-
-## Quick setup
-
-1. Create a virtual environment (recommended):
-
-```powershell
-python -m venv .venv; .\.venv\Scripts\Activate.ps1
+```
+╔═══════════════════════════════════════════════════════════════════════════╗
+║    ███╗   ██╗   ██╗    █████╗                                             ║
+║    ████╗  ██║   ██║   ██╔══██╗     Neural Intelligence Assistant          ║
+║    ██╔██╗ ██║   ██║   ███████║     ─────────────────────────────          ║
+║    ██║╚██╗██║   ██║   ██╔══██║     Voice-Enabled AI Companion             ║
+║    ██║ ╚████║██╗██║██╗██║  ██║     Powered by LangGraph + NOLA            ║
+║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝                                            ║
+╚═══════════════════════════════════════════════════════════════════════════╝
 ```
 
-2. Install dependencies:
+## Features
 
-```powershell
-pip install --upgrade pip
+- **Dual Input Modes**: Text (keyboard) or Voice (speech recognition)
+- **Wake Word Activation**: "Jarvis", "NIA", or custom phrases
+- **Multi-Agent Architecture**: Supervisor routing to specialist agents
+- **NVIDIA NIM Integration**: Primary inference via NVIDIA's cloud models
+- **Conversation Persistence**: SQLite-backed memory across sessions
+- **10 Built-in Tools**: System stats, app control, web search, YouTube, and more
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    N.I.A. Voice Assistant                        │
+│                                                                  │
+│  ┌──────────────┐     ┌──────────────┐     ┌──────────────────┐  │
+│  │     NOLA     │────►│     NIA      │────►│       NOLA       │  │
+│  │   AsyncEar   │     │  Supervisor  │     │     AsyncTTS     │  │
+│  │  (Listen)    │     │   → IRIS     │     │     (Speak)      │  │
+│  │              │     │   → TARA     │     │                  │  │
+│  └──────────────┘     └──────────────┘     └──────────────────┘  │
+│      Voice In              Brain               Voice Out         │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+| Component | Purpose                                                  |
+|:----------|:---------------------------------------------------------|
+| **NIA**   | LangGraph Supervisor - routes requests to specialists    |
+| **TARA**  | Technical Agent - system control, apps, web search, math |
+| **IRIS**  | Vision Agent - image analysis (placeholder)              |
+| **NOLA**  | Voice I/O - speech recognition + text-to-speech          |
+
+## Installation
+
+### Requirements
+- Python 3.10+
+- Windows/Linux/macOS
+
+### Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/N.I.A.git
+cd N.I.A
+
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+# or: .venv\Scripts\activate  # Windows
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Copy environment template
+cp env.example .env
 ```
 
-3. Configure API keys:
+### Voice Mode Dependencies (Optional)
 
-Create a `.env` file in the project root (copy from `env.example`):
-
-```powershell
-copy env.example .env
+```bash
+pip install speechrecognition pyttsx3 pyaudio
 ```
 
-Then edit `.env` with your actual API keys:
+## Configuration
+
+Create a `.env` file with your API keys:
 
 ```env
-OPENAI_API_KEY=sk-your-actual-key-here
-HUGGINGFACE_API_KEY=your-actual-key-here
+# REQUIRED - Primary Inference Provider
+NVIDIA_API_KEY=your_nvidia_api_key
+
+# OPTIONAL - Fallback Providers
+OPENAI_API_KEY=your_openai_api_key
+HUGGINGFACE_API_KEY=your_hf_api_key
 OLLAMA_HOST=http://localhost:11434
+
+# OPTIONAL - Fallback order
+MODEL_PROVIDER_FALLBACKS=nvidia,openai,ollama
 ```
 
-Notes:
-- `faiss`/`faiss-cpu` is intentionally not a hard requirement in `requirements.txt` because installation is platform-specific.
-- API keys are loaded automatically from `.env` file using `python-dotenv`.
+| Variable                   | Required | Description                        |
+|:---------------------------|:---------|:-----------------------------------|
+| `NVIDIA_API_KEY`           | ✅ Yes   | Primary inference via NVIDIA NIM   |
+| `OPENAI_API_KEY`           | ❌ No    | Fallback to OpenAI GPT models      |
+| `HUGGINGFACE_API_KEY`      | ❌ No    | Fallback to HuggingFace Inference  |
+| `OLLAMA_HOST`              | ❌ No    | Local Ollama server URL            |
+| `MODEL_PROVIDER_FALLBACKS` | ❌ No    | Comma-separated provider order     |
 
-## FAISS (vector store) on Windows
+## Usage
 
-FAISS can be tricky to install on Windows via pip. Options:
+### Basic Commands
 
-- Use conda (recommended on Windows):
+```bash
+# Text mode (default)
+python main.py
 
-```powershell
-conda create -n nia python=3.11 -y
-conda activate nia
-conda install -c pytorch faiss-cpu -y
-pip install -r requirements.txt
+# Check system status
+python main.py --status
+
+# Voice mode with wake words
+python main.py --voice
+
+# Voice mode (always listening)
+python main.py --voice --no-wake
+
+# Custom wake words
+python main.py --voice --wake-words "computer,assistant"
+
+# Debug logging
+python main.py --debug
+
+# Custom conversation thread
+python main.py --thread-id myproject
 ```
 
-- Or use WSL (Ubuntu) where `pip install faiss-cpu` is more likely to work.
+### In-App Commands
 
-If FAISS is not installed the memory system will fall back to disabled vector search; the code is designed to run without FAISS but some features will be limited.
+| Command         | Description               |
+|:----------------|:--------------------------|
+| `help`          | Show available commands   |
+| `status`        | Check system status       |
+| `history`       | View conversation history |
+| `clear history` | Reset conversation        |
+| `voice on`      | Enable voice mode         |
+| `voice off`     | Disable voice mode        |
+| `wake <word>`   | Set custom wake word      |
+| `clear`         | Clear screen              |
+| `exit` / `quit` | Exit application          |
 
-## Running tests and checks
+### TARA Capabilities (Technical Agent)
 
-Run unit tests:
+| Tool            | Example Prompt                        |
+|:----------------|:------------------------------------- |
+| System Stats    | "Check my system health"              |
+| Time/Date       | "What time is it?"                    |
+| Open App        | "Open brave browser"                  |
+| Close App       | "Close notepad"                       |
+| Play YouTube    | "Play Bohemian Rhapsody on YouTube"   |
+| Web Search      | "Search for Python tutorials"         |
+| Clipboard       | "Copy this text: Hello World"         |
 
-```powershell
-pytest -q
+## Project Structure
+
+```
+N.I.A/
+├── main.py              # Entry point & CLI
+├── requirements.txt     # Python dependencies
+├── .env                 # API keys (gitignored)
+├── env.example          # Environment template
+│
+├── nia/                 # Brain (Supervisor Agent)
+│   ├── __init__.py
+│   ├── agent.py         # SupervisorAgent, routing logic
+│   ├── graph.py         # LangGraph state machine
+│   └── state.py         # AgentState definition
+│
+├── tara/                # Technical Agent
+│   ├── __init__.py
+│   ├── agent.py         # TaraAgent implementation
+│   └── tools/
+│       ├── __init__.py  # Tool registry (10 tools)
+│       ├── system.py    # SystemStats, DiskStats, Time
+│       ├── desktop.py   # OpenApp, CloseApp, Clipboard, YouTube
+│       └── web.py       # WebSearch (DuckDuckGo)
+│
+├── nola/                # Voice I/O System
+│   ├── __init__.py
+│   ├── manager.py       # NOLAManager orchestrator
+│   ├── io.py            # AsyncEar, AsyncTTS
+│   ├── security.py      # Command sanitization
+│   └── wakeword.py      # Wake word detection
+│
+├── models/              # LLM Provider Management
+│   ├── __init__.py
+│   └── model_manager.py # NVIDIA/OpenAI/Ollama routing
+│
+├── persona/             # Personality Configuration
+│   ├── __init__.py
+│   └── profile.py       # PersonaProfile, system prompts
+│
+├── core/                # Legacy Utilities
+│   ├── memory.py        # Memory management
+│   └── tool_manager.py  # Tool registration
+│
+├── interface/           # Alternative Interfaces
+│   └── chat.py          # Standalone chat mode
+│
+└── tests/               # Test Suite
+    └── *.py
 ```
 
-Run static checks (mypy, flake8):
+## License
 
-```powershell
-mypy .
-flake8
-```
+MIT License - See LICENSE file for details.
 
-# NIA — Cognitive Loop skeleton
+## Version
 
-This repository contains a modular skeleton for NIA's Cognitive Loop
-architecture (Perceive → Reason → Act → Reflect).
-
-Files created in this step:
-- `core/brain.py` — main `CognitiveLoop` class (parse_input, reason, perform_action, reflect, run)
-- `core/memory.py` — MemoryManager interface and `InMemoryMemory` stub
-- `core/tools/tool_manager.py` — ToolManager stub (includes an `echo` tool)
-- `models/model_manager.py` — ModelManager stub for model interactions
-- `interface/chat.py` — Minimal CLI to demo the loop
-
-How to try (PowerShell on Windows):
-
-```powershell
-# ensure you are in the repo root, e.g.:
-cd 'C:\Users\rajbh\N.I.A'
-# Run the demo CLI
-python -m interface.chat
-```
-
-Notes:
-- The code is intentionally a skeleton. TODO comments mark where to
-  connect real LLMs, tools, and persistent memory.
-- Follow the module interfaces when replacing stubs to keep the core
-  `CognitiveLoop` unchanged.
-
-## Testing & Extending
-
-To run all tests (unit, integration):
-
-```powershell
-pytest
-```
-
-## Memory Vector Backend
-- `MemoryManager` supports FAISS by default when installed.
-- Configure alternate backends via `vector_backend` parameter (e.g., `"faiss"`, `"external"`).
-- When no vector backend is available, similarity search raises: `Vector search not available (configure vector_backend or integrate an external provider)`.
-
-To add tests, create files as `tests/test_*.py` (see scaffold below) covering the following modules:
-- `core/memory.py` — Test MemoryManager (CRUD, TTL, vector fallback)
-- `core/brain.py` — Test CognitiveLoop for multi-step, fallback, and error cases
-- `core/tools` — Test registration/discovery, permission hooks
-
-Sample test skeleton:
-```python
-import pytest
-from core.memory import MemoryManager, InMemoryMemory
-
-
-def test_inmemory_basic():
-    mem = InMemoryMemory()
-    mem.store('demo', 'foo', {'x': 1})
-    assert mem.retrieve('demo', 'foo')['x'] == 1
-```
-
-## Voice Features
-
-You can enable 'talk' and 'listen' by plugging in 3rd-party libraries to ToolManager:
-- `ToolManager.speak(text)`: TTS, e.g., via `pyttsx3`
-- `ToolManager.listen()`: ASR, e.g., via `speech_recognition`
-
-Default CLI accepts `--voice` to enable voice mode (falls back silently if not available).
-
-### Audio device troubleshooting (Windows)
-
-Audio input/output issues on Windows usually stem from missing PortAudio/PyAudio bindings or driver conflicts. Helpful tips:
-
-- If you're using `speech_recognition` (microphone capture) and `pyaudio` isn't found, try installing via `pipwin` (this fetches prebuilt Windows wheels):
-
-```powershell
-pip install pipwin
-pipwin install pyaudio
-```
-
-- If using `whisper`/other heavy ASR backends, prefer running them in a separate process or container (they may need AVX/CPU features or GPU drivers).
-
-- For `pyttsx3` TTS problems on Windows, ensure the SAPI5 voices are installed and accessible by the current user; `pyttsx3` uses the OS TTS subsystem.
-
-- If you see `OSError: PortAudio library not found` on import, try installing system PortAudio or use conda on Windows:
-
-```powershell
-conda install -c conda-forge portaudio
-pip install pyaudio
-```
-
-- In CI, avoid relying on a physical microphone — use the typed fallback (`typed` param for ASR plugins) or test via subprocess JSON I/O.
-
-### Async vs Sync Usage
-- Implement `arun(self, params)` for asynchronous tools, or `run(self, params)` for synchronous ones.
-- Use `ToolManager.execute_async(...)` to run tools concurrently with other async tasks.
-- `ToolManager.execute(...)` will raise if a coroutine is detected while an event loop is already running; prefer the async API in concurrent contexts.
-
-## How to Add a Tool
-1. Create a Python file in `core/tools/`.
-2. Inherit from `object` and provide `.name` and `.run(params)`.
-3. Register it from your code or rely on `ToolManager.discover_and_register()`.
-
-Sample:
-```python
-class HelloTool:
-    name = 'hello'
-    def run(self, params):
-        return {'message': 'hi'}
-```
-
-## Architectural Highlights (2025)
-- All ToolManager logic is registry/discovery-based, async-capable, and supports permission hooks.
-- Voice capability is modular and togglable.
-- ModelManager and Memory are injectable; core has no hard deps on any single backend.
-- Reflection and trace logging are robust and extensible for future LLM-driven improvements.
-
-## ToolManager APIs and Usage
-
-- Preferred API: `core.tool_manager.ToolManager` (raw result API). Methods:
-  - `register(name, func)` — register callable tools
-  - `register_tool(cls_or_instance)` — register class/instance with `name` and `run`
-  - `execute(tool_name, params, timeout=None)` — returns raw tool output or raises
-  - `execute_async(tool_name, params, timeout=None)` — async variant
-  - `list_tools()`, `has_tool()`, plugin helpers
-
-- Legacy adapter removed: use only `core.tool_manager.ToolManager` for all new and existing code.
-- Dev tool registration is explicit via `core.tools.register_dev_tools(mgr)` and called in `interface/chat.py` on startup. Import-time auto-registration is disabled by default. To enable gated auto-registration, set `NIA_AUTO_REGISTER_DEV_TOOLS=1` in the environment.
-- Internal code (brain, chat) uses the preferred API. For all code, use `core.tool_manager.ToolManager` and call `register_dev_tools` when you need built-in tools.
-
-Notes and examples (2025 updates)
-
-- Explicit dev tool registration: The project now uses an explicit helper `core.tools.register_dev_tools(mgr)` to register the small set of local "dev" tools (echo, hello, etc.). This avoids import-time side effects. Call this from a startup path (for example, `interface.chat.main()` registers them at runtime).
-
-Example (register dev tools):
-
-```python
-from core.tool_manager import ToolManager
-from core.tools import register_dev_tools
-
-mgr = ToolManager()
-register_dev_tools(mgr)
-```
-
-- Plugin reload helper: `ToolManager` now provides a `reload_plugins(directory: str) -> int` helper to centralize unload-and-load semantics. Use it to hot-reload plugins safely from the running process.
-
-Example (reload plugins):
-
-```python
-from core.tool_manager import ToolManager
-
-mgr = ToolManager()
-loaded = mgr.reload_plugins('plugins')
-print(f"Reloaded {loaded} plugin(s)")
-```
-
-- Import-time side effects and dotenv: Loading environment variables (via `load_dotenv()`) was moved to runtime in `interface.chat.main()` to avoid mutating global state on import. Also, `interface.main()` is now a lazy wrapper that imports `interface.chat` only when executed — keep imports lightweight for tests and library consumers.
-
-- Lazy imports for optional dependencies: Heavy optional dependencies such as `numpy` and `faiss` are now lazy-imported inside the `VectorStore` constructor. `MemoryManager` will attempt to instantiate a FAISS-backed `VectorStore` only when requested and will fall back gracefully if the packages are not installed. Add tests that simulate missing modules to ensure fallback behavior remains stable.
-
-- Backwards compatibility: A small legacy adapter remains available for compatibility in `core.tools.__init__` to reduce test friction; prefer `core.tool_manager.ToolManager` for all new code.
-
-## Plugin System: Extending NIA with Hot-Plug Tools
-
-- Place any `.py` tool file in the `plugins/` directory. Each file must contain at least one class with `name` and `run(params)` attributes (see below).
-- Use the CLI commands:
-    - `list plugins` — view all loaded plugin tools
-    - `reload plugins` — hot-reload all plugins without restarting
-    - `unload plugin <tool_name>` — unload a specific plugin tool
-- Plugins are loaded at startup and can be hot-reloaded/unloaded at any time.
-
-### Secure Plugin Loading (Allowlist)
-- Set `NIA_PLUGIN_SAFE_MODE=1` to enable allowlist-based plugin loading.
-- Create `plugins/ALLOWLIST.txt` with one plugin base name per line (e.g., `hello_plugin`). Only allowlisted `.py` files will be loaded.
-- This reduces risk by preventing unreviewed plugin execution.
-
-### Authoring a Plugin Example
-Create a file, e.g. `plugins/hello_plugin.py`:
-```python
-class HelloPlugin:
-    name = "hello_plugin"
-    def run(self, params):
-        return {"hello": "from your plugin!", "params": params}
-```
-- These are loaded and become callable tool names in NIA automatically.
-
-### Add & reload a sample plugin (runtime)
-Create `plugins/my_plugin.py`:
-
-```python
-class MyPlugin:
-  name = "my_plugin"
-  def run(self, params):
-    return {"ok": True, "params": params}
-```
-
-Reload from Python at runtime (hot-reload):
-
-```python
-from core.tool_manager import ToolManager
-
-mgr = ToolManager()
-# load plugins (or reload existing ones)
-loaded_count = mgr.reload_plugins('plugins')
-print(f"Reloaded {loaded_count} plugin(s)")
-
-# run the plugin after reload
-result = mgr.execute('my_plugin', params={"x": 1})
-print(result)
-```
-
-Reload via the CLI sample flow (when running `python -m interface.chat`):
-
-```powershell
-python -m interface.chat
-> reload plugins
-Reloaded 1 plugin(s)
-> run my_plugin {"x": 1}
-{"ok": true, "params": {"x": 1}}
-```
-
-### Best Practices and Safety
-- Only keep trusted plugins in the plugins directory (plugins are Python code and execute in-process).
-- Use exception handling inside your plugin's `run()` for stability.
-- Keep plugin dependencies to a minimum or handle imports inside plugin classes.
-
-### Is the plugin system production-ready?
-- Short answer: the plugin system is ready for development and local testing, including hot-reload; it is not hardened for running untrusted plugins in production.
-
-- Why: plugins execute in-process with the main application. This makes them efficient for development but places no sandboxing boundary around code — a malicious or buggy plugin can access the app's memory, file system, and environment.
-
-- Recommendations for production use:
-  - Use `NIA_PLUGIN_SAFE_MODE=1` and maintain a vetted allowlist (`plugins/ALLOWLIST.txt`).
-  - Review plugin code or adopt a signed-plugin model for trust.
-  - Run untrusted plugins in a separate process or container and communicate via IPC or RPC if you need strong isolation (future improvement).
-
-See built-in `plugins/demo_plugin.py` as a reference.
-# N.I.A
-
-## GitHub Copilot Configuration & Usage
-
-This project includes guidance for GitHub Copilot under `.github/copilot-instructions.md`.
-
-Purpose
-- Provide Copilot with architectural guardrails to generate code consistent with NIA’s patterns.
-- Reinforce the preferred `ToolManager` API, explicit tool registration, and no import-time side effects.
-
-Usage Guidelines
-- Read `.github/copilot-instructions.md` before using Copilot on this repo.
-- Use `core.tool_manager.ToolManager` (raw API) universally; the legacy adapter has been removed.
-- Do not register tools at import time. Call `core.tools.register_dev_tools(mgr)` explicitly from startup code (see `interface/chat.py`).
-- Optional environment gating for demos: set `NIA_AUTO_REGISTER_DEV_TOOLS` to enable best-effort dev tool registration at import time.
-
-Relevant Configuration
-- Environment variable: `NIA_AUTO_REGISTER_DEV_TOOLS` controls import-time dev tool auto-registration.
-
-```powershell
-# Disabled by default (recommended for production/testing)
-$env:NIA_AUTO_REGISTER_DEV_TOOLS = "0"
-
-# Enable for local demos (best-effort, safe to leave off)
-$env:NIA_AUTO_REGISTER_DEV_TOOLS = "1"
-```
-
-Maintenance & Version Control
-- Keep `.github/copilot-instructions.md` up to date when refactoring architecture (tool registration policies, API changes).
-- Changes should be reviewed via pull requests together with code updates that alter `ToolManager` behavior or registration flow.
-- Ensure tests remain aligned with the documented behavior (no import-time side effects, idempotent registration).
+N.I.A. v1.0.0
