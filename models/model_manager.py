@@ -41,7 +41,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Union
 
 from dotenv import load_dotenv
 
@@ -87,6 +87,15 @@ class ModelSpec:
 # Model catalog
 MODEL_CATALOG: Dict[str, ModelSpec] = {
     # NVIDIA NIM Models (Free Tier Available)
+    "nvidia/llama-3.1-405b": ModelSpec(
+        provider=Provider.NVIDIA,
+        model_name="meta/llama-3.1-405b-instruct",
+        display_name="Llama 3.1 405B (NVIDIA)",
+        context_window=128000,
+        supports_function_calling=True,
+        cost_tier="free",
+        speed_tier="slow",
+    ),
     "nvidia/llama-3.1-70b": ModelSpec(
         provider=Provider.NVIDIA,
         model_name="meta/llama-3.1-70b-instruct",
@@ -330,7 +339,6 @@ class ModelFactory:
         """Check which providers are available."""
         # Check NVIDIA
         try:
-            from langchain_nvidia_ai_endpoints import ChatNVIDIA
             self._available_providers["nvidia"] = True
         except ImportError:
             self._available_providers["nvidia"] = False
@@ -338,7 +346,6 @@ class ModelFactory:
         
         # Check OpenAI
         try:
-            from langchain_openai import ChatOpenAI
             self._available_providers["openai"] = True
         except ImportError:
             self._available_providers["openai"] = False
@@ -346,12 +353,10 @@ class ModelFactory:
         
         # Check Ollama
         try:
-            from langchain_ollama import ChatOllama
             self._available_providers["ollama"] = True
         except ImportError:
             # Try alternative import
             try:
-                from langchain_community.chat_models import ChatOllama
                 self._available_providers["ollama"] = True
             except ImportError:
                 self._available_providers["ollama"] = False
@@ -359,7 +364,6 @@ class ModelFactory:
         
         # Check Groq
         try:
-            from langchain_groq import ChatGroq
             self._available_providers["groq"] = True
         except ImportError:
             self._available_providers["groq"] = False
@@ -637,14 +641,14 @@ class ModelManager:
         This returns the best model for complex reasoning, coding,
         and nuanced conversation. May be slower than fast model.
         
-        Default: NVIDIA Llama 3.1 70B or OpenAI GPT-4o
+        Default: NVIDIA Llama 3.1 405B (most powerful) or fallbacks
         
         Returns:
             LangChain chat model.
         """
         if self._smart_model is None:
             self._smart_model = self._get_best_available_model(
-                preferred_specs=["nvidia/llama-3.1-70b", "nvidia/nemotron", "openai/gpt-4o"],
+                preferred_specs=["nvidia/llama-3.1-405b", "nvidia/llama-3.1-70b", "nvidia/nemotron", "openai/gpt-4o"],
                 temperature=temperature,
             )
         return self._smart_model

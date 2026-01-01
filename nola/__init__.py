@@ -1,15 +1,14 @@
 """N.O.L.A. - Neural Operator for Language & Audio.
 
-A modular voice I/O system for NIA that separates audio handling
-from the reasoning brain.
+A modular voice I/O system for NIA using Vosk (STT) and Piper (TTS).
 
 Package Structure:
     nola/
-    ├── __init__.py      # This file - public API exports
+    ├── __init__.py      # This file - public API exports & dependency check
     ├── manager.py       # NOLAManager orchestrator
     ├── security.py      # Input sanitization & command filtering
     ├── wakeword.py      # Wake word detection
-    └── io.py            # AsyncEar & AsyncTTS implementations
+    └── io.py            # AsyncEar (Vosk) & AsyncTTS (Piper) implementations
 
 Quick Start:
     from nola import NOLAManager, NOLAConfig
@@ -28,16 +27,59 @@ Quick Start:
 Components:
     NOLAManager: Main orchestrator that coordinates all components
     NOLAConfig: Configuration dataclass for NOLAManager
-    AsyncEar: Non-blocking microphone listener
-    AsyncTTS: Non-blocking text-to-speech engine
+    AsyncEar: Non-blocking microphone listener (Vosk offline STT)
+    AsyncTTS: Non-blocking text-to-speech engine (Piper binary)
     InputSanitizer: Security layer for dangerous command blocking
     WakeWordDetector: Voice activation detection
     SanitizedInput: Container for processed voice input
     SecurityLevel: Enum for input classification
 
-Version: 1.0.0
+Version: 2.0.0 (Vosk + Piper Stack)
 """
 from __future__ import annotations
+
+import sys
+import importlib.util
+
+# =============================================================================
+# Dependency Verification (Vosk + Piper Stack)
+# =============================================================================
+
+REQUIRED_DEPS = ['vosk', 'sounddevice', 'numpy', 'requests']
+
+
+def check_dependencies() -> bool:
+    """Check if all required audio dependencies are installed.
+    
+    Returns:
+        True if all dependencies are available, exits with error otherwise.
+    """
+    missing = []
+    
+    for dep in REQUIRED_DEPS:
+        if importlib.util.find_spec(dep) is None:
+            missing.append(dep)
+    
+    if missing:
+        print("\n" + "=" * 60)
+        print("[X] NOLA DEPENDENCY ERROR")
+        print("=" * 60)
+        print(f"\nMissing required packages: {', '.join(missing)}")
+        print(f"\nFix with:\n  pip install {' '.join(missing)}")
+        print("\n" + "=" * 60 + "\n")
+        sys.exit(1)
+    
+    return True
+
+
+# Run dependency check on import (silent on success, exits on failure)
+check_dependencies()
+# Note: Success message removed - status shown in main.py's print_system_status()
+
+
+# =============================================================================
+# Package Exports
+# =============================================================================
 
 # Manager and config
 from .manager import (
@@ -53,12 +95,7 @@ from .security import (
     InputSanitizer,
 )
 
-# Wake word detection
-from .wakeword import (
-    WakeWordDetector,
-)
-
-# I/O components
+# I/O components (includes wake word detection via AsyncEar)
 from .io import (
     RecognitionResult,
     AsyncEar,
@@ -68,7 +105,7 @@ from .io import (
 )
 
 # Package metadata
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 __author__ = "NIA Team"
 __all__ = [
     # Core
@@ -81,15 +118,15 @@ __all__ = [
     "SanitizedInput", 
     "InputSanitizer",
     
-    # Wake Word
-    "WakeWordDetector",
-    
     # I/O
     "RecognitionResult",
     "AsyncEar",
     "AsyncTTS",
     "get_async_ear",
     "get_async_tts",
+    
+    # Utilities
+    "check_dependencies",
 ]
 
 
@@ -101,51 +138,3 @@ def demo():
     """
     from .manager import demo as _demo
     _demo()
-
-
-# Convenience check for package integrity
-def _check_dependencies() -> dict:
-    """Check availability of optional dependencies.
-    
-    Returns:
-        Dict mapping dependency names to availability status.
-    """
-    deps = {}
-    
-    try:
-        import speech_recognition
-        deps["speech_recognition"] = True
-    except ImportError:
-        deps["speech_recognition"] = False
-    
-    try:
-        import pyttsx3
-        deps["pyttsx3"] = True
-    except ImportError:
-        deps["pyttsx3"] = False
-    
-    try:
-        import pyaudio
-        deps["pyaudio"] = True
-    except ImportError:
-        deps["pyaudio"] = False
-    
-    return deps
-
-
-def check_system() -> None:
-    """Print system dependency status."""
-    deps = _check_dependencies()
-    print("N.O.L.A. System Check")
-    print("=" * 40)
-    for name, available in deps.items():
-        status = "✓ Available" if available else "✗ Missing"
-        print(f"  {name}: {status}")
-    print()
-    
-    if all(deps.values()):
-        print("All dependencies installed. NOLA is ready!")
-    else:
-        missing = [k for k, v in deps.items() if not v]
-        print(f"Missing: {', '.join(missing)}")
-        print("Install with: pip install " + " ".join(missing))

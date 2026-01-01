@@ -1,213 +1,285 @@
-# N.I.A. - Neural Intelligence Assistant
-
-A voice-enabled AI assistant combining **LangGraph-based reasoning** with **real-time speech I/O**.
+<div align="center">
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════╗
+║                                                                           ║
 ║    ███╗   ██╗   ██╗    █████╗                                             ║
 ║    ████╗  ██║   ██║   ██╔══██╗     Neural Intelligence Assistant          ║
 ║    ██╔██╗ ██║   ██║   ███████║     ─────────────────────────────          ║
-║    ██║╚██╗██║   ██║   ██╔══██║     Voice-Enabled AI Companion             ║
-║    ██║ ╚████║██╗██║██╗██║  ██║     Powered by LangGraph + NOLA            ║
-║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝                                            ║
+║    ██║╚██╗██║   ██║   ██╔══██║     CLASSIFICATION: DIRECTOR_LEVEL_ACCESS  ║
+║    ██║ ╚████║██╗██║██╗██║  ██║     DEVELOPER: SentArc Labs                ║
+║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 2.0.0                         ║
+║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 ```
 
-## Features
+### A Modular, Multi-Modal AI System
 
-- **Dual Input Modes**: Text (keyboard) or Voice (speech recognition)
-- **Wake Word Activation**: "Jarvis", "NIA", or custom phrases
-- **Multi-Agent Architecture**: Supervisor routing to specialist agents
-- **NVIDIA NIM Integration**: Primary inference via NVIDIA's cloud models
-- **Conversation Persistence**: SQLite-backed memory across sessions
-- **10 Built-in Tools**: System stats, app control, web search, YouTube, and more
+**Voice • Vision • Tools • Reflexes**
 
-## Architecture
+</div>
+
+---
+
+## 🎯 Overview
+
+**N.I.A.** (Neural Intelligence Assistant) is a privacy-first, modular AI assistant designed for power users. It combines offline voice recognition, vision-based security monitoring, and automated tool execution into a unified system controlled by natural language or zero-latency reflexes.
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                    N.I.A. Voice Assistant                        │
-│                                                                  │
-│  ┌──────────────┐     ┌──────────────┐     ┌──────────────────┐  │
-│  │     NOLA     │────►│     NIA      │────►│       NOLA       │  │
-│  │   AsyncEar   │     │  Supervisor  │     │     AsyncTTS     │  │
-│  │  (Listen)    │     │   → IRIS     │     │     (Speak)      │  │
-│  │              │     │   → TARA     │     │                  │  │
-│  └──────────────┘     └──────────────┘     └──────────────────┘  │
-│      Voice In              Brain               Voice Out         │
-└──────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────┬────────────────────────────────────┐
+│ N.I.A. SYSTEM DASHBOARD     │                2026-01-02 00:10:00 │
+├─────────────────────────────┼────────────────────────────────────┤
+│ 🧠 SUBSYSTEMS               │ 📊 RESOURCES                      │
+│ • BRAIN (NIA) : [ON ]       │  CPU: [████░░░░░░]  42%            │
+│ • VOICE (NOLA): [ON ]       │  RAM: [███████░░░]  76%            │
+│ • SENTRY(IRIS): [OFF]       │  DSK: [██░░░░░░░░]  27%            │
+│ • TOOLS (TARA): [ON ]       │                                    │
+├─────────────────────────────┼────────────────────────────────────┤
+│ 💾 MEMORY                   │ 🔐 SECURITY KEYS                  │
+│  RAM : 7.6/10.0 GB          │  NVIDIA API: [LINKED ]             │
+│  DISK: 680.5 GB Free        │  OPENAI API: [LINKED ]             │
+└─────────────────────────────┴────────────────────────────────────┘
 ```
 
-| Component | Purpose                                                  |
-|:----------|:---------------------------------------------------------|
-| **NIA**   | LangGraph Supervisor - routes requests to specialists    |
-| **TARA**  | Technical Agent - system control, apps, web search, math |
-| **IRIS**  | Vision Agent - image analysis (placeholder)              |
-| **NOLA**  | Voice I/O - speech recognition + text-to-speech          |
+---
 
-## Installation
+## 🏗️ Architecture
 
-### Requirements
-- Python 3.10+
-- Windows/Linux/macOS
+N.I.A. is composed of four specialized units working in concert:
 
-### Setup
+| Unit | Name     |         Role               |              Technology              |
+|------|----------|--------------------------  |--------------------------------------|
+| 🧠  | **NIA**  | Core Brain & Supervisor    | LangGraph + NVIDIA NIM                |
+| 🎤  | **NOLA** | Voice I/O (STT/TTS)        | Vosk (Offline) + Piper/Edge-TTS       |
+| 👁️  | **IRIS** | Vision & Security Sentry   | Llama 3.2 Vision + mss                |
+| 🛠️  | **TARA** | Tool Execution & Automation| Dynamic Registry + Function Calling   |
+
+```
+                    ┌──────────────────┐
+                    │   USER INPUT     │
+                    │  (Voice / Text)  │
+                    └────────┬─────────┘
+                             │
+              ┌──────────────▼──────────────┐
+              │     ⚡ REFLEX LAYER         │
+              │  (Zero-Latency Commands)    │
+              └──────────────┬──────────────┘
+                             │
+         ┌───────────────────▼───────────────────┐
+         │           🧠 NIA CORE                 │
+         │      (LangGraph Supervisor)           │
+         └───┬───────────┬───────────────┬───────┘
+             │           │               │
+      ┌──────▼──────┐ ┌──▼──────────┐ ┌──▼──────────┐
+      │ 🎤 NOLA     │ │ 👁️ IRIS    │ │ 🛠️ TARA     │
+      │ Voice I/O   │ │ Vision      │ │ Tools       │
+      └─────────────┘ └─────────────┘ └─────────────┘
+```
+
+---
+
+## ⚡ Features
+
+### Zero-Latency Reflexes
+Built-in command vocabulary bypasses the LLM for instant response:
+- Voice control, mute/unmute, sentry toggle — all sub-50ms
+
+### Privacy-First Sentry
+- Screen monitoring runs **100% locally**
+- LLama 3.2 Vision analyzes frames on-device
+- No cloud uploads, no data leaves your machine
+
+### Director-Level Dashboard
+- Real-time system metrics (CPU, RAM, Disk)
+- Subsystem status at a glance
+- API key validation
+
+### Fuzzy Command Matching
+- Say "turn mic on" or "activate voice" — both work
+- Order-independent keyword detection
+
+---
+
+## 🚀 Installation
+
+### Prerequisites
+- **Python 3.10+**
+- **Windows 10/11** (Primary platform)
+- **NVIDIA GPU** (Optional, for faster inference)
+- **Nmap** (Optional, for network scanning tools)
+
+### Steps
 
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/N.I.A.git
 cd N.I.A
 
-# Create virtual environment
+# Create virtual environment (recommended)
 python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# or: .venv\Scripts\activate  # Windows
+.venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Copy environment template
-cp env.example .env
+# Download Vosk model (required for voice)
+# Place in: models/vosk-model-small-en-us-0.15/
+
+# Download Piper TTS binary (optional)
+# Place in: nola/piper_bin/
 ```
 
-### Voice Mode Dependencies (Optional)
+### Environment Setup
 
-```bash
-pip install speechrecognition pyttsx3 pyaudio
-```
-
-## Configuration
-
-Create a `.env` file with your API keys:
+Create a `.env` file in the project root:
 
 ```env
-# REQUIRED - Primary Inference Provider
-NVIDIA_API_KEY=your_nvidia_api_key
+# Required: At least one LLM provider
+NVIDIA_API_KEY=nvapi-xxxx
+OPENAI_API_KEY=sk-xxxx
 
-# OPTIONAL - Fallback Providers
-OPENAI_API_KEY=your_openai_api_key
-HUGGINGFACE_API_KEY=your_hf_api_key
+# Optional
+HUGGINGFACE_API_KEY=hf_xxxx
 OLLAMA_HOST=http://localhost:11434
-
-# OPTIONAL - Fallback order
-MODEL_PROVIDER_FALLBACKS=nvidia,openai,ollama
 ```
 
-| Variable                   | Required | Description                        |
-|:---------------------------|:---------|:-----------------------------------|
-| `NVIDIA_API_KEY`           | ✅ Yes   | Primary inference via NVIDIA NIM   |
-| `OPENAI_API_KEY`           | ❌ No    | Fallback to OpenAI GPT models      |
-| `HUGGINGFACE_API_KEY`      | ❌ No    | Fallback to HuggingFace Inference  |
-| `OLLAMA_HOST`              | ❌ No    | Local Ollama server URL            |
-| `MODEL_PROVIDER_FALLBACKS` | ❌ No    | Comma-separated provider order     |
+---
 
-## Usage
+## 📖 Usage
 
-### Basic Commands
+### Starting N.I.A.
 
 ```bash
 # Text mode (default)
 python main.py
 
-# Check system status
-python main.py --status
-
-# Voice mode with wake words
+# Voice mode
 python main.py --voice
 
-# Voice mode (always listening)
-python main.py --voice --no-wake
-
-# Custom wake words
-python main.py --voice --wake-words "computer,assistant"
-
-# Debug logging
-python main.py --debug
-
-# Custom conversation thread
-python main.py --thread-id myproject
+# Check system status
+python main.py --status
 ```
 
-### In-App Commands
+### Command Reference
 
-| Command         | Description               |
-|:----------------|:--------------------------|
-| `help`          | Show available commands   |
-| `status`        | Check system status       |
-| `history`       | View conversation history |
-| `clear history` | Reset conversation        |
-| `voice on`      | Enable voice mode         |
-| `voice off`     | Disable voice mode        |
-| `wake <word>`   | Set custom wake word      |
-| `clear`         | Clear screen              |
-| `exit` / `quit` | Exit application          |
+#### 🎤 Voice Control (NOLA)
+| Command   | Aliases                                              | Action               |
+|-----------|------------------------------------------------------|----------------------|
+| Voice On  | `mic on`, `wake up`, `ears on`, `start listening`    | Enable microphone    |
+| Voice Off | `mic off`, `go silent`, `ears off`, `stop listening` | Mute microphone      |
+| Shh       | `quiet`, `shut up`, `hush`, `be quiet`               | Stop TTS immediately |
 
-### TARA Capabilities (Technical Agent)
+#### 👁️ Vision Control (IRIS)
+| Command    | Aliases                                                  | Action                   |
+|------------|----------------------------------------------------------|--------------------------|
+| Sentry On  | `eyes on`, `guard mode`, `watch screen`, `start watching`| Enable screen monitoring |
+| Sentry Off | `eyes off`, `standby`, `stop watching`                   | Disable sentry           |
 
-| Tool            | Example Prompt                        |
-|:----------------|:------------------------------------- |
-| System Stats    | "Check my system health"              |
-| Time/Date       | "What time is it?"                    |
-| Open App        | "Open brave browser"                  |
-| Close App       | "Close notepad"                       |
-| Play YouTube    | "Play Bohemian Rhapsody on YouTube"   |
-| Web Search      | "Search for Python tutorials"         |
-| Clipboard       | "Copy this text: Hello World"         |
+#### 🔊 Audio Control (TARA Reflex)
+| Command   | Aliases                                              | Action                   |
+|-----------|------------------------------------------------------|--------------------------|
+| Mute      | `kill sound`, `silence speakers`, `sound off`        | Mute system audio        |
+| Unmute    | `sound on`, `restore audio`, `speakers on`           | Unmute audio             |
 
-## Project Structure
+#### ⚙️ System Commands
+| Command   | Aliases                                              | Action                   |
+|-----------|------------------------------------------------------|--------------------------|
+| Status    | `report`, `stats`, `diagnostics`, `performance`      | Show dashboard           |
+| Clear     | `cls`, `clean screen`                                | Clear terminal           |
+| Exit      | `quit`, `bye`, `goodbye`, `shutdown`                 | Exit N.I.A.              |
+| Help      | `commands`, `what can you do`                        | Show help                |
+
+---
+
+## 📁 Directory Structure
 
 ```
 N.I.A/
-├── main.py              # Entry point & CLI
-├── requirements.txt     # Python dependencies
-├── .env                 # API keys (gitignored)
-├── env.example          # Environment template
+├── main.py                 # Entry point
+├── requirements.txt        # Dependencies
+├── .env                    # API keys (create this)
 │
-├── nia/                 # Brain (Supervisor Agent)
-│   ├── __init__.py
-│   ├── agent.py         # SupervisorAgent, routing logic
-│   ├── graph.py         # LangGraph state machine
-│   └── state.py         # AgentState definition
+├── core/                   # Core engine & orchestration
+│   ├── engine.py           # Main assistant loop
+│   └── health.py           # System diagnostics
 │
-├── tara/                # Technical Agent
-│   ├── __init__.py
-│   ├── agent.py         # TaraAgent implementation
-│   └── tools/
-│       ├── __init__.py  # Tool registry (10 tools)
-│       ├── system.py    # SystemStats, DiskStats, Time
-│       ├── desktop.py   # OpenApp, CloseApp, Clipboard, YouTube
-│       └── web.py       # WebSearch (DuckDuckGo)
+├── nia/                    # 🧠 Brain module
+│   ├── graph.py            # LangGraph supervisor
+│   └── state.py            # Conversation state
 │
-├── nola/                # Voice I/O System
-│   ├── __init__.py
-│   ├── manager.py       # NOLAManager orchestrator
-│   ├── io.py            # AsyncEar, AsyncTTS
-│   ├── security.py      # Command sanitization
-│   └── wakeword.py      # Wake word detection
+├── nola/                   # 🎤 Voice module
+│   ├── io.py               # AsyncEar (STT) + AsyncTTS
+│   ├── manager.py          # NOLAManager orchestration
+│   └── security.py         # Input sanitization
 │
-├── models/              # LLM Provider Management
-│   ├── __init__.py
-│   └── model_manager.py # NVIDIA/OpenAI/Ollama routing
+├── iris/                   # 👁️ Vision module
+│   ├── agent.py            # Vision analysis agent
+│   └── sentry.py           # Background screen monitor
 │
-├── persona/             # Personality Configuration
-│   ├── __init__.py
-│   └── profile.py       # PersonaProfile, system prompts
+├── tara/                   # 🛠️ Tools module
+│   ├── agent.py            # Tool execution agent
+│   ├── registry.py         # Dynamic tool discovery
+│   └── units/              # Tool implementations
+│       ├── system_control.py
+│       ├── desktop_control.py
+│       └── web_tools.py
 │
-├── core/                # Legacy Utilities
-│   ├── memory.py        # Memory management
-│   └── tool_manager.py  # Tool registration
+├── interface/              # UI components
+│   ├── banner.py           # ASCII banner
+│   └── chat.py             # Interactive prompt
 │
-├── interface/           # Alternative Interfaces
-│   └── chat.py          # Standalone chat mode
+├── persona/                # Personality config
+│   └── default.py          # Default persona
 │
-└── tests/               # Test Suite
-    └── *.py
+├── models/                 # ML models (Vosk, etc.)
+└── data/                   # Persistent state
 ```
 
-## License
+---
 
-MIT License - See LICENSE file for details.
+## 🔧 Configuration
 
-## Version
+### Persona Customization
+Edit `persona/default.py` to change N.I.A.'s personality:
 
-N.I.A. v1.0.0
+```python
+SYSTEM_PROMPT = """You are N.I.A., a helpful AI assistant..."""
+```
+
+### Adding Custom Tools
+Create a new file in `tara/units/` with `@tool` decorated functions:
+
+```python
+from tara.protocols import tool
+
+@tool(description="My custom tool")
+def my_tool(arg: str) -> str:
+    return f"Processed: {arg}"
+```
+
+Tools are automatically discovered on startup.
+
+---
+
+## 🛡️ Security
+
+- **Offline Voice**: Vosk runs entirely on-device
+- **Local Vision**: Sentry uses local Llama Vision model
+- **Input Sanitization**: All voice input passes through security filters
+- **No Telemetry**: Zero data collection or cloud uploads
+
+---
+
+## 📝 License
+
+MIT License - See [LICENSE](LICENSE) for details.
+
+---
+
+<div align="center">
+
+**Built with ❤️ by SentArc Labs**
+
+*"Your Intelligence, Augmented."*
+
+</div>

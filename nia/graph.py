@@ -12,10 +12,9 @@ The main public interface is `process_input(text, thread_id) -> str`.
 from __future__ import annotations
 
 import logging
-import os
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 # Import state and agents
 from .state import (
@@ -27,7 +26,8 @@ from .state import (
     create_initial_state,
     extract_response,
 )
-from .agent import SupervisorAgent, IrisAgent
+from .agent import SupervisorAgent
+from .agent import IrisAgent as IrisAgentPlaceholder
 from .agent import TaraAgent as TaraAgentPlaceholder
 
 # Try to import real TaraAgent
@@ -37,7 +37,14 @@ try:
 except ImportError:
     _HAS_TARA = False
     RealTaraAgent = None  # type: ignore
-    logger.debug("Real TARA not available, using placeholder")
+
+# Try to import real IrisAgent
+try:
+    from iris.agent import IrisAgent as RealIrisAgent
+    _HAS_IRIS = True
+except ImportError:
+    _HAS_IRIS = False
+    RealIrisAgent = None  # type: ignore
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -122,7 +129,14 @@ class NIAGraph:
             model_type=model_type,
             temperature=temperature,
         )
-        self.iris = IrisAgent()
+        
+        # Use real IRIS if available, otherwise placeholder
+        if _HAS_IRIS and RealIrisAgent:
+            self.iris = RealIrisAgent(temperature=temperature)
+            logger.info("Using real IRIS agent with vision")
+        else:
+            self.iris = IrisAgentPlaceholder()
+            logger.info("Using IRIS placeholder (vision not available)")
         
         # Use real TARA if available, otherwise placeholder
         if _HAS_TARA and RealTaraAgent:
@@ -229,6 +243,30 @@ class NIAGraph:
     
     def _route_from_supervisor(self, state: AgentState) -> str:
         """Determine next node based on supervisor's routing decision."""
+        # FORCE VISION ROUTING - Keyword Override
+        # Check user message for vision keywords before supervisor decision
+        messages = state.get("messages", [])
+        last_user_msg = ""
+        for msg in reversed(messages):
+            if hasattr(msg, "type") and msg.type == "human":
+                last_user_msg = msg.content.lower()
+                break
+            elif isinstance(msg, dict) and msg.get("role") == "user":
+                last_user_msg = msg.get("content", "").lower()
+                break
+        
+        vision_keywords = [
+            "look", "see", "screen", "watch", "view", "vision",
+            "read this", "what do you see", "analyze screen", "screenshot",
+            "what's on my screen", "look at the screen", "describe this"
+        ]
+        
+        if any(k in last_user_msg for k in vision_keywords):
+            print(f"👀 Routing to IRIS (Vision keyword detected)")
+            logger.info("Force routing to IRIS: vision keyword in '%s'", last_user_msg[:50])
+            return AGENT_IRIS
+        
+        # Standard routing from supervisor decision
         next_agent = state.get("next", AGENT_END)
         route_reason = state.get("route_reason", "No reason provided")
         

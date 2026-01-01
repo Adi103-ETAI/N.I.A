@@ -5,12 +5,12 @@ operations for NIA, cleanly separating audio handling from the reasoning brain.
 
 Architecture:
     ┌─────────────────────────────────────────────────────────────────┐
-    │                        NOLAManager                               │
-    │  ┌─────────────┐    ┌─────────────┐    ┌───────────────────┐   │
-    │  │  AsyncEar   │───►│  Security   │───►│  Output Queue     │   │
-    │  │  (Listen)   │    │  Sanitizer  │    │  (to Brain)       │   │
-    │  └─────────────┘    └─────────────┘    └───────────────────┘   │
-    │                                                                  │
+    │                        NOLAManager                              │
+    │  ┌─────────────┐    ┌─────────────┐    ┌───────────────────┐    │
+    │  │  AsyncEar   │───►│  Security   │───►│  Output Queue     │    │
+    │  │  (Listen)   │    │  Sanitizer  │    │  (to Brain)       │    │
+    │  └─────────────┘    └─────────────┘    └───────────────────┘    │
+    │                                                                 │
     │  ┌─────────────┐    ┌─────────────────────────────────────────┐ │
     │  │  AsyncTTS   │◄───│  Input Queue (from Brain)               │ │
     │  │  (Speak)    │    └─────────────────────────────────────────┘ │
@@ -35,8 +35,57 @@ from typing import Any, Callable, Dict, List, Optional
 
 # Import from NOLA submodules
 from .security import InputSanitizer, SanitizedInput, SecurityLevel
-from .wakeword import WakeWordDetector
-from .io import AsyncEar, AsyncTTS, RecognitionResult
+from .io import AsyncEar, AsyncTTS
+
+
+# =============================================================================
+# Inline Wake Word Detector (previously in wakeword.py)
+# =============================================================================
+
+class WakeWordDetector:
+    """Simple wake word detection for voice activation.
+    
+    Checks if input starts with any configured wake word and
+    manages an active window where wake word isn't required.
+    """
+    
+    def __init__(self, wake_words: list = None, timeout: float = 30.0):
+        self._wake_words = [w.lower() for w in (wake_words or ["jarvis", "nia"])]
+        self._timeout = timeout
+        self._last_activation = 0.0
+    
+    def check(self, text: str) -> tuple:
+        """Check for wake word in text.
+        
+        Returns:
+            Tuple of (is_active, processed_text)
+        """
+        import time
+        text_lower = text.lower().strip()
+        current_time = time.time()
+        
+        # Check if still in active window
+        if current_time - self._last_activation < self._timeout:
+            return True, text
+        
+        # Check for wake word
+        for word in self._wake_words:
+            if text_lower.startswith(word):
+                self._last_activation = current_time
+                # Return text with wake word stripped
+                return True, text[len(word):].strip() or text
+        
+        return False, text
+    
+    def is_active(self) -> bool:
+        """Check if wake word window is still active."""
+        import time
+        return time.time() - self._last_activation < self._timeout
+    
+    def set_wake_words(self, words: list) -> None:
+        """Update wake words."""
+        self._wake_words = [w.lower() for w in words]
+
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -466,6 +515,29 @@ class NOLAManager:
                 blocked_patterns=self.config.custom_blocked_patterns,
                 warning_patterns=self.config.custom_warning_patterns,
             )
+    
+    # =========================================================================
+    # Voice Control Methods
+    # =========================================================================
+    
+    def pause_listening(self) -> None:
+        """Pause the microphone (mute)."""
+        if self._ear and hasattr(self._ear, 'pause'):
+            self._ear.pause()
+            logger.info("Microphone paused")
+    
+    def resume_listening(self) -> None:
+        """Resume the microphone (unmute)."""
+        if self._ear and hasattr(self._ear, 'resume'):
+            self._ear.resume()
+            logger.info("Microphone resumed")
+    
+    def stop_speaking(self) -> None:
+        """Stop all pending speech (silence)."""
+        if self._tts and hasattr(self._tts, 'clear_queue'):
+            cleared = self._tts.clear_queue()
+            logger.info("Cleared %d pending TTS messages", cleared)
+        self._is_speaking = False
 
 
 # =============================================================================
@@ -493,7 +565,6 @@ def get_nola_manager(**kwargs) -> NOLAManager:
 
 def demo():
     """Run a quick demo of NOLA functionality."""
-    import sys
     
     logging.basicConfig(
         level=logging.INFO,

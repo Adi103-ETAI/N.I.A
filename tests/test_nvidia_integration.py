@@ -42,7 +42,6 @@ def test_nvidia_in_reason_routing():
         if "not supported" in str(e).lower():
             pytest.fail(f"NVIDIA provider not properly routed: {e}")
         # Other errors (like missing API key) are expected
-        pass
 
 
 def test_nvidia_fallback_mechanism(monkeypatch):

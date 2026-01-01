@@ -1,8 +1,6 @@
 import builtins
 import threading
-import time
 
-import pytest
 
 from interface import chat
 

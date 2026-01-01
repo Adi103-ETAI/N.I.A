@@ -128,19 +128,16 @@ def check_dependencies() -> dict:
     deps = {}
     
     try:
-        import langchain_openai
         deps["langchain-openai"] = True
     except ImportError:
         deps["langchain-openai"] = False
     
     try:
-        import langgraph
         deps["langgraph"] = True
     except ImportError:
         deps["langgraph"] = False
     
     try:
-        import dotenv
         deps["python-dotenv"] = True
     except ImportError:
         deps["python-dotenv"] = False

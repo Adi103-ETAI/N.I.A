@@ -14,14 +14,12 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 
 # Import state definitions
 from .state import (
     AgentState,
-    AGENT_SUPERVISOR,
     AGENT_IRIS,
     AGENT_TARA,
     AGENT_END,
@@ -35,7 +33,7 @@ load_dotenv()
 
 # Try to import LangChain core
 try:
-    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+    from langchain_core.messages import AIMessage
     from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
     _HAS_LANGCHAIN = True
 except ImportError:
@@ -163,8 +161,15 @@ TARA_ROUTING_KEYWORDS = [
 
 # Keywords that trigger IRIS routing
 IRIS_ROUTING_KEYWORDS = [
-    "image", "photo", "picture", "see", "look at", "visual", "screenshot", "camera",
-    "describe this", "what's in this", "analyze this image", "read text", "ocr",
+    # Image analysis
+    "image", "photo", "picture", "visual", "camera",
+    # Screen analysis
+    "screen", "screenshot", "what do you see", "look at this", "analyze screen",
+    "read this error", "what's on my screen", "look at the screen",
+    # OCR/Text
+    "read text", "ocr", "read this", "what does this say",
+    # General vision
+    "see", "look", "describe this", "what's in this", "analyze this",
 ]
 
 
@@ -324,16 +329,35 @@ class SupervisorAgent:
         }
     
     def _get_response(self, messages: list) -> str:
-        """Get response from LLM or fallback, with routing safety net."""
-        # Get raw LLM response
+        """Get response from LLM with automatic backup model fallback.
+        
+        If the primary model (405B) fails, automatically switches to 70B backup.
+        """
+        response = None
+        
+        # ATTEMPT 1: Primary Model
         if self._llm and self._prompt:
             try:
                 chain = self._prompt | self._llm
                 result = chain.invoke({"messages": messages})
                 response = result.content
             except Exception as exc:
-                logger.exception("LLM call failed: %s", exc)
-                response = self._fallback_response(messages)
+                logger.warning("Primary model failed: %s", exc)
+                print(f"⚠️ Primary Brain Failed. Engaging Backup (70B)...")
+                
+                # ATTEMPT 2: Backup Model (70B)
+                try:
+                    backup_llm = self._get_backup_llm()
+                    if backup_llm:
+                        backup_chain = self._prompt | backup_llm
+                        result = backup_chain.invoke({"messages": messages})
+                        response = result.content
+                        logger.info("Backup model succeeded")
+                    else:
+                        response = self._fallback_response(messages)
+                except Exception as backup_exc:
+                    logger.exception("Backup model also failed: %s", backup_exc)
+                    response = self._fallback_response(messages)
         else:
             response = self._fallback_response(messages)
         
@@ -353,6 +377,38 @@ class SupervisorAgent:
         response = self._enforce_routing(user_input, response)
         
         return response
+    
+    def _get_backup_llm(self):
+        """Get backup LLM (70B) for when primary fails."""
+        try:
+            # Try NVIDIA 70B first
+            from langchain_nvidia_ai_endpoints import ChatNVIDIA
+            backup = ChatNVIDIA(
+                model="meta/llama-3.1-70b-instruct",
+                temperature=self.temperature,
+                max_tokens=1024,
+            )
+            logger.info("Initialized backup LLM: meta/llama-3.1-70b-instruct")
+            return backup
+        except Exception as e:
+            logger.debug("NVIDIA backup failed: %s", e)
+        
+        # Try OpenAI as second backup
+        try:
+            from langchain_openai import ChatOpenAI
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if api_key:
+                backup = ChatOpenAI(
+                    model="gpt-4o-mini",
+                    temperature=self.temperature,
+                    api_key=api_key,
+                )
+                logger.info("Initialized backup LLM: gpt-4o-mini")
+                return backup
+        except Exception as e:
+            logger.debug("OpenAI backup failed: %s", e)
+        
+        return None
     
     def _enforce_routing(self, user_input: str, llm_response: str) -> str:
         """Safety net: Force routing to TARA for action keywords.
