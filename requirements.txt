@@ -24,6 +24,8 @@ AppOpener>=1.7        # App Launching
 pyperclip>=1.8.0      # Clipboard
 pywhatkit>=5.4        # YouTube/Web automation
 duckduckgo-search>=6.0 # Web Search
+pyautogui>=0.9.54     # Desktop Automation
+pygetwindow>=0.0.9    # Window Management
 
 # --- UI/CLI ---
 prompt_toolkit>=3.0.0
