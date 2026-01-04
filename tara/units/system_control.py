@@ -1,25 +1,40 @@
-"""TARA System Control Unit - System Monitoring & Hardware Control.
+"""TARA System Control Unit - Admin Layer for N.I.A.
 
-Provides tools for:
-- System monitoring (CPU, RAM, disk)
-- Hardware control (volume, battery)
-- Time/date queries
+Handles Hardware & Global OS State via PowerShell and Windows APIs.
+
+Features:
+    - Power & Maintenance (lock, sleep, shutdown, restart, recycle bin)
+    - Audio Control (volume, mute via Pycaw)
+    - System Stats (CPU, RAM, Disk, Battery via Psutil)
 
 Dependencies:
     pip install psutil pycaw comtypes
 """
-from tara.protocols import tara_tool
-import platform
+from __future__ import annotations
+
+import subprocess
 from datetime import datetime
 from typing import Any, Optional
 
-# Graceful imports
+from tara.protocols import tara_tool
+
+# =============================================================================
+# Optional Dependencies (Graceful Imports)
+# =============================================================================
+
 try:
     import psutil
     _HAS_PSUTIL = True
 except ImportError:
     _HAS_PSUTIL = False
     psutil = None  # type: ignore
+
+try:
+    import ctypes
+    _HAS_CTYPES = True
+except ImportError:
+    _HAS_CTYPES = False
+    ctypes = None  # type: ignore
 
 try:
     import comtypes
@@ -40,7 +55,44 @@ except ImportError:
 
 
 # =============================================================================
-# Audio Helper (Thread-Safe)
+# Helper: PowerShell Command Executor
+# =============================================================================
+
+def _run_powershell(cmd: str) -> str:
+    """Execute a PowerShell command and return output.
+    
+    Args:
+        cmd: PowerShell command string to execute.
+        
+    Returns:
+        Command output as string.
+        
+    Raises:
+        RuntimeError: If command execution fails.
+    """
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", cmd],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        
+        if result.returncode != 0 and result.stderr:
+            raise RuntimeError(f"PowerShell error: {result.stderr.strip()}")
+        
+        return result.stdout.strip()
+        
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("PowerShell command timed out")
+    except FileNotFoundError:
+        raise RuntimeError("PowerShell not found on system")
+    except Exception as e:
+        raise RuntimeError(f"PowerShell execution failed: {e}")
+
+
+# =============================================================================
+# Helper: Audio Interface (Thread-Safe)
 # =============================================================================
 
 def _get_audio_interface() -> Optional[Any]:
@@ -83,113 +135,235 @@ def _get_audio_interface() -> Optional[Any]:
 
 
 # =============================================================================
-# System Monitoring Tools
+# TOOL GROUP 1: Power & Maintenance (The "Muscle")
 # =============================================================================
 
-@tara_tool(name="system_stats", category="system", description="Get current CPU and RAM usage.")
-def system_stats() -> str:
-    if not _HAS_PSUTIL:
-        return "Error: psutil not installed."
-    cpu = psutil.cpu_percent(interval=0.1)
-    mem = psutil.virtual_memory()
-    return f"CPU Load: {cpu}%\nRAM Usage: {mem.percent}% ({round(mem.used/1024**3, 1)}GB used)"
-
-
-@tara_tool(name="disk_stats", category="system", description="Get disk usage information.")
-def disk_stats() -> str:
-    if not _HAS_PSUTIL:
-        return "Error: psutil not installed."
-    disk = psutil.disk_usage('/')
-    free_gb = round(disk.free / (1024**3), 1)
-    return f"Disk Usage: {disk.percent}%\nFree Space: {free_gb} GB"
-
-
-@tara_tool(name="current_time", category="system", description="Get current local time.")
-def current_time() -> str:
-    return datetime.now().strftime("%I:%M %p, %A %B %d")
-
-
-@tara_tool(name="system_info", category="system", description="Get OS and Hardware details.")
-def system_info() -> str:
-    return f"System: {platform.system()} {platform.release()}\nMachine: {platform.machine()}"
-
-
-# =============================================================================
-# Hardware Control Tools
-# =============================================================================
-
-@tara_tool(name="get_battery", category="hardware", description="Get battery percentage and status.")
-def get_battery() -> str:
-    if not _HAS_PSUTIL:
-        return "Error: psutil not installed."
-    if not hasattr(psutil, "sensors_battery"):
-        return "Battery info unavailable on this system."
-    batt = psutil.sensors_battery()
-    if not batt:
-        return "No battery detected (desktop PC?)."
-    status = "Charging" if batt.power_plugged else "Discharging"
-    return f"Battery: {batt.percent}% ({status})"
+@tara_tool(
+    name="system_power",
+    category="power",
+    description="Control system power state. Actions: 'lock' (lock screen), 'sleep' (suspend), 'shutdown' (60s warning), 'restart' (60s warning), 'abort' (cancel shutdown/restart)."
+)
+def system_power(action: str) -> str:
+    """Control system power state.
+    
+    Args:
+        action: One of 'lock', 'sleep', 'shutdown', 'restart', 'abort'.
+    """
+    action = action.lower().strip()
+    
+    try:
+        if action == "lock":
+            # Lock workstation using rundll32
+            result = subprocess.run(
+                ["rundll32.exe", "user32.dll,LockWorkStation"],
+                capture_output=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return "🔒 Workstation locked."
+            return "Error: Failed to lock workstation."
+        
+        elif action == "sleep":
+            # Suspend system (0 = sleep, 1 = force, 0 = no hibernate)
+            result = subprocess.run(
+                ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
+                capture_output=True,
+                timeout=10,
+            )
+            return "😴 System entering sleep mode..."
+        
+        elif action == "shutdown":
+            # Shutdown with 60 second warning
+            _run_powershell("Stop-Computer -Force -Confirm:$false")
+            return "⚠️ System will shut down in 60 seconds. Use 'abort' to cancel."
+        
+        elif action == "restart":
+            # Restart with 60 second warning
+            _run_powershell("shutdown /r /t 60 /c 'NIA: System restart in 60 seconds'")
+            return "⚠️ System will restart in 60 seconds. Use 'abort' to cancel."
+        
+        elif action == "abort":
+            # Cancel pending shutdown/restart
+            _run_powershell("shutdown /a")
+            return "✅ Shutdown/restart cancelled."
+        
+        else:
+            return f"Error: Unknown action '{action}'. Valid: lock, sleep, shutdown, restart, abort."
+            
+    except RuntimeError as e:
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error executing power action: {e}"
 
 
 @tara_tool(
+    name="empty_recycle_bin",
+    category="maintenance",
+    description="Empty the Windows Recycle Bin permanently."
+)
+def empty_recycle_bin() -> str:
+    """Empty the Windows Recycle Bin."""
+    try:
+        _run_powershell("Clear-RecycleBin -Force -ErrorAction SilentlyContinue")
+        return "🗑️ Recycle Bin emptied."
+    except RuntimeError as e:
+        return f"Error emptying Recycle Bin: {e}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# =============================================================================
+# TOOL GROUP 2: Audio Control (The "Voice")
+# =============================================================================
+
+@tara_tool(
     name="set_volume",
-    category="hardware",
+    category="audio",
     description="Set system speaker volume (0-100). Also unmutes if muted."
 )
 def set_volume(level: int) -> str:
-    """Set volume and ensure speakers are unmuted."""
+    """Set system master volume.
+    
+    Args:
+        level: Volume level from 0 to 100.
+    """
     volume = _get_audio_interface()
     if not volume:
-        return "Error: pycaw not installed or audio device unavailable."
+        return "Error: Audio control unavailable (pycaw not installed or no audio device)."
     
     try:
-        # Clamp level
+        # Clamp level to valid range
         level = max(0, min(100, int(level)))
         
         # CRUCIAL: Unmute BEFORE setting volume
         volume.SetMute(0, None)
         
-        # Set volume level
+        # Set volume level (scalar 0.0 - 1.0)
         volume.SetMasterVolumeLevelScalar(level / 100.0, None)
         
-        return f"Volume set to {level}% (Unmuted)"
+        return f"🔊 Volume set to {level}% (Unmuted)"
+        
     except Exception as e:
-        return f"Error setting volume: {str(e)}"
+        return f"Error setting volume: {e}"
+
+
+@tara_tool(
+    name="mute_volume",
+    category="audio",
+    description="Mute or unmute system speakers. Set 'mute' to True to silence, False to unmute."
+)
+def mute_volume(mute: bool = True) -> str:
+    """Mute or unmute system speakers.
+    
+    Args:
+        mute: True to mute, False to unmute.
+    """
+    volume = _get_audio_interface()
+    if not volume:
+        return "Error: Audio control unavailable (pycaw not installed or no audio device)."
+    
+    try:
+        volume.SetMute(1 if mute else 0, None)
+        return "🔇 System Muted" if mute else "🔊 System Unmuted"
+    except Exception as e:
+        return f"Error toggling mute: {e}"
 
 
 @tara_tool(
     name="get_volume",
-    category="hardware",
+    category="audio",
     description="Get current system volume level and mute status."
 )
 def get_volume() -> str:
     """Get current volume level and mute state."""
     volume = _get_audio_interface()
     if not volume:
-        return "Error: pycaw not installed or audio device unavailable."
+        return "Error: Audio control unavailable (pycaw not installed or no audio device)."
     
     try:
         current_level = int(volume.GetMasterVolumeLevelScalar() * 100)
         is_muted = volume.GetMute()
-        mute_status = "Yes (Muted)" if is_muted else "No (Active)"
-        return f"Volume: {current_level}% | Muted: {mute_status}"
+        
+        mute_status = "🔇 Muted" if is_muted else "🔊 Active"
+        return f"Volume: {current_level}% | Status: {mute_status}"
+        
     except Exception as e:
-        return f"Error getting volume: {str(e)}"
+        return f"Error getting volume: {e}"
+
+
+# =============================================================================
+# TOOL GROUP 3: System Stats (The "Vitals")
+# =============================================================================
+
+@tara_tool(
+    name="system_stats",
+    category="stats",
+    description="Get current CPU usage, RAM usage, and Disk usage."
+)
+def system_stats() -> str:
+    """Get system resource statistics."""
+    if not _HAS_PSUTIL:
+        return "Error: psutil not installed. Run: pip install psutil"
+    
+    try:
+        # CPU (short interval for responsiveness)
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        
+        # Memory
+        mem = psutil.virtual_memory()
+        mem_used_gb = mem.used / (1024 ** 3)
+        mem_total_gb = mem.total / (1024 ** 3)
+        
+        # Disk (primary drive)
+        disk = psutil.disk_usage('/')
+        disk_free_gb = disk.free / (1024 ** 3)
+        
+        return (
+            f"📊 System Stats\n"
+            f"   CPU:  {cpu_percent:.1f}%\n"
+            f"   RAM:  {mem.percent:.1f}% ({mem_used_gb:.1f}/{mem_total_gb:.1f} GB)\n"
+            f"   Disk: {disk.percent:.1f}% ({disk_free_gb:.1f} GB free)"
+        )
+        
+    except Exception as e:
+        return f"Error getting system stats: {e}"
 
 
 @tara_tool(
-    name="mute_volume",
-    category="hardware",
-    description="Mute (silence) or Unmute (restore audio) the system speakers. Set 'mute' to True to silence, False to unmute."
+    name="battery_status",
+    category="stats",
+    description="Get battery percentage, charging status, and estimated time remaining (laptops only)."
 )
-def mute_volume(mute: bool = True) -> str:
-    """Mute or unmute system speakers."""
-    volume = _get_audio_interface()
-    if not volume:
-        return "Error: pycaw not installed or audio device unavailable."
+def battery_status() -> str:
+    """Get battery status (for laptops)."""
+    if not _HAS_PSUTIL:
+        return "Error: psutil not installed. Run: pip install psutil"
     
     try:
-        volume.SetMute(1 if mute else 0, None)
-        return "System Muted" if mute else "System Unmuted"
+        battery = psutil.sensors_battery()
+        
+        if battery is None:
+            return "🔌 No battery detected (desktop PC or virtual machine)."
+        
+        percent = battery.percent
+        plugged = battery.power_plugged
+        
+        # Charging status
+        if plugged:
+            status = "⚡ Charging" if percent < 100 else "🔌 Fully Charged"
+        else:
+            status = "🔋 Discharging"
+        
+        # Time remaining (only meaningful when discharging)
+        time_str = ""
+        if battery.secsleft > 0 and not plugged:
+            hours = battery.secsleft // 3600
+            minutes = (battery.secsleft % 3600) // 60
+            time_str = f" ({hours}h {minutes}m remaining)"
+        elif battery.secsleft == psutil.POWER_TIME_UNLIMITED:
+            time_str = " (calculating...)"
+        
+        return f"🔋 Battery: {percent:.0f}% | {status}{time_str}"
+        
     except Exception as e:
-        return f"Error muting volume: {str(e)}"
+        return f"Error getting battery status: {e}"

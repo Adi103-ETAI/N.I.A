@@ -1,28 +1,16 @@
-"""N.O.L.A. Manager - Neural Operator for Language & Audio.
+"""N.O.L.A. Manager - Voice I/O Orchestrator with Wake Word State Machine.
 
-This module provides the NOLAManager class that orchestrates all voice I/O
-operations for NIA, cleanly separating audio handling from the reasoning brain.
+Neural Operator for Language & Audio - manages voice input/output
+with strict wake word filtering and singleton pattern.
 
-Architecture:
-    ┌─────────────────────────────────────────────────────────────────┐
-    │                        NOLAManager                              │
-    │  ┌─────────────┐    ┌─────────────┐    ┌───────────────────┐    │
-    │  │  AsyncEar   │───►│  Security   │───►│  Output Queue     │    │
-    │  │  (Listen)   │    │  Sanitizer  │    │  (to Brain)       │    │
-    │  └─────────────┘    └─────────────┘    └───────────────────┘    │
-    │                                                                 │
-    │  ┌─────────────┐    ┌─────────────────────────────────────────┐ │
-    │  │  AsyncTTS   │◄───│  Input Queue (from Brain)               │ │
-    │  │  (Speak)    │    └─────────────────────────────────────────┘ │
-    │  └─────────────┘                                                │
-    └─────────────────────────────────────────────────────────────────┘
+State Machine:
+    ASLEEP → (wake word) → AWAKE
+    AWAKE → (command processed) → ASLEEP
+    AWAKE → (sleep command) → ASLEEP
 
-Features:
-    - Wake word detection (optional, configurable)
-    - Input sanitization with dangerous command blocking
-    - Non-blocking I/O with queued communication
-    - Coordinated pause/resume for echo cancellation
-    - Comprehensive logging and error handling
+Singleton Pattern:
+    from nola.manager import get_nola_manager
+    manager = get_nola_manager()
 """
 from __future__ import annotations
 
@@ -31,417 +19,394 @@ import queue
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, List, Optional
 
-# Import from NOLA submodules
-from .security import InputSanitizer, SanitizedInput, SecurityLevel
-from .io import AsyncEar, AsyncTTS
+# Import I/O classes
+from .io import HybridTTS, VoskSTT, get_async_tts, get_async_ear
 
-
-# =============================================================================
-# Inline Wake Word Detector (previously in wakeword.py)
-# =============================================================================
-
-class WakeWordDetector:
-    """Simple wake word detection for voice activation.
-    
-    Checks if input starts with any configured wake word and
-    manages an active window where wake word isn't required.
-    """
-    
-    def __init__(self, wake_words: list = None, timeout: float = 30.0):
-        self._wake_words = [w.lower() for w in (wake_words or ["jarvis", "nia"])]
-        self._timeout = timeout
-        self._last_activation = 0.0
-    
-    def check(self, text: str) -> tuple:
-        """Check for wake word in text.
-        
-        Returns:
-            Tuple of (is_active, processed_text)
-        """
-        import time
-        text_lower = text.lower().strip()
-        current_time = time.time()
-        
-        # Check if still in active window
-        if current_time - self._last_activation < self._timeout:
-            return True, text
-        
-        # Check for wake word
-        for word in self._wake_words:
-            if text_lower.startswith(word):
-                self._last_activation = current_time
-                # Return text with wake word stripped
-                return True, text[len(word):].strip() or text
-        
-        return False, text
-    
-    def is_active(self) -> bool:
-        """Check if wake word window is still active."""
-        import time
-        return time.time() - self._last_activation < self._timeout
-    
-    def set_wake_words(self, words: list) -> None:
-        """Update wake words."""
-        self._wake_words = [w.lower() for w in words]
-
-
-# Configure module logger
+# Configure logger
 logger = logging.getLogger(__name__)
 
 
-@dataclass 
+# =============================================================================
+# State Constants
+# =============================================================================
+
+STATE_ASLEEP = "ASLEEP"
+STATE_AWAKE = "AWAKE"
+
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+@dataclass
 class NOLAConfig:
-    """Configuration for NOLAManager.
+    """Configuration for NOLAManager."""
     
-    Attributes:
-        wake_word_enabled: Whether to require wake word activation.
-        wake_words: List of trigger phrases.
-        wake_word_timeout: Seconds to stay active after wake word.
-        security_enabled: Whether to enable input sanitization.
-        custom_blocked_patterns: Additional regex patterns to block.
-        custom_warning_patterns: Additional patterns for warnings.
-        pause_ear_while_speaking: Pause listening during TTS.
-        auto_resume_delay: Seconds to wait after TTS before resuming.
-        max_input_queue_size: Max pending inputs for brain.
-        max_output_queue_size: Max pending TTS messages.
-    """
     # Wake word settings
     wake_word_enabled: bool = True
-    wake_words: List[str] = field(default_factory=lambda: ["jarvis", "nia", "hey nia"])
+    wake_words: List[str] = field(default_factory=lambda: ["nia", "jarvis", "hey nia"])
     wake_word_timeout: float = 30.0
     
-    # Security settings
-    security_enabled: bool = True
-    custom_blocked_patterns: List[str] = field(default_factory=list)
-    custom_warning_patterns: List[str] = field(default_factory=list)
+    # Sleep commands
+    sleep_commands: List[str] = field(default_factory=lambda: [
+        "stop listening", "go to sleep", "sleep mode",
+        "goodbye", "bye bye", "that's all",
+    ])
+    
+    # Behavior settings
+    auto_sleep_after_command: bool = True
+    active_window_seconds: float = 20.0
     
     # Audio settings
     pause_ear_while_speaking: bool = True
-    auto_resume_delay: float = 0.3
     
-    # Queue settings
-    max_input_queue_size: int = 20
-    max_output_queue_size: int = 50
+    # Security
+    security_enabled: bool = True
 
+
+# =============================================================================
+# NOLA Manager - Voice I/O Orchestrator
+# =============================================================================
 
 class NOLAManager:
-    """Neural Operator for Language & Audio - Voice I/O Orchestrator.
+    """Neural Operator for Language & Audio.
     
-    Coordinates AsyncEar (listening), AsyncTTS (speaking), wake word
-    detection, and input sanitization into a unified interface.
+    Manages voice input with a strict wake word state machine.
+    Uses singleton I/O drivers to prevent hardware conflicts.
     
     Example:
-        nola = NOLAManager()
-        nola.start()
+        manager = NOLAManager()
+        manager.start()
         
-        while True:
-            result = nola.get_input(timeout=0.5)
-            if result:
-                response = brain.process(result.text)
-                nola.speak(response)
-        
-        nola.stop()
+        # Get voice input (blocks until wake word + command)
+        text = manager.get_input(timeout=30)
+        if text:
+            response = brain.process(text)
+            manager.speak(response)
     """
     
     def __init__(
         self,
         config: Optional[NOLAConfig] = None,
-        ear: Optional[AsyncEar] = None,
-        tts: Optional[AsyncTTS] = None,
-        on_security_block: Optional[Callable[[SanitizedInput], None]] = None,
+        on_wake: Optional[Callable[[], None]] = None,
     ) -> None:
-        """Initialize the NOLA manager.
+        """Initialize NOLA manager.
         
         Args:
             config: Configuration options.
-            ear: Optional pre-configured AsyncEar instance.
-            tts: Optional pre-configured AsyncTTS instance.
-            on_security_block: Callback when input is blocked for security.
+            on_wake: Callback when wake word detected.
         """
         self.config = config or NOLAConfig()
-        self._on_security_block = on_security_block
+        self._on_wake = on_wake
         
-        # Initialize components (lazy - created on start if not provided)
-        self._ear = ear
-        self._tts = tts
-        self._sanitizer = InputSanitizer(
-            blocked_patterns=self.config.custom_blocked_patterns,
-            warning_patterns=self.config.custom_warning_patterns,
-        ) if self.config.security_enabled else None
+        # State machine
+        self.state = STATE_ASLEEP
+        self._last_wake_time: float = 0
         
-        self._wake_detector = WakeWordDetector(
-            wake_words=self.config.wake_words,
-            timeout=self.config.wake_word_timeout,
-        ) if self.config.wake_word_enabled else None
+        # Use singleton I/O drivers
+        self._tts = get_async_tts()
+        self._stt = get_async_ear()
         
-        # Output queue (sanitized input ready for brain)
-        self._output_queue: queue.Queue[SanitizedInput] = queue.Queue(
-            maxsize=self.config.max_input_queue_size
-        )
+        # Input queue for processed commands
+        self._input_queue: queue.Queue[str] = queue.Queue(maxsize=20)
         
-        # State management
+        # Thread control
         self._is_running = False
-        self._is_speaking = False
-        self._processing_thread: Optional[threading.Thread] = None
+        self._is_paused = False
+        self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._lock = threading.Lock()
         
-        # Statistics
-        self._stats = {
-            "total_inputs": 0,
-            "blocked_inputs": 0,
-            "wake_word_activations": 0,
-            "speak_calls": 0,
-        }
+        # Normalize wake words and sleep commands
+        self._wake_words = [w.lower().strip() for w in self.config.wake_words]
+        self._sleep_commands = [c.lower().strip() for c in self.config.sleep_commands]
+        
+        logger.info("NOLAManager initialized (wake_words: %s)", self._wake_words)
+    
+    # =========================================================================
+    # Lifecycle Methods
+    # =========================================================================
     
     def start(self) -> bool:
-        """Start the NOLA system (ear and processing loop).
+        """Start the NOLA voice system.
         
         Returns:
             True if started successfully.
         """
-        with self._lock:
-            if self._is_running:
-                logger.debug("NOLAManager already running")
-                return True
-            
-            try:
-                # Initialize ear if not provided
-                if self._ear is None:
-                    self._ear = AsyncEar()
-                
-                # Initialize TTS if not provided
-                if self._tts is None:
-                    self._tts = AsyncTTS()
-                
-                # Start components
-                if hasattr(self._ear, 'start'):
-                    self._ear.start()
-                if hasattr(self._tts, 'start'):
-                    self._tts.start()
-                
-                # Start processing loop
-                self._stop_event.clear()
-                self._processing_thread = threading.Thread(
-                    target=self._processing_loop,
-                    name="NOLA-Processor",
-                    daemon=True,
-                )
-                self._processing_thread.start()
-                
-                self._is_running = True
-                logger.info("NOLAManager started")
-                return True
-                
-            except Exception as exc:
-                logger.exception("Failed to start NOLAManager: %s", exc)
-                return False
+        if self._is_running:
+            return True
+        
+        self._is_running = True
+        self._stop_event.clear()
+        
+        # Start processing thread
+        self._thread = threading.Thread(
+            target=self._process_loop,
+            name="NOLA-VoiceLoop",
+            daemon=True,
+        )
+        self._thread.start()
+        
+        print(f"🎙️ NOLA Voice System Started")
+        print(f"💤 State: {self.state} | Say '{self._wake_words[0]}' to wake")
+        logger.info("NOLAManager started")
+        return True
     
-    def stop(self, timeout: float = 5.0) -> None:
-        """Stop the NOLA system gracefully.
+    def stop(self, timeout: float = 3.0) -> None:
+        """Stop the NOLA voice system.
         
         Args:
-            timeout: Maximum seconds to wait for shutdown.
+            timeout: Maximum seconds to wait for thread.
         """
-        with self._lock:
-            if not self._is_running:
+        if not self._is_running:
+            return
+        
+        logger.info("Stopping NOLAManager...")
+        self._is_running = False
+        self._stop_event.set()
+        self._stt.stop()
+        
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+        
+        logger.info("NOLAManager stopped")
+    
+    # =========================================================================
+    # Processing Loop (True Hardware Mute)
+    # =========================================================================
+    
+    def _process_loop(self) -> None:
+        """Main voice processing loop - runs in background thread.
+        
+        Features:
+        - True hardware mute: stream closes when paused
+        - Auto-restart on failure with retry limit
+        - Clean shutdown on stop
+        """
+        retry_count = 0
+        max_retries = 5
+        
+        logger.info("🎙️ Voice Loop Started")
+        
+        while self._is_running and not self._stop_event.is_set():
+            # =================================================================
+            # WAIT STATE: If paused, don't touch hardware - just sleep
+            # =================================================================
+            if self._is_paused:
+                time.sleep(0.2)
+                continue
+            
+            # =================================================================
+            # ACTIVE STATE: Open hardware stream and process speech
+            # =================================================================
+            try:
+                logger.info("🎤 Opening Microphone Stream...")
+                retry_count = 0  # Reset on successful start
+                
+                for text in self._stt.stream():
+                    # CHECKPOINT 1: Stop requested
+                    if not self._is_running or self._stop_event.is_set():
+                        logger.info("🔇 Closing Microphone Stream (shutdown)...")
+                        return
+                    
+                    # CHECKPOINT 2: Pause requested - BREAK to close hardware
+                    if self._is_paused:
+                        logger.info("🔇 Closing Microphone Stream (paused)...")
+                        self._stt.stop()  # Signal STT to stop
+                        break  # Exit loop, closes stream via 'with' block
+                    
+                    # Process recognized text
+                    text = text.lower().strip()
+                    if not text:
+                        continue
+                    
+                    self._handle_input(text)
+                
+                # After for loop ends (break or natural end), check if we should restart
+                if self._is_paused:
+                    logger.info("🔇 Microphone Hardware Released")
+                    continue  # Go back to wait state
+                    
+            except Exception as e:
+                retry_count += 1
+                logger.error("STT stream error (attempt %d/%d): %s", 
+                           retry_count, max_retries, e)
+                
+                if retry_count >= max_retries:
+                    logger.error("Max retries reached. Voice input disabled.")
+                    break
+                
+                # Wait before retry
+                time.sleep(1.0)
+                logger.info("Restarting STT stream...")
+    
+    def _handle_input(self, text: str) -> None:
+        """Handle recognized speech based on current state.
+        
+        Args:
+            text: Recognized text (lowercase, stripped).
+        """
+        if self.state == STATE_ASLEEP:
+            # Only listen for wake words
+            wake_triggered, command = self._check_wake_word(text)
+            
+            if wake_triggered:
+                self._wake_up()
+                
+                if command:
+                    # One-shot: "Hey Nia what time is it?"
+                    print(f"🎤 One-Shot: '{text}' → '{command}'")
+                    self._enqueue_input(command)
+                else:
+                    # Just wake word, wait for next utterance
+                    print("🎤 Listening...")
+                    
+        elif self.state == STATE_AWAKE:
+            # Check for sleep command
+            if self._is_sleep_command(text):
+                self._go_to_sleep()
                 return
             
-            logger.info("Stopping NOLAManager...")
-            self._stop_event.set()
-        
-        # Wait for processing thread
-        if self._processing_thread and self._processing_thread.is_alive():
-            self._processing_thread.join(timeout=timeout)
-        
-        # Stop components
-        if self._ear and hasattr(self._ear, 'stop'):
-            try:
-                self._ear.stop()
-            except Exception as exc:
-                logger.debug("Error stopping ear: %s", exc)
-        
-        if self._tts and hasattr(self._tts, 'stop'):
-            try:
-                self._tts.stop()
-            except Exception as exc:
-                logger.debug("Error stopping TTS: %s", exc)
-        
-        with self._lock:
-            self._is_running = False
-        
-        logger.info("NOLAManager stopped (stats: %s)", self._stats)
+            # Check active window timeout
+            if not self.config.auto_sleep_after_command:
+                elapsed = time.time() - self._last_wake_time
+                if elapsed > self.config.active_window_seconds:
+                    print("💤 Timeout - going to sleep")
+                    self._go_to_sleep()
+                    return
+            
+            # Accept command
+            print(f"🎤 Command: '{text}'")
+            self._enqueue_input(text)
+            
+            # Auto-sleep after command
+            if self.config.auto_sleep_after_command:
+                self._go_to_sleep()
     
-    def speak(self, text: str, block_listening: bool = True) -> Dict[str, Any]:
-        """Queue text for speech output.
+    def _check_wake_word(self, text: str) -> tuple:
+        """Check if text contains wake word.
+        
+        Returns:
+            (wake_triggered, remaining_command)
+        """
+        for ww in self._wake_words:
+            if text.startswith(ww):
+                command = text[len(ww):].strip()
+                return True, command
+            elif ww in text:
+                return True, ""
+        return False, ""
+    
+    def _is_sleep_command(self, text: str) -> bool:
+        """Check if text is a sleep command."""
+        return any(cmd in text for cmd in self._sleep_commands)
+    
+    def _wake_up(self) -> None:
+        """Transition to AWAKE state."""
+        self.state = STATE_AWAKE
+        self._last_wake_time = time.time()
+        
+        print("🔔 Wake Word Detected!")
+        logger.info("NOLA: ASLEEP → AWAKE")
+        
+        if self._on_wake:
+            try:
+                self._on_wake()
+            except Exception as e:
+                logger.debug("on_wake callback error: %s", e)
+    
+    def _go_to_sleep(self) -> None:
+        """Transition to ASLEEP state."""
+        self.state = STATE_ASLEEP
+        print("💤 Sleeping...")
+        logger.info("NOLA: AWAKE → ASLEEP")
+    
+    def _enqueue_input(self, text: str) -> None:
+        """Add command to input queue."""
+        try:
+            self._input_queue.put_nowait(text)
+        except queue.Full:
+            try:
+                self._input_queue.get_nowait()
+                self._input_queue.put_nowait(text)
+            except queue.Empty:
+                pass
+    
+    # =========================================================================
+    # Public API
+    # =========================================================================
+    
+    def get_input(self, timeout: Optional[float] = None) -> Optional[str]:
+        """Get next voice command (after wake word processing).
         
         Args:
-            text: Text to speak.
-            block_listening: Whether to pause listening while speaking.
+            timeout: Seconds to wait. None for non-blocking.
             
         Returns:
-            Dict with operation status.
-        """
-        if not text:
-            return {"ok": False, "error": "No text provided"}
-        
-        if not self._tts:
-            logger.warning("TTS not available")
-            return {"ok": False, "error": "TTS not initialized"}
-        
-        self._stats["speak_calls"] += 1
-        
-        # Pause ear while speaking (echo cancellation)
-        if block_listening and self.config.pause_ear_while_speaking:
-            if self._ear and hasattr(self._ear, 'pause'):
-                self._ear.pause()
-                self._is_speaking = True
-        
-        try:
-            result = self._tts.speak(text)
-            
-            # Schedule ear resume after delay
-            if block_listening and self.config.pause_ear_while_speaking:
-                threading.Timer(
-                    self.config.auto_resume_delay,
-                    self._resume_ear_after_speak,
-                ).start()
-            
-            return result
-            
-        except Exception as exc:
-            logger.exception("TTS speak failed: %s", exc)
-            self._resume_ear_after_speak()
-            return {"ok": False, "error": str(exc)}
-    
-    def _resume_ear_after_speak(self) -> None:
-        """Resume ear listening after TTS completes."""
-        if self._ear and hasattr(self._ear, 'resume'):
-            self._ear.resume()
-        self._is_speaking = False
-    
-    def get_input(self, timeout: Optional[float] = None) -> Optional[SanitizedInput]:
-        """Get the next sanitized voice input.
-        
-        Args:
-            timeout: Seconds to wait. None/0 for non-blocking.
-            
-        Returns:
-            SanitizedInput if available, None otherwise.
+            Command text or None.
         """
         try:
-            if timeout is None or timeout <= 0:
-                return self._output_queue.get_nowait()
-            return self._output_queue.get(block=True, timeout=timeout)
+            if timeout is None:
+                return self._input_queue.get_nowait()
+            return self._input_queue.get(timeout=timeout)
         except queue.Empty:
             return None
     
-    def get_all_pending_inputs(self) -> List[SanitizedInput]:
-        """Get all pending sanitized inputs."""
-        results = []
-        while True:
-            try:
-                results.append(self._output_queue.get_nowait())
-            except queue.Empty:
-                break
-        return results
-    
-    def clear_input_queue(self) -> int:
-        """Clear pending inputs."""
-        cleared = 0
-        while True:
-            try:
-                self._output_queue.get_nowait()
-                cleared += 1
-            except queue.Empty:
-                break
-        return cleared
-    
-    def _processing_loop(self) -> None:
-        """Main loop that processes ear input and applies security."""
-        logger.debug("NOLA processing loop started")
+    def speak(self, text: str, block_listening: bool = True) -> bool:
+        """Speak text via TTS.
         
-        while not self._stop_event.is_set():
-            try:
-                # Skip processing while speaking
-                if self._is_speaking:
-                    time.sleep(0.1)
-                    continue
-                
-                # Get raw input from ear
-                if not self._ear or not hasattr(self._ear, 'get_text'):
-                    time.sleep(0.1)
-                    continue
-                
-                result = self._ear.get_text(timeout=0.2)
-                if not result:
-                    continue
-                
-                raw_text = result.text if hasattr(result, 'text') else str(result)
-                if not raw_text:
-                    continue
-                
-                self._stats["total_inputs"] += 1
-                logger.debug("Processing: %s", raw_text[:50])
-                
-                # Wake word check
-                wake_word_detected = True
-                processed_text = raw_text
-                
-                if self._wake_detector:
-                    wake_word_detected, processed_text = self._wake_detector.check(raw_text)
-                    
-                    if not wake_word_detected:
-                        logger.debug("Ignoring (no wake word): %s", raw_text[:30])
-                        continue
-                    
-                    if wake_word_detected and processed_text != raw_text:
-                        self._stats["wake_word_activations"] += 1
-                        logger.info("Wake word: %s", processed_text[:50])
-                
-                # Security sanitization
-                if self._sanitizer:
-                    sanitized = self._sanitizer.sanitize(processed_text)
-                else:
-                    sanitized = SanitizedInput(
-                        text=processed_text,
-                        original_text=raw_text,
-                        security_level=SecurityLevel.SAFE,
-                    )
-                    
-                sanitized.wake_word_detected = wake_word_detected
-                sanitized.timestamp = time.time()
-                
-                # Handle blocked input
-                if sanitized.is_blocked:
-                    self._stats["blocked_inputs"] += 1
-                    
-                    if self._on_security_block:
-                        try:
-                            self._on_security_block(sanitized)
-                        except Exception as exc:
-                            logger.debug("Security callback error: %s", exc)
-                    
-                    self.speak(
-                        "I'm sorry, but I cannot execute that command for security reasons.",
-                        block_listening=True,
-                    )
-                    continue
-                
-                # Queue for brain processing
-                try:
-                    self._output_queue.put_nowait(sanitized)
-                    logger.debug("Queued: %s", sanitized.text[:50])
-                except queue.Full:
-                    logger.warning("Input queue full")
-                
-            except Exception as exc:
-                logger.exception("Processing loop error: %s", exc)
-                time.sleep(0.1)
+        Args:
+            text: Text to speak.
+            block_listening: Pause listening while speaking.
+            
+        Returns:
+            True if successful.
+        """
+        if not text:
+            return False
         
-        logger.debug("NOLA processing loop exited")
+        if block_listening:
+            self._is_paused = True
+        
+        try:
+            result = self._tts.speak(text)
+        finally:
+            if block_listening:
+                time.sleep(0.3)
+                self._is_paused = False
+        
+        return result
+    
+    def stop_speaking(self) -> None:
+        """Stop current TTS playback."""
+        self._tts.stop()
+    
+    def pause_listening(self) -> None:
+        """Pause microphone input (releases hardware)."""
+        self._is_paused = True
+        self._stt.stop()  # Signal stream to close
+        logger.info("🔇 NOLA: Microphone paused (hardware released)")
+    
+    def resume_listening(self) -> None:
+        """Resume microphone input (reopens hardware)."""
+        self._is_paused = False
+        logger.info("🎤 NOLA: Microphone resumed (awaiting stream open)")
+    
+    def wake(self) -> None:
+        """Manually wake up."""
+        if self.state == STATE_ASLEEP:
+            self._wake_up()
+    
+    def sleep(self) -> None:
+        """Manually go to sleep."""
+        if self.state == STATE_AWAKE:
+            self._go_to_sleep()
+    
+    def set_wake_words(self, words: List[str]) -> None:
+        """Update wake words."""
+        self._wake_words = [w.lower().strip() for w in words]
+        logger.info("Wake words updated: %s", self._wake_words)
     
     # =========================================================================
     # Properties
@@ -453,160 +418,46 @@ class NOLAManager:
         return self._is_running
     
     @property
+    def is_awake(self) -> bool:
+        """Check if in AWAKE state."""
+        return self.state == STATE_AWAKE
+    
+    @property
     def is_speaking(self) -> bool:
         """Check if currently speaking."""
-        return self._is_speaking
-    
-    @property
-    def is_wake_active(self) -> bool:
-        """Check if wake word is currently active."""
-        if self._wake_detector:
-            return self._wake_detector.is_active()
-        return True
-    
-    @property
-    def stats(self) -> Dict[str, int]:
-        """Get NOLA statistics."""
-        return dict(self._stats)
-    
-    @property
-    def ear(self) -> Optional[AsyncEar]:
-        """Get the AsyncEar instance."""
-        return self._ear
-    
-    @property
-    def tts(self) -> Optional[AsyncTTS]:
-        """Get the AsyncTTS instance."""
-        return self._tts
-    
-    # =========================================================================
-    # Configuration Methods
-    # =========================================================================
-    
-    def get_security_audit(self) -> List[Dict[str, Any]]:
-        """Get the security audit log of blocked commands."""
-        if self._sanitizer:
-            return self._sanitizer.get_blocked_attempts()
-        return []
-    
-    def set_wake_words(self, words: List[str]) -> None:
-        """Update wake words dynamically."""
-        if self._wake_detector:
-            self._wake_detector.set_wake_words(words)
-    
-    def toggle_wake_word(self, enabled: bool) -> None:
-        """Enable or disable wake word detection."""
-        self.config.wake_word_enabled = enabled
-        if not enabled:
-            self._wake_detector = None
-        elif self._wake_detector is None:
-            self._wake_detector = WakeWordDetector(
-                wake_words=self.config.wake_words,
-                timeout=self.config.wake_word_timeout,
-            )
-    
-    def toggle_security(self, enabled: bool) -> None:
-        """Enable or disable security sanitization."""
-        self.config.security_enabled = enabled
-        if not enabled:
-            self._sanitizer = None
-        elif self._sanitizer is None:
-            self._sanitizer = InputSanitizer(
-                blocked_patterns=self.config.custom_blocked_patterns,
-                warning_patterns=self.config.custom_warning_patterns,
-            )
-    
-    # =========================================================================
-    # Voice Control Methods
-    # =========================================================================
-    
-    def pause_listening(self) -> None:
-        """Pause the microphone (mute)."""
-        if self._ear and hasattr(self._ear, 'pause'):
-            self._ear.pause()
-            logger.info("Microphone paused")
-    
-    def resume_listening(self) -> None:
-        """Resume the microphone (unmute)."""
-        if self._ear and hasattr(self._ear, 'resume'):
-            self._ear.resume()
-            logger.info("Microphone resumed")
-    
-    def stop_speaking(self) -> None:
-        """Stop all pending speech (silence)."""
-        if self._tts and hasattr(self._tts, 'clear_queue'):
-            cleared = self._tts.clear_queue()
-            logger.info("Cleared %d pending TTS messages", cleared)
-        self._is_speaking = False
+        return self._tts.is_speaking
 
 
 # =============================================================================
-# Module-level Singleton
+# Singleton Instance
 # =============================================================================
 
-_nola_instance: Optional[NOLAManager] = None
-_instance_lock = threading.Lock()
+_nola_manager_instance: Optional[NOLAManager] = None
 
 
-def get_nola_manager(**kwargs) -> NOLAManager:
-    """Get or create the module-level NOLAManager singleton."""
-    global _nola_instance
-    with _instance_lock:
-        if _nola_instance is None:
-            config_kwargs = {k: v for k, v in kwargs.items() if hasattr(NOLAConfig, k)}
-            config = NOLAConfig(**config_kwargs) if config_kwargs else NOLAConfig()
-            _nola_instance = NOLAManager(config=config)
-        return _nola_instance
-
-
-# =============================================================================
-# Demo Function
-# =============================================================================
-
-def demo():
-    """Run a quick demo of NOLA functionality."""
+def get_nola_manager(config: Optional[NOLAConfig] = None) -> NOLAManager:
+    """Get or create the NOLAManager singleton.
     
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
-    
-    print("=" * 60)
-    print("N.O.L.A. Demo - Neural Operator for Language & Audio")
-    print("=" * 60)
-    print("Wake words: 'jarvis', 'nia', 'hey nia'")
-    print("Say a wake word followed by your command.")
-    print("Press Ctrl+C to exit.\n")
-    
-    nola = NOLAManager(
-        config=NOLAConfig(
-            wake_word_enabled=True,
-            wake_words=["jarvis", "nia", "hey nia"],
-        ),
-    )
-    
-    try:
-        if not nola.start():
-            print("Failed to start NOLA. Check microphone.")
-            return
+    Args:
+        config: Configuration (only used on first call).
         
-        print("[NOLA] Listening...\n")
-        
-        while True:
-            result = nola.get_input(timeout=0.5)
-            if result:
-                if result.is_blocked:
-                    print(f"[BLOCKED] {result.blocked_reason}")
-                else:
-                    print(f"[INPUT] {result.text}")
-                    nola.speak(f"You said: {result.text}")
-    
-    except KeyboardInterrupt:
-        print("\n[NOLA] Shutting down...")
-    finally:
-        nola.stop()
-        print("[NOLA] Goodbye!")
+    Returns:
+        The singleton NOLAManager instance.
+    """
+    global _nola_manager_instance
+    if _nola_manager_instance is None:
+        _nola_manager_instance = NOLAManager(config=config)
+    return _nola_manager_instance
 
 
-if __name__ == "__main__":
-    demo()
+# =============================================================================
+# Exports
+# =============================================================================
+
+__all__ = [
+    "NOLAConfig",
+    "NOLAManager",
+    "STATE_ASLEEP",
+    "STATE_AWAKE",
+    "get_nola_manager",
+]

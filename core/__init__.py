@@ -1,47 +1,30 @@
 """Core NIA public exports.
 
-This module exposes the commonly used core symbols so callers can write
-`from core import ToolManager, BaseTool` instead of importing deep paths.
-
-Note: imports are guarded where reasonable to avoid heavy optional
-dependencies during test discovery.
+This module exposes the commonly used core symbols for convenience.
+Only functional modules are exported; legacy placeholders have been removed.
 """
-
-
 
 __all__ = []
 
-# Core public exports (best-effort import to avoid hard failures at import time)
+# Memory management (the only existing module)
 try:
-	from .tool_manager import ToolManager  # primary tool manager implementation
-	__all__.append("ToolManager")
+    from .memory import InMemoryMemory, MemoryManager
+    __all__.extend(["InMemoryMemory", "MemoryManager"])
 except Exception:
-	ToolManager = None
+    InMemoryMemory = None
+    MemoryManager = None
 
+# Engine (main application)
 try:
-	from .base_tool import BaseTool
-	__all__.append("BaseTool")
+    from .engine import NIAAssistant
+    __all__.append("NIAAssistant")
 except Exception:
-	BaseTool = None
+    NIAAssistant = None
 
+# Health check
 try:
-	from .brain import CognitiveLoop
-	__all__.append("CognitiveLoop")
+    from .health import check_dependencies, print_system_status
+    __all__.extend(["check_dependencies", "print_system_status"])
 except Exception:
-	CognitiveLoop = None
-
-try:
-	from .memory import InMemoryMemory, MemoryManager
-	__all__.extend(["InMemoryMemory", "MemoryManager"])
-except Exception:
-	InMemoryMemory = None
-	MemoryManager = None
-
-try:
-	# expose tools package for convenience
-	from . import tools as tools
-	__all__.append("tools")
-except Exception:
-	tools = None
-
-
+    check_dependencies = None
+    print_system_status = None

@@ -37,7 +37,9 @@ Version: 2.0.0
 """
 from __future__ import annotations
 
+import base64
 import logging
+import mimetypes
 import os
 from dataclasses import dataclass, field
 from enum import Enum
@@ -806,6 +808,117 @@ class ModelManager:
         return str(response)
     
     # =========================================================================
+    # Image Encoding Helper
+    # =========================================================================
+    
+    def _encode_image(self, image_path: str) -> Optional[str]:
+        """Encode an image file to base64.
+        
+        Args:
+            image_path: Path to the image file.
+            
+        Returns:
+            Base64 encoded string, or None on error.
+        """
+        try:
+            with open(image_path, "rb") as image_file:
+                return base64.b64encode(image_file.read()).decode("utf-8")
+        except FileNotFoundError:
+            self.logger.error("Image file not found: %s", image_path)
+            return None
+        except Exception as exc:
+            self.logger.error("Failed to encode image: %s", exc)
+            return None
+    
+    def _get_mime_type(self, image_path: str) -> str:
+        """Get MIME type from file path."""
+        mime_type, _ = mimetypes.guess_type(image_path)
+        return mime_type or "image/jpeg"
+    
+    # =========================================================================
+    # Vision-Enabled Response Generation
+    # =========================================================================
+    
+    def generate_response(
+        self,
+        prompt: str,
+        image_path: Optional[str] = None,
+        model_type: str = "smart",
+        temperature: Optional[float] = None,
+    ) -> str:
+        """Generate a response with optional image input.
+        
+        This method supports multimodal (text + image) inputs for vision models.
+        
+        Args:
+            prompt: The text prompt to send.
+            image_path: Optional path to an image file for vision queries.
+            model_type: 'smart', 'fast', or 'vision'. Auto-selects 'vision' if image provided.
+            temperature: Override temperature.
+            
+        Returns:
+            Model response as string.
+            
+        Example:
+            # Text only
+            response = manager.generate_response("What is AI?")
+            
+            # With image
+            response = manager.generate_response(
+                "What's in this image?",
+                image_path="screenshot.png"
+            )
+        """
+        temp = temperature or self._temperature
+        
+        # Auto-select vision model if image is provided
+        if image_path:
+            model_type = "vision"
+        
+        # Get appropriate model
+        if model_type == "fast":
+            model = self.get_fast_model(temp)
+        elif model_type == "vision":
+            model = self.get_vision_model(temp)
+        else:
+            model = self.get_smart_model(temp)
+        
+        try:
+            # Build message content
+            if image_path:
+                # Multimodal message (text + image)
+                b64_image = self._encode_image(image_path)
+                if not b64_image:
+                    return f"Error: Failed to read image at {image_path}"
+                
+                mime_type = self._get_mime_type(image_path)
+                
+                # Import HumanMessage for multimodal
+                try:
+                    from langchain_core.messages import HumanMessage
+                    
+                    message = HumanMessage(content=[
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type};base64,{b64_image}"}
+                        }
+                    ])
+                    response = model.invoke([message])
+                    
+                except ImportError:
+                    return "Error: langchain_core not available for vision queries"
+            else:
+                # Text-only message
+                response = model.invoke(prompt)
+            
+            return self._extract_content(response)
+            
+        except Exception as exc:
+            self.logger.exception("generate_response failed: %s", exc)
+            raise
+    
+    # =========================================================================
     # Legacy Compatibility (for existing code)
     # =========================================================================
     
@@ -923,5 +1036,5 @@ def print_status() -> None:
 
 # Demo
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     print_status()
+

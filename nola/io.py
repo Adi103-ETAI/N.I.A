@@ -1,29 +1,56 @@
-"""N.O.L.A. I/O Module - Async Audio Input/Output Handling.
+"""N.O.L.A. I/O Module - Hardware Drivers for Audio.
 
-This module provides NOLA-controlled async wrappers for audio I/O,
-abstracting the underlying plugin implementations.
+TTS: Microsoft Edge Neural Voices (Primary) with Piper Fallback
+STT: Vosk Offline Speech Recognition
 
-Classes:
-    RecognitionResult: Container for ASR results
-    AsyncEar: Non-blocking microphone listener
-    AsyncTTS: Non-blocking text-to-speech engine
-
-The classes here wrap the raw plugin drivers from plugins/ and provide
-a consistent interface for the NOLAManager to use.
+Singleton Pattern:
+    - Use get_async_ear() for STT instance
+    - Use get_async_tts() for TTS instance
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
+
+# Suppress pygame welcome message BEFORE importing pygame
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
+
 import queue
+import subprocess
 import sys
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, Generator, List, Optional
 
 # Configure module logger
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Configuration Constants
+# =============================================================================
+
+# TTS cache directory
+TTS_CACHE = Path("data/tts_cache")
+TTS_CACHE.mkdir(parents=True, exist_ok=True)
+
+# Edge TTS voice (Cortana-like)
+EDGE_VOICE = "en-US-AriaNeural"
+
+# Piper paths (fallback)
+NOLA_DIR = Path(__file__).parent
+PIPER_BIN = NOLA_DIR / "piper_bin" / ("piper.exe" if sys.platform == "win32" else "piper")
+PIPER_MODEL = NOLA_DIR / "piper_bin" / "en_GB-alan-low.onnx"
+
+# Alternative Piper model location
+PIPER_MODEL_ALT = NOLA_DIR / "models" / "en_GB-alan-low.onnx"
+
+# Vosk model
+VOSK_MODEL_PATH = NOLA_DIR / "vosk_model"
 
 
 # =============================================================================
@@ -39,293 +66,320 @@ class RecognitionResult:
     is_final: bool = True
     
     def __bool__(self) -> bool:
-        """Return True if text is non-empty."""
-        return bool(self.text)
+        return bool(self.text and self.text.strip())
 
 
 # =============================================================================
-# AsyncEar - Non-blocking Microphone Listener (Vosk Offline STT)
+# HybridTTS - Edge Neural TTS with Piper Fallback
 # =============================================================================
 
-class AsyncEar:
-    """Thread-safe, non-blocking ASR engine using Vosk (fully offline).
-
-    Uses Vosk for continuous speech recognition without internet dependency.
-    Supports "one-shot" commands where wake word + command are captured together.
-
+class HybridTTS:
+    """Hybrid TTS: Microsoft Edge Neural Voices (Primary) + Piper (Fallback).
+    
+    Uses Edge TTS for high-quality cloud voices with automatic fallback
+    to local Piper if Edge fails or is unavailable.
+    
     Usage:
-        ear = AsyncEar(wake_words=["jarvis", "nia"])
-        ear.start()
-        
-        result = ear.get_text(timeout=0.1)
-        if result:
-            print(f"Heard: {result.text}")
-        
-        ear.pause()   # While TTS speaking
-        ear.resume()  # After TTS done
-        ear.stop()    # Cleanup
+        tts = HybridTTS()
+        tts.speak("Hello, I am N.I.A.")
     """
-
-    # Vosk model download URL
-    VOSK_MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
-    VOSK_MODEL_NAME = "vosk-model-small-en-us-0.15"
-
-    def __init__(
-        self,
-        max_queue_size: int = 50,
-        wake_words: Optional[List[str]] = None,
-        device_index: Optional[int] = None,
-    ) -> None:
-        """Initialize the async ASR system with Vosk.
-
-        Args:
-            max_queue_size: Maximum pending recognitions before oldest dropped.
-            wake_words: List of wake words to detect (e.g., ["jarvis", "nia"]).
-            device_index: Specific microphone device index (None for default).
-        """
-        self._queue: queue.Queue[RecognitionResult] = queue.Queue(maxsize=max_queue_size)
-        self._stop_event = threading.Event()
-        self._pause_event = threading.Event()
-        self._lock = threading.Lock()
-
-        # Wake words for one-shot detection
-        self._wake_words = [w.lower() for w in (wake_words or ["jarvis", "nia", "hey nia"])]
-        self._device_index = device_index
-
-        # State tracking
-        self._is_running = False
-        self._is_paused = False
-        self._thread: Optional[threading.Thread] = None
+    
+    def __init__(self, voice: str = EDGE_VOICE) -> None:
+        """Initialize hybrid TTS.
         
-        # Active Listening Window (Conversation Mode)
-        self._last_wake_time: float = 0  # Last time wake word was triggered
-        self._active_window: float = 15.0  # Seconds to stay in active mode
+        Args:
+            voice: Edge TTS voice name.
+        """
+        self.voice = voice
+        self._is_speaking = False
+        self._lock = threading.Lock()
+        self._speech_count = 0
+        
+        # Check dependency availability
+        self._has_edge_tts = False
+        self._has_pygame = False
+        self._has_piper = False
+        
+        # Check edge-tts
+        try:
+            import edge_tts
+            self._has_edge_tts = True
+        except ImportError:
+            logger.warning("edge-tts not installed. Run: pip install edge-tts")
+        
+        # Check pygame for audio playback
+        try:
+            import pygame
+            pygame.mixer.init(frequency=24000)
+            self._has_pygame = True
+        except ImportError:
+            logger.warning("pygame not installed. Run: pip install pygame")
+        except Exception as e:
+            logger.warning("pygame.mixer init failed: %s", e)
+        
+        # Check Piper availability
+        self._piper_model = None
+        if PIPER_BIN.exists():
+            if PIPER_MODEL.exists():
+                self._piper_model = PIPER_MODEL
+                self._has_piper = True
+            elif PIPER_MODEL_ALT.exists():
+                self._piper_model = PIPER_MODEL_ALT
+                self._has_piper = True
+        
+        # Log status
+        if self._has_edge_tts and self._has_pygame:
+            logger.info("HybridTTS: Edge TTS ready (voice: %s)", self.voice)
+            print(f"🔊 Edge TTS Ready (Voice: {self.voice})")
+        elif self._has_piper:
+            logger.info("HybridTTS: Using Piper fallback")
+            print("🔊 Piper TTS Ready (Fallback Mode)")
+        else:
+            logger.warning("HybridTTS: No TTS backend available")
+            print("⚠️ TTS not available - will print to console")
+    
+    def speak(self, text: str) -> bool:
+        """Speak text. Blocks until speech is complete.
+        
+        Args:
+            text: Text to speak.
+            
+        Returns:
+            True if audio played successfully.
+        """
+        if not text or not text.strip():
+            return False
+        
+        text = text.strip()
+        
+        with self._lock:
+            self._is_speaking = True
+        
+        try:
+            # Try Edge TTS first (primary)
+            if self._has_edge_tts and self._has_pygame:
+                try:
+                    return self._speak_edge(text)
+                except Exception as e:
+                    logger.warning("Edge TTS failed, trying fallback: %s", e)
+            
+            # Fallback to Piper
+            if self._has_piper:
+                try:
+                    return self._speak_piper(text)
+                except Exception as e:
+                    logger.error("Piper TTS also failed: %s", e)
+            
+            # No TTS available - print to console
+            print(f"🔊 [Console] {text}")
+            return False
+            
+        finally:
+            with self._lock:
+                self._is_speaking = False
+    
+    def _speak_edge(self, text: str) -> bool:
+        """Speak using Edge TTS with pygame playback."""
+        import edge_tts
+        import pygame
+        
+        # Generate unique filename
+        self._speech_count += 1
+        mp3_file = TTS_CACHE / f"edge_{self._speech_count}.mp3"
+        
+        try:
+            # Generate audio asynchronously
+            asyncio.run(self._async_generate_edge(text, str(mp3_file)))
+            
+            if not mp3_file.exists():
+                logger.error("Edge TTS failed to generate audio file")
+                return False
+            
+            # Play with pygame (blocking)
+            pygame.mixer.music.load(str(mp3_file))
+            pygame.mixer.music.play()
+            
+            # Block until playback completes
+            while pygame.mixer.music.get_busy():
+                time.sleep(0.1)
+            
+            # Cleanup
+            pygame.mixer.music.unload()
+            try:
+                mp3_file.unlink()
+            except Exception:
+                pass
+            
+            logger.debug("Edge TTS spoke: %s", text[:50])
+            return True
+            
+        except Exception as e:
+            logger.error("Edge TTS playback error: %s", e)
+            # Cleanup on error
+            try:
+                if mp3_file.exists():
+                    mp3_file.unlink()
+            except Exception:
+                pass
+            raise
+    
+    async def _async_generate_edge(self, text: str, output_path: str) -> None:
+        """Async Edge TTS audio generation."""
+        import edge_tts
+        communicate = edge_tts.Communicate(text, self.voice)
+        await communicate.save(output_path)
+    
+    def _speak_piper(self, text: str) -> bool:
+        """Speak using Piper binary with sounddevice playback."""
+        self._speech_count += 1
+        wav_file = TTS_CACHE / f"piper_{self._speech_count}.wav"
+        
+        try:
+            # Run Piper subprocess
+            cmd = [
+                str(PIPER_BIN),
+                "--model", str(self._piper_model),
+                "--output_file", str(wav_file)
+            ]
+            
+            creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            result = subprocess.run(
+                cmd,
+                input=text.encode('utf-8'),
+                capture_output=True,
+                timeout=30,
+                creationflags=creationflags
+            )
+            
+            if result.returncode != 0:
+                logger.error("Piper failed: %s", result.stderr.decode()[:200])
+                return False
+            
+            if not wav_file.exists():
+                return False
+            
+            # Play with sounddevice
+            try:
+                import sounddevice as sd
+                import numpy as np
+                import wave
+                
+                with wave.open(str(wav_file), 'rb') as wf:
+                    samplerate = wf.getframerate()
+                    data = wf.readframes(-1)
+                    audio = np.frombuffer(data, dtype=np.int16)
+                
+                sd.play(audio, samplerate)
+                sd.wait()
+                
+            except ImportError:
+                logger.error("sounddevice not available for Piper playback")
+                return False
+            
+            # Cleanup
+            try:
+                wav_file.unlink()
+            except Exception:
+                pass
+            
+            logger.debug("Piper TTS spoke: %s", text[:50])
+            return True
+            
+        except subprocess.TimeoutExpired:
+            logger.error("Piper timed out")
+            return False
+        except Exception as e:
+            logger.error("Piper error: %s", e)
+            raise
+    
+    def stop(self) -> None:
+        """Stop current audio playback."""
+        if self._has_pygame:
+            try:
+                import pygame
+                pygame.mixer.music.stop()
+            except Exception:
+                pass
+    
+    @property
+    def is_speaking(self) -> bool:
+        """Check if currently speaking."""
+        with self._lock:
+            return self._is_speaking
 
-        # Vosk components (lazy loaded)
+
+# =============================================================================
+# VoskSTT - Offline Speech Recognition
+# =============================================================================
+
+class VoskSTT:
+    """Vosk-based offline speech-to-text.
+    
+    Provides continuous speech recognition via a generator interface.
+    
+    Usage:
+        stt = VoskSTT()
+        for text in stt.stream():
+            print(f"Heard: {text}")
+    """
+    
+    def __init__(self, device_index: int = None) -> None:
+        """Initialize Vosk STT.
+        
+        Args:
+            device_index: Specific microphone device index.
+        """
+        self._device_index = device_index
+        self._is_running = False
+        self._stop_event = threading.Event()
         self._model = None
         self._recognizer = None
+        
+        # Check dependencies
         self._has_vosk = False
         self._has_sounddevice = False
-
-        # Statistics
-        self._total_recognitions = 0
-        self._failed_recognitions = 0
-
-        # Setup paths
-        self._nola_dir = os.path.dirname(os.path.abspath(__file__))
-        self._model_path = os.path.join(self._nola_dir, "vosk_model")
-
-        # Check dependencies
+        
         try:
-            import vosk  # type: ignore
+            import vosk
+            vosk.SetLogLevel(-1)
             self._vosk_module = vosk
             self._has_vosk = True
         except ImportError:
-            logger.warning("vosk not installed; run: pip install vosk")
-
+            logger.error("vosk not installed. Run: pip install vosk")
+        
         try:
-            import sounddevice  # type: ignore
+            import sounddevice
             self._has_sounddevice = True
         except ImportError:
-            logger.warning("sounddevice not installed; run: pip install sounddevice")
-
-    def start(self) -> bool:
-        """Start the background listening thread.
+            logger.error("sounddevice not installed. Run: pip install sounddevice")
         
-        Returns:
-            True if started successfully.
+        # Load model
+        if self._has_vosk and VOSK_MODEL_PATH.exists():
+            try:
+                self._model = self._vosk_module.Model(str(VOSK_MODEL_PATH))
+                self._recognizer = self._vosk_module.KaldiRecognizer(self._model, 16000)
+                logger.info("👂 VoskSTT: Model loaded and ready")
+            except Exception as e:
+                logger.error("Failed to load Vosk model: %s", e)
+        else:
+            if not VOSK_MODEL_PATH.exists():
+                logger.warning("Vosk model not found at: %s", VOSK_MODEL_PATH)
+    
+    def stream(self) -> Generator[str, None, None]:
+        """Stream recognized text continuously.
+        
+        Yields:
+            Recognized text strings.
         """
-        with self._lock:
-            if self._is_running:
-                logger.debug("AsyncEar already running")
-                return True
-
-            if not self._has_vosk or not self._has_sounddevice:
-                logger.error("Cannot start: vosk or sounddevice not available")
-                return False
-
-            try:
-                # Ensure model exists
-                self._ensure_model_exists()
-                
-                # Initialize Vosk
-                self._initialize_vosk()
-                
-                # Start listening thread
-                self._stop_event.clear()
-                self._pause_event.clear()
-                self._thread = threading.Thread(
-                    target=self._listen_loop,
-                    name="AsyncEar-VoskListener",
-                    daemon=True,
-                )
-                self._thread.start()
-                self._is_running = True
-                logger.info("AsyncEar started (Vosk offline)")
-                return True
-            except Exception as exc:
-                logger.exception("Failed to start AsyncEar: %s", exc)
-                return False
-
-    def stop(self, timeout: float = 3.0) -> None:
-        """Stop the background listening thread gracefully."""
-        with self._lock:
-            if not self._is_running:
-                return
-
-            logger.info("Stopping AsyncEar...")
-            self._stop_event.set()
-
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=timeout)
-
-        with self._lock:
-            self._is_running = False
-            self._thread = None
-
-        logger.info("AsyncEar stopped (recognized: %d, failed: %d)",
-                   self._total_recognitions, self._failed_recognitions)
-
-    def pause(self) -> None:
-        """Temporarily pause recognition."""
-        self._pause_event.set()
-        self._is_paused = True
-        logger.debug("AsyncEar paused")
-
-    def resume(self) -> None:
-        """Resume recognition after pause."""
-        self._pause_event.clear()
-        self._is_paused = False
-        logger.debug("AsyncEar resumed")
-
-    def get_text(self, timeout: Optional[float] = None) -> Optional[RecognitionResult]:
-        """Get the next recognized text (non-blocking by default).
-
-        Args:
-            timeout: Seconds to wait. None/0 for non-blocking.
-
-        Returns:
-            RecognitionResult if available, None otherwise.
-        """
-        try:
-            if timeout is None or timeout <= 0:
-                return self._queue.get_nowait()
-            return self._queue.get(block=True, timeout=timeout)
-        except queue.Empty:
-            return None
-
-    def get_all_pending(self) -> List[RecognitionResult]:
-        """Get all pending recognized text."""
-        results = []
-        while True:
-            try:
-                results.append(self._queue.get_nowait())
-            except queue.Empty:
-                break
-        return results
-
-    def clear_queue(self) -> int:
-        """Clear all pending recognitions."""
-        cleared = 0
-        while True:
-            try:
-                self._queue.get_nowait()
-                cleared += 1
-            except queue.Empty:
-                break
-        return cleared
-
-    def is_listening(self) -> bool:
-        """Check if actively listening."""
-        return self._is_running and not self._is_paused
-
-    def has_pending(self) -> bool:
-        """Check if there are pending recognitions."""
-        return not self._queue.empty()
-
-    @property
-    def is_running(self) -> bool:
-        """Check if ear is running."""
-        return self._is_running
-
-    @property
-    def is_paused(self) -> bool:
-        """Check if ear is paused."""
-        return self._is_paused
-
-    @property
-    def stats(self) -> Dict[str, int]:
-        """Get recognition statistics."""
-        return {
-            "total_recognitions": self._total_recognitions,
-            "failed_recognitions": self._failed_recognitions,
-            "pending_in_queue": self._queue.qsize(),
-        }
-
-    def _ensure_model_exists(self) -> None:
-        """Auto-downloads Vosk model if not present."""
-        if os.path.exists(self._model_path):
+        if not self._has_vosk or not self._has_sounddevice or not self._recognizer:
+            logger.error("VoskSTT not ready")
             return
-
-        try:
-            import requests
-            import zipfile
-        except ImportError:
-            logger.error("requests/zipfile not available; cannot download Vosk model")
-            raise
-
-        print("⬇️ Downloading Vosk Model (~40MB)...")
-        logger.info("Downloading Vosk model from %s", self.VOSK_MODEL_URL)
-
-        zip_path = os.path.join(self._nola_dir, "vosk_model.zip")
-
-        try:
-            # Download
-            response = requests.get(self.VOSK_MODEL_URL, stream=True)
-            response.raise_for_status()
-            with open(zip_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-
-            # Extract
-            print("📦 Extracting Vosk Model...")
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(self._nola_dir)
-
-            # Rename extracted folder to 'vosk_model'
-            extracted_path = os.path.join(self._nola_dir, self.VOSK_MODEL_NAME)
-            if os.path.exists(extracted_path):
-                os.rename(extracted_path, self._model_path)
-
-            # Cleanup
-            os.remove(zip_path)
-            print("✅ Vosk Model Ready.")
-            logger.info("Vosk model installed successfully")
-
-        except Exception as exc:
-            logger.error("Failed to download Vosk model: %s", exc)
-            if os.path.exists(zip_path):
-                os.remove(zip_path)
-            raise
-
-    def _initialize_vosk(self) -> None:
-        """Initialize Vosk model and recognizer."""
-        vosk = self._vosk_module
-
-        print("👂 Loading Vosk Model...")
-        vosk.SetLogLevel(-1)  # Silence Vosk logs
-
-        self._model = vosk.Model(self._model_path)
-        self._recognizer = vosk.KaldiRecognizer(self._model, 16000)
         
-        print("✅ Vosk Ear Ready.")
-        logger.info("Vosk recognizer initialized (16kHz)")
-
-    def _listen_loop(self) -> None:
-        """Continuous audio streaming and recognition loop."""
-        import json
         import sounddevice as sd
-
+        
+        self._is_running = True
+        self._stop_event.clear()
+        
         try:
             with sd.RawInputStream(
                 samplerate=16000,
@@ -334,508 +388,170 @@ class AsyncEar:
                 dtype='int16',
                 channels=1,
             ) as stream:
-                print("👂 Listening (Vosk Offline)...")
-                logger.info("Vosk listening started")
-
-                while not self._stop_event.is_set():
-                    # Skip if paused (echo cancellation)
-                    if self._pause_event.is_set():
-                        time.sleep(0.1)
-                        continue
-
+                logger.info("VoskSTT streaming started")
+                
+                while self._is_running and not self._stop_event.is_set():
                     try:
                         data, overflowed = stream.read(4000)
                         if len(data) == 0:
                             continue
-
-                        # Feed to Vosk
+                        
                         if self._recognizer.AcceptWaveform(bytes(data)):
-                            # Final sentence completed
                             result = json.loads(self._recognizer.Result())
                             text = result.get('text', '').strip()
                             if text:
-                                self._process_text(text)
-                        else:
-                            # Partial result (streaming) - could use for fast wake detection
-                            # partial = json.loads(self._recognizer.PartialResult())
-                            # partial_text = partial.get('partial', '')
-                            pass
-
-                    except Exception as exc:
-                        self._failed_recognitions += 1
-                        logger.debug("Vosk read error: %s", exc)
+                                yield text
+                    
+                    except Exception as e:
+                        logger.debug("Stream error: %s", e)
                         time.sleep(0.1)
-
-        except Exception as exc:
-            logger.exception("Vosk listen loop error: %s", exc)
-
-    def _process_text(self, text: str) -> None:
-        """Process recognized text with Active Listening Window.
-        
-        After wake word activation, listens for follow-up commands
-        for `_active_window` seconds without requiring wake word.
-        """
-        text = text.lower().strip()
-        if not text:
-            return
-
-        current_time = time.time()
-        is_active = (current_time - self._last_wake_time) < self._active_window
-        
-        # Check for wake words
-        command = text
-        wake_triggered = False
-
-        for ww in self._wake_words:
-            if text.startswith(ww):
-                wake_triggered = True
-                # Strip wake word: "jarvis time" -> "time"
-                command = text[len(ww):].strip()
-                break
-
-        # === ACTIVE LISTENING WINDOW LOGIC ===
-        if wake_triggered:
-            # Wake word detected - activate/reset window
-            if not is_active:
-                print("🔴→🟢 Activated (listening for 15s)...")
-            self._last_wake_time = current_time
-            
-        elif is_active:
-            # No wake word, but we're in active window - accept command
-            print(f"🟢 Active: '{text}'")
-            logger.debug("Active window command: %s", text)
-            command = text
-            # Reset timer to extend conversation
-            self._last_wake_time = current_time
-            
-        else:
-            # Not active and no wake word - ignore
-            logger.debug("Ignored (standby): %s", text)
-            return
-
-        # Create result (command may be empty if just wake word)
-        result = RecognitionResult(
-            text=command if command else " ",  # Space means "wake up only"
-            confidence=1.0,
-            timestamp=current_time,
-            is_final=True,
-        )
-
-        # Log what was heard
-        if wake_triggered:
-            if command:
-                print(f"🎤 One-Shot: '{text}' → '{command}'")
-                logger.info("One-shot command: %s -> %s", text, command)
-            else:
-                print(f"🎤 Wake Word: '{text}'")
-                logger.info("Wake word only: %s", text)
-
-        try:
-            self._queue.put_nowait(result)
-            self._total_recognitions += 1
-        except queue.Full:
-            try:
-                self._queue.get_nowait()
-                self._queue.put_nowait(result)
-            except queue.Empty:
-                pass
+                        
+        except Exception as e:
+            logger.error("VoskSTT stream error: %s", e)
+        finally:
+            self._is_running = False
+    
+    def stop(self) -> None:
+        """Stop the stream."""
+        self._is_running = False
+        self._stop_event.set()
+    
+    @property
+    def is_running(self) -> bool:
+        """Check if streaming."""
+        return self._is_running
+    
+    @property
+    def is_ready(self) -> bool:
+        """Check if STT is ready."""
+        return self._has_vosk and self._has_sounddevice and self._recognizer is not None
 
 
 # =============================================================================
-# AsyncTTS - Non-blocking Text-to-Speech with Piper Binary (Subprocess Wrapper)
+# Singleton Instances
+# =============================================================================
+
+_tts_instance: Optional[HybridTTS] = None
+_stt_instance: Optional[VoskSTT] = None
+
+
+def get_async_tts() -> HybridTTS:
+    """Get or create the TTS singleton.
+    
+    Returns:
+        HybridTTS instance.
+    """
+    global _tts_instance
+    if _tts_instance is None:
+        _tts_instance = HybridTTS()
+    return _tts_instance
+
+
+def get_async_ear() -> VoskSTT:
+    """Get or create the STT singleton.
+    
+    Returns:
+        VoskSTT instance.
+    """
+    global _stt_instance
+    if _stt_instance is None:
+        _stt_instance = VoskSTT()
+    return _stt_instance
+
+
+# =============================================================================
+# Legacy Compatibility Wrappers
 # =============================================================================
 
 class AsyncTTS:
-    """Thread-safe, non-blocking TTS engine using Piper Binary (piper.exe).
-
-    Uses Piper executable via subprocess for stable, isolated TTS synthesis.
-    No Python bindings - avoids DLL/crash issues on Windows.
-    The engine runs in a dedicated daemon thread, consuming text from a queue.
-
-    Usage:
-        tts = AsyncTTS()
-        tts.speak("Hello!")  # Returns immediately
-        tts.stop_speaking()  # Interrupt current speech
-    """
-
-    # Piper release URL (Windows AMD64)
-    PIPER_RELEASE_URL = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip"
-
-    def __init__(self, max_queue_size: int = 100) -> None:
-        """Initialize the async TTS system.
-
-        Args:
-            max_queue_size: Maximum pending messages before dropping oldest.
-        """
-        self._queue: queue.Queue[Any] = queue.Queue(maxsize=max_queue_size)
-        self._lock = threading.Lock()
+    """Legacy wrapper for backward compatibility."""
+    
+    def __init__(self, **kwargs) -> None:
+        self._tts = get_async_tts()
         self._is_running = True
-        self._is_speaking = False
-        
-        # Setup Paths
-        self._nola_dir = os.path.dirname(os.path.abspath(__file__))
-        self._bin_dir = os.path.join(self._nola_dir, "piper_bin")
-        self._exe_path = os.path.join(self._bin_dir, "piper", "piper.exe")
-        
-        # Model paths (reuse existing models folder)
-        self._model_dir = os.path.join(self._nola_dir, "models")
-        self._model_name = "en_GB-alan-low"
-        self._onnx_path = os.path.join(self._model_dir, f"{self._model_name}.onnx")
-        self._conf_path = os.path.join(self._model_dir, f"{self._model_name}.onnx.json")
-        
-        # Cleanup old voice files from previous attempts
-        self._cleanup_old_model("en_US-lessac-medium")
-        self._cleanup_old_model("en_IN-kusal-medium")
-        self._cleanup_old_model("en_IN-kusal-low")
-        
-        # Temp audio file path
-        self._temp_wav = os.path.join(self._nola_dir, "temp_speech.wav")
-        
-        # Check for sounddevice
-        self._has_sounddevice = False
-        try:
-            import sounddevice  # type: ignore
-            self._has_sounddevice = True
-        except ImportError:
-            logger.warning("sounddevice not installed; run: pip install sounddevice")
-        
-        # Auto-setup: download binary and model if missing
-        try:
-            self._ensure_binary_exists()
-            self._ensure_model_exists()
-            self._ready = os.path.exists(self._exe_path) and os.path.exists(self._onnx_path)
-        except Exception as exc:
-            logger.error("Failed to setup Piper: %s", exc)
-            self._ready = False
-        
-        if self._ready:
-            print("🔊 Piper TTS (Binary Mode) Ready.")
-            logger.info("AsyncTTS started (Piper Binary Mode)")
-        else:
-            print("⚠️ Piper TTS not available - will print to console instead.")
-            logger.warning("Piper TTS not ready - fallback to console output")
-        
-        # Start worker thread
-        self._thread = threading.Thread(
-            target=self._worker_loop,
-            name="AsyncTTS-PiperBinaryWorker",
-            daemon=True,
-        )
-        self._thread.start()
-
-    def _ensure_binary_exists(self) -> None:
-        """Auto-downloads Piper executable if not present."""
-        if os.path.exists(self._exe_path):
-            return
-        
-        try:
-            import requests
-            import zipfile
-        except ImportError:
-            logger.error("requests/zipfile not available; cannot download Piper binary")
-            return
-        
-        print("⬇️ Downloading Piper Binary (Standalone ~20MB)...")
-        logger.info("Downloading Piper binary from GitHub...")
-        
-        zip_path = os.path.join(self._nola_dir, "piper_bin.zip")
-        
-        try:
-            # Download zip
-            response = requests.get(self.PIPER_RELEASE_URL, stream=True)
-            response.raise_for_status()
-            with open(zip_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
-            # Extract
-            print("📦 Extracting Piper...")
-            if not os.path.exists(self._bin_dir):
-                os.makedirs(self._bin_dir)
-            
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(self._bin_dir)
-            
-            # Cleanup zip
-            os.remove(zip_path)
-            print("✅ Piper Binary Installed.")
-            logger.info("Piper binary installed successfully")
-            
-        except Exception as exc:
-            logger.error("Failed to download Piper binary: %s", exc)
-            # Cleanup partial download
-            if os.path.exists(zip_path):
-                os.remove(zip_path)
-            raise
-
-    def _cleanup_old_model(self, old_model_name: str) -> None:
-        """Delete old model files to save space when switching voices."""
-        old_onnx = os.path.join(self._model_dir, f"{old_model_name}.onnx")
-        old_conf = os.path.join(self._model_dir, f"{old_model_name}.onnx.json")
-        
-        cleaned = False
-        if os.path.exists(old_onnx):
-            try:
-                os.remove(old_onnx)
-                cleaned = True
-                logger.info("Deleted old model: %s", old_onnx)
-            except Exception as exc:
-                logger.warning("Failed to delete old model: %s", exc)
-        
-        if os.path.exists(old_conf):
-            try:
-                os.remove(old_conf)
-                cleaned = True
-                logger.info("Deleted old config: %s", old_conf)
-            except Exception as exc:
-                logger.warning("Failed to delete old config: %s", exc)
-        
-        if cleaned:
-            print("🧹 Cleaned up old US voice.")
-
-    def _ensure_model_exists(self) -> None:
-        """Auto-downloads the Piper voice model if not present."""
-        try:
-            import requests
-        except ImportError:
-            logger.error("requests not installed; cannot download model")
-            return
-        
-        if not os.path.exists(self._model_dir):
-            os.makedirs(self._model_dir)
-        
-        base_url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/alan/low"
-        
-        # Cleanup corrupt/empty files from failed downloads
-        if os.path.exists(self._onnx_path) and os.path.getsize(self._onnx_path) < 1024:
-            print("🧹 Cleaning up corrupt download...")
-            logger.warning("Removing corrupt model file (< 1KB)")
-            os.remove(self._onnx_path)
-            if os.path.exists(self._conf_path):
-                os.remove(self._conf_path)
-        
-        # Download ONNX model
-        if not os.path.exists(self._onnx_path):
-            print(f"⬇️ Downloading Piper Voice Model (~60MB)...")
-            logger.info("Downloading Piper model: %s", self._model_name)
-            try:
-                response = requests.get(f"{base_url}/{self._model_name}.onnx", stream=True)
-                response.raise_for_status()
-                with open(self._onnx_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                print("✅ Model Downloaded.")
-                logger.info("Piper model downloaded successfully")
-            except Exception as exc:
-                logger.error("Failed to download Piper model: %s", exc)
-                raise
-        
-        # Download config JSON
-        if not os.path.exists(self._conf_path):
-            print("⬇️ Downloading Config...")
-            logger.info("Downloading Piper config...")
-            try:
-                response = requests.get(f"{base_url}/{self._model_name}.onnx.json")
-                response.raise_for_status()
-                with open(self._conf_path, "wb") as f:
-                    f.write(response.content)
-                print("✅ Config Downloaded.")
-                logger.info("Piper config downloaded successfully")
-            except Exception as exc:
-                logger.error("Failed to download Piper config: %s", exc)
-                raise
-        
-        # INTEGRITY CHECK: Model should be > 1MB (actual size ~60MB)
-        if os.path.exists(self._onnx_path) and os.path.getsize(self._onnx_path) < 1024 * 1024:
-            print("⚠️ Warning: Model file looks too small (corrupt). Deleting...")
-            logger.warning("Model file corrupted (too small), deleting for re-download")
-            os.remove(self._onnx_path)
-            if os.path.exists(self._conf_path):
-                os.remove(self._conf_path)
-            raise ValueError("Model download corrupted. Please restart NIA to try again.")
-
+    
     def speak(self, text: str) -> Dict[str, Any]:
-        """Queue text for speech synthesis (non-blocking).
-
-        Args:
-            text: Text to speak.
-
-        Returns:
-            Dict with 'ok' status.
-        """
-        if not text or not text.strip():
-            return {"ok": False, "error": "No text provided"}
-
-        if not self._is_running:
-            return {"ok": False, "error": "TTS not running"}
-
-        try:
-            self._queue.put_nowait(text.strip())
-            return {"ok": True, "queued": True}
-        except queue.Full:
-            # Queue full - drop oldest and add new
-            try:
-                self._queue.get_nowait()
-                self._queue.put_nowait(text.strip())
-                return {"ok": True, "queued": True, "dropped_oldest": True}
-            except queue.Empty:
-                pass
-            logger.warning("TTS queue full")
-            return {"ok": False, "error": "TTS queue full"}
-
+        ok = self._tts.speak(text)
+        return {"ok": ok}
+    
     def stop_speaking(self) -> None:
-        """Stop current audio and clear queue."""
-        # Stop sounddevice audio if playing
-        if self._has_sounddevice:
-            try:
-                import sounddevice as sd
-                sd.stop()
-            except Exception:
-                pass
-        
-        # Clear queue
-        with self._queue.mutex:
-            self._queue.queue.clear()
-        
-        self._is_speaking = False
-
+        self._tts.stop()
+    
     def is_speaking(self) -> bool:
-        """Check if there are pending messages or currently speaking."""
-        return not self._queue.empty() or self._is_speaking
-
-    def clear_queue(self) -> int:
-        """Clear all pending messages."""
-        cleared = 0
-        while True:
-            try:
-                self._queue.get_nowait()
-                cleared += 1
-            except queue.Empty:
-                break
-        return cleared
-
+        return self._tts.is_speaking
+    
+    def stop(self) -> None:
+        self._is_running = False
+    
     @property
     def is_running(self) -> bool:
-        """Check if TTS is running."""
         return self._is_running
 
-    def stop(self) -> None:
-        """Stop the TTS engine."""
+
+class AsyncEar:
+    """Legacy wrapper for backward compatibility."""
+    
+    def __init__(self, wake_words: List[str] = None, **kwargs) -> None:
+        self._stt = get_async_ear()
+        self._wake_words = [w.lower() for w in (wake_words or ["jarvis", "nia", "hey nia"])]
+        self._queue: queue.Queue = queue.Queue(maxsize=50)
         self._is_running = False
-        self.stop_speaking()
-        # Cleanup temp file
-        if os.path.exists(self._temp_wav):
-            try:
-                os.remove(self._temp_wav)
-            except Exception:
-                pass
-        logger.info("AsyncTTS stopped")
-
-    def _worker_loop(self) -> None:
-        """Main worker loop - generates and plays audio via Piper subprocess."""
-        import subprocess
-        import wave
-        import numpy as np
-        import sounddevice as sd
+        self._is_paused = False
+        self._thread: Optional[threading.Thread] = None
+    
+    def start(self) -> bool:
+        if self._is_running:
+            return True
         
-        while self._is_running:
-            try:
-                text = self._queue.get(timeout=1.0)
-                self._is_speaking = True
-                
-                if self._ready and self._has_sounddevice:
-                    try:
-                        # 1. Generate Audio via Subprocess (Safe & Stable)
-                        # Command: echo text | piper.exe --model model.onnx --output_file output.wav
-                        cmd = [
-                            self._exe_path,
-                            "--model", self._onnx_path,
-                            "--output_file", self._temp_wav
-                        ]
-                        
-                        # Run Piper with text piped to stdin
-                        process = subprocess.run(
-                            cmd,
-                            input=text.encode('utf-8'),
-                            capture_output=True,
-                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-                        )
-                        
-                        if process.returncode != 0:
-                            error_msg = process.stderr.decode() if process.stderr else "Unknown error"
-                            logger.error("Piper failed: %s", error_msg)
-                            print(f"⚠️ Piper Failed: {error_msg}")
-                            self._queue.task_done()
-                            self._is_speaking = False
-                            continue
-                        
-                        # 2. Play Audio
-                        if os.path.exists(self._temp_wav):
-                            with wave.open(self._temp_wav, 'rb') as wf:
-                                samplerate = wf.getframerate()
-                                data = wf.readframes(-1)
-                                # Convert to int16 numpy array
-                                audio_np = np.frombuffer(data, dtype=np.int16)
-                            
-                            sd.play(audio_np, samplerate)
-                            sd.wait()  # Block thread until finished
-                            
-                            # Cleanup temp file
-                            try:
-                                os.remove(self._temp_wav)
-                            except Exception:
-                                pass
-                        
-                        logger.debug("Spoke: %s", text[:50])
-                        
-                    except Exception as exc:
-                        logger.error("⚠️ TTS Error: %s", exc)
-                        print(f"⚠️ TTS Error: {exc}")
-                else:
-                    # No TTS available - print to console
-                    print(f"🔊 {text}")
-                
-                self._is_speaking = False
-                self._queue.task_done()
-                
-            except queue.Empty:
+        self._is_running = True
+        self._thread = threading.Thread(target=self._listen_loop, daemon=True)
+        self._thread.start()
+        return True
+    
+    def _listen_loop(self) -> None:
+        for text in self._stt.stream():
+            if not self._is_running:
+                break
+            if self._is_paused:
                 continue
-            except Exception as exc:
-                logger.exception("TTS worker error: %s", exc)
-                self._is_speaking = False
+            
+            result = RecognitionResult(text=text, timestamp=time.time())
+            try:
+                self._queue.put_nowait(result)
+            except queue.Full:
+                pass
+    
+    def stop(self, timeout: float = 3.0) -> None:
+        self._is_running = False
+        self._stt.stop()
+    
+    def pause(self) -> None:
+        self._is_paused = True
+    
+    def resume(self) -> None:
+        self._is_paused = False
+    
+    def get_text(self, timeout: float = None) -> Optional[RecognitionResult]:
+        try:
+            return self._queue.get(timeout=timeout) if timeout else self._queue.get_nowait()
+        except queue.Empty:
+            return None
+    
+    @property
+    def is_running(self) -> bool:
+        return self._is_running
 
 
 # =============================================================================
-# Module-level Singletons
+# Exports
 # =============================================================================
-
-_async_ear_instance: Optional[AsyncEar] = None
-_async_tts_instance: Optional[AsyncTTS] = None
-_instance_lock = threading.Lock()
-
-
-def get_async_ear(**kwargs) -> AsyncEar:
-    """Get or create the AsyncEar singleton."""
-    global _async_ear_instance
-    with _instance_lock:
-        if _async_ear_instance is None:
-            _async_ear_instance = AsyncEar(**kwargs)
-        return _async_ear_instance
-
-
-def get_async_tts(**kwargs) -> AsyncTTS:
-    """Get or create the AsyncTTS singleton."""
-    global _async_tts_instance
-    with _instance_lock:
-        if _async_tts_instance is None:
-            _async_tts_instance = AsyncTTS(**kwargs)
-        return _async_tts_instance
-
 
 __all__ = [
     "RecognitionResult",
+    "HybridTTS",
+    "VoskSTT",
     "AsyncEar",
     "AsyncTTS",
-    "get_async_ear",
     "get_async_tts",
+    "get_async_ear",
 ]

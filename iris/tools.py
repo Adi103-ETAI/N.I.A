@@ -1,104 +1,215 @@
-"""IRIS Vision Tools - Screen Capture for NIA.
+"""IRIS Vision Tools - Hardware Layer for Image Capture.
 
-Provides screen capture functionality using MSS and processes images for AI analysis.
+Handles raw image capture from screen and webcam.
+Does NOT include analysis, OCR, or face recognition - just capture and save.
+
+Usage:
+    from iris.tools import capture_screen, capture_webcam
+    
+    # Take a screenshot
+    path = capture_screen(delay=1.0)
+    
+    # Capture from webcam
+    path = capture_webcam()
 """
 from __future__ import annotations
 
-import base64
-import io
-import logging
+import os
+import time
+from datetime import datetime
 
-logger = logging.getLogger(__name__)
+from tara.protocols import tara_tool
 
-# Try to import dependencies
+# Optional imports with graceful fallback
 try:
-    import mss
-    _HAS_MSS = True
+    import cv2
+    _HAS_CV2 = True
 except ImportError:
-    _HAS_MSS = False
-    mss = None  # type: ignore
-
-try:
-    from PIL import Image
-    _HAS_PIL = True
-except ImportError:
-    _HAS_PIL = False
-    Image = None  # type: ignore
+    _HAS_CV2 = False
+    cv2 = None  # type: ignore
 
 try:
-    from langchain_core.tools import tool
-    _HAS_LANGCHAIN = True
+    import pyautogui
+    _HAS_PYAUTOGUI = True
 except ImportError:
-    _HAS_LANGCHAIN = False
-    # Fallback decorator
-    def tool(func):
-        return func
+    _HAS_PYAUTOGUI = False
+    pyautogui = None  # type: ignore
 
 
-def _process_image(sct_img) -> str:
-    """Convert raw MSS capture to a Base64 encoded string optimized for AI.
-    
-    - Converts BGRA to RGB.
-    - Resizes to max 1024x1024 to save bandwidth/tokens.
-    - Compresses to PNG.
+# =============================================================================
+# Configuration
+# =============================================================================
+
+VISION_CACHE = "data/vision_cache"
+
+# Ensure cache directory exists
+os.makedirs(VISION_CACHE, exist_ok=True)
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def _generate_filename(prefix: str, extension: str) -> str:
+    """Generate a timestamped filename.
     
     Args:
-        sct_img: MSS screenshot object.
+        prefix: Filename prefix (e.g., 'screen', 'webcam').
+        extension: File extension (e.g., 'png', 'jpg').
         
     Returns:
-        Base64 encoded PNG string.
+        Absolute path for the new file.
     """
-    if not _HAS_PIL:
-        raise ImportError("PIL not installed. Run: pip install pillow")
-    
-    # MSS returns BGRA, PIL needs RGB
-    img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-    
-    # Resize if larger than 1024px to save tokens
-    max_size = 1024
-    if max(img.size) > max_size:
-        img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-    
-    # Save to buffer as PNG
-    buffered = io.BytesIO()
-    img.save(buffered, format="PNG")
-    
-    return base64.b64encode(buffered.getvalue()).decode("utf-8")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{prefix}_{timestamp}.{extension}"
+    return os.path.abspath(os.path.join(VISION_CACHE, filename))
 
 
-@tool
-def capture_screen() -> str:
-    """Captures the primary monitor and returns a Base64 string.
+# =============================================================================
+# Tool 1: Screen Capture
+# =============================================================================
+
+@tara_tool(
+    name="capture_screen",
+    category="vision",
+    description="Take a screenshot of the entire screen and save it. Returns the file path."
+)
+def capture_screen(delay: float = 0.5, **kwargs) -> str:
+    """Capture the screen and save as PNG.
     
-    Use this tool when the user asks you to 'look', 'see', or 'analyze' the screen.
-    Returns a Base64-encoded PNG image of the current screen.
+    Args:
+        delay: Seconds to wait before capturing (default 0.5).
+        **kwargs: Ignored (catches LLM hallucinated args).
+        
+    Returns:
+        Absolute path to the saved screenshot.
     """
-    if not _HAS_MSS:
-        return "Error: mss not installed. Run: pip install mss"
-    
-    if not _HAS_PIL:
-        return "Error: pillow not installed. Run: pip install pillow"
+    if not _HAS_PYAUTOGUI:
+        return "Error: pyautogui not installed. Run: pip install pyautogui"
     
     try:
-        with mss.mss() as sct:
-            # Capture Primary Monitor (index 1)
-            monitor = sct.monitors[1]
-            sct_img = sct.grab(monitor)
-            return _process_image(sct_img)
-    except Exception as exc:
-        logger.exception("Screen capture failed: %s", exc)
-        return f"Error capturing screen: {exc}"
+        # Wait for the specified delay
+        if delay > 0:
+            time.sleep(delay)
+        
+        # Take screenshot
+        screenshot = pyautogui.screenshot()
+        
+        # Generate filename and save
+        filepath = _generate_filename("screen", "png")
+        screenshot.save(filepath)
+        
+        return filepath
+        
+    except Exception as e:
+        return f"Error capturing screen: {e}"
 
 
-def capture_screen_raw() -> str:
-    """Non-decorated version for direct use in IRIS agent."""
-    if not _HAS_MSS:
-        raise ImportError("mss not installed. Run: pip install mss")
+# =============================================================================
+# Tool 2: Webcam Capture
+# =============================================================================
+
+@tara_tool(
+    name="capture_webcam",
+    category="vision",
+    description="Capture a single frame from the webcam and save it. Returns the file path."
+)
+def capture_webcam(**kwargs) -> str:
+    """Capture a single frame from the webcam.
     
-    if not _HAS_PIL:
-        raise ImportError("pillow not installed. Run: pip install pillow")
+    Args:
+        **kwargs: Ignored (catches LLM hallucinated args).
+        
+    Returns:
+        Absolute path to the saved image, or error message.
+    """
+    if not _HAS_CV2:
+        return "Error: OpenCV not installed. Run: pip install opencv-python"
     
-    with mss.mss() as sct:
-        monitor = sct.monitors[1]
-        sct_img = sct.grab(monitor)
-        return _process_image(sct_img)
+    cap = None
+    try:
+        # Try to open the default camera (index 0)
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)  # CAP_DSHOW for Windows
+        
+        if not cap.isOpened():
+            return "Error: Camera unavailable. It may be in use by Sentry or another app."
+        
+        # Allow camera to warm up
+        time.sleep(0.3)
+        
+        # Read a single frame
+        ret, frame = cap.read()
+        
+        if not ret or frame is None:
+            return "Error: Failed to capture frame from webcam."
+        
+        # Generate filename and save
+        filepath = _generate_filename("webcam", "jpg")
+        cv2.imwrite(filepath, frame)
+        
+        return filepath
+        
+    except Exception as e:
+        return f"Error capturing webcam: {e}"
+        
+    finally:
+        # Always release the camera
+        if cap is not None:
+            cap.release()
+
+
+# =============================================================================
+# Tool 3: Cache Cleanup
+# =============================================================================
+
+@tara_tool(
+    name="cleanup_vision_cache",
+    category="vision",
+    description="Delete all cached images from the vision cache folder."
+)
+def cleanup_vision_cache(**kwargs) -> str:
+    """Delete all files in the vision cache directory.
+    
+    Args:
+        **kwargs: Ignored (catches LLM hallucinated args).
+        
+    Returns:
+        Status message with count of deleted files.
+    """
+    try:
+        if not os.path.exists(VISION_CACHE):
+            return "Vision cache directory does not exist."
+        
+        deleted_count = 0
+        errors = []
+        
+        for filename in os.listdir(VISION_CACHE):
+            filepath = os.path.join(VISION_CACHE, filename)
+            
+            # Only delete files, not subdirectories
+            if os.path.isfile(filepath):
+                try:
+                    os.remove(filepath)
+                    deleted_count += 1
+                except OSError as e:
+                    errors.append(f"{filename}: {e}")
+        
+        if errors:
+            return f"Deleted {deleted_count} files. Errors: {', '.join(errors)}"
+        
+        return f"✅ Deleted {deleted_count} files from vision cache."
+        
+    except Exception as e:
+        return f"Error cleaning cache: {e}"
+
+
+# =============================================================================
+# Exports
+# =============================================================================
+
+__all__ = [
+    "capture_screen",
+    "capture_webcam",
+    "cleanup_vision_cache",
+    "VISION_CACHE",
+]

@@ -4,10 +4,11 @@ Contains the NIAAssistant class that orchestrates all components.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 
 # Import banner
 try:
@@ -47,13 +48,10 @@ class NIAAssistant:
         self.thread_id = thread_id
         self.debug = debug
         
-        # Configure logging
-        log_level = logging.DEBUG if debug else logging.INFO
-        logging.basicConfig(
-            level=log_level,
-            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-        )
+        # Get logger (main.py configures logging)
         self.logger = logging.getLogger("NIA")
+        if debug:
+            self.logger.setLevel(logging.DEBUG)
         
         # Components (lazy initialization)
         self._nia_process = None
@@ -74,12 +72,12 @@ class NIAAssistant:
             return False
     
     def _init_nola(self) -> bool:
-        """Initialize NOLA voice system."""
+        """Initialize NOLA voice system via singleton."""
         if not self.voice_mode:
             return True
         
         try:
-            from nola import NOLAManager, NOLAConfig
+            from nola.manager import get_nola_manager, NOLAConfig
             
             config = NOLAConfig(
                 wake_word_enabled=self.wake_word_enabled,
@@ -89,7 +87,8 @@ class NIAAssistant:
                 pause_ear_while_speaking=True,
             )
             
-            self._nola = NOLAManager(config=config)
+            # Use singleton manager
+            self._nola = get_nola_manager(config=config)
             
             if self._nola.start():
                 self.logger.info("🎤 NOLA voice system initialized")
@@ -113,8 +112,34 @@ class NIAAssistant:
             self.logger.debug("IRIS not available: %s", exc)
             return False
     
-    def _init_sentry(self) -> None:
-        """Initialize IRIS Sentry for Security & Communications monitoring."""
+    def _check_ghost_state(self) -> Tuple[bool, int]:
+        """Check if ghost mode is active by reading state file.
+        
+        Returns:
+            Tuple of (is_active, layer). Defaults to (False, 0) on any error.
+        """
+        try:
+            state_file = "data/ghost_state.json"
+            if not os.path.exists(state_file):
+                return (False, 0)
+            
+            with open(state_file, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+            
+            active = state.get("active", False)
+            layer = state.get("layer", 0)
+            return (active, layer)
+            
+        except (json.JSONDecodeError, IOError, KeyError, TypeError):
+            # File missing, empty, or corrupted - default to normal mode
+            return (False, 0)
+    
+    def _init_sentry(self, headless: bool = False) -> None:
+        """Initialize IRIS Sentry for Security & Communications monitoring.
+        
+        Args:
+            headless: If True, run in stealth mode (no visible window).
+        """
         try:
             from iris.sentry import start_sentry
             
@@ -127,9 +152,16 @@ class NIAAssistant:
                     print("📩", end="", flush=True)
                     self.speak("You have a new message.")
             
-            self.sentry_thread = start_sentry(callback=sentry_callback, interval=8)
+            self.sentry_thread = start_sentry(
+                callback=sentry_callback,
+                interval=8,
+                headless=headless
+            )
             if self.sentry_thread:
-                self.logger.debug("👁️ IRIS Sentry started")
+                if headless:
+                    self.logger.debug("👁️ Sentry started (Stealth Mode)")
+                else:
+                    self.logger.debug("👁️ IRIS Sentry started")
                 
         except ImportError:
             self.logger.debug("IRIS Sentry not available")
@@ -255,7 +287,16 @@ class NIAAssistant:
         return {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
     
     def speak(self, text: str) -> None:
-        """Speak text through NOLA."""
+        """Speak text through NOLA.
+        
+        Respects Ghost Protocol - suppresses audio when ghost mode is active.
+        """
+        # Check ghost mode before speaking
+        is_ghost, layer = self._check_ghost_state()
+        if is_ghost:
+            print(f"🤫 [Ghost Mode: Audio Suppressed] NIA: {text}")
+            return
+        
         if self._nola and text:
             try:
                 self._nola.speak(text)
@@ -286,6 +327,12 @@ class NIAAssistant:
         with ui.context():
             while self._running:
                 try:
+                    # Ghost Protocol Watchdog - Auto-engage stealth sentry on Layer 3
+                    is_ghost, layer = self._check_ghost_state()
+                    if is_ghost and layer >= 3 and self.sentry_thread is None:
+                        print("\n👁️ 🔒 Ghost Layer 3: Auto-Engaging Sentry (Stealth Mode)")
+                        self._init_sentry(headless=True)
+                    
                     user_input = ui.get_input("You: ")
                     
                     if not user_input or not user_input.strip():
@@ -319,14 +366,53 @@ class NIAAssistant:
         cmd = text.lower().strip()
         
         # =================================================================
-        # VOCABULARY DEFINITIONS (Synonyms for each intent)
+        # FUZZY KEYWORD MATCHING (catches natural variations)
         # =================================================================
         
-        # 🎤 NOLA (Voice/Microphone Control)
-        NOLA_ON = ["voice on", "mic on", "wake up", "start listening", 
-                   "activate voice", "ears on", "resume listening", "unmute mic"]
-        NOLA_OFF = ["voice off", "mic off", "go silent", "stop listening",
-                    "deactivate voice", "kill mic", "ears off", "mute mic"]
+        # 🎤 MIC OFF: "turn off mic", "disable microphone", "kill the mic"
+        mic_words = ["mic", "microphone"]
+        off_words = ["off", "mute", "stop", "kill", "disable", "pause", "silence"]
+        on_words = ["on", "unmute", "start", "enable", "resume", "activate"]
+        
+        has_mic = any(w in cmd for w in mic_words)
+        has_off = any(w in cmd for w in off_words)
+        has_on = any(w in cmd for w in on_words)
+        
+        if has_mic and has_off and not has_on:
+            # MIC OFF command
+            if self._nola:
+                self._nola.pause_listening()
+            try:
+                from main import print_mic_off
+                print_mic_off()
+            except ImportError:
+                print("🔇 Microphone Paused")
+            return True
+        
+        if has_mic and has_on and not has_off:
+            # MIC ON command
+            if not self.voice_mode:
+                self.voice_mode = True
+                if self._init_nola():
+                    try:
+                        from main import print_mic_on
+                        print_mic_on()
+                    except ImportError:
+                        print("🎙️ Microphone Active")
+                    self.speak("Voice mode enabled.")
+            else:
+                if self._nola:
+                    self._nola.resume_listening()
+                try:
+                    from main import print_mic_on
+                    print_mic_on()
+                except ImportError:
+                    print("🎙️ Microphone Active")
+            return True
+        
+        # =================================================================
+        # VOCABULARY DEFINITIONS (Synonyms for each intent)
+        # =================================================================
         
         # 👁️ IRIS (Sentry/Vision Control)
         IRIS_ON = ["sentry on", "activate sentry", "enable sentry", "guard mode",
@@ -335,10 +421,12 @@ class NIAAssistant:
                     "eyes off", "stop watching", "sentry standby"]
         
         # 🔊 TARA (Speaker Mute - Zero Latency Reflex)
-        SPEAKER_MUTE = ["mute", "mute system", "kill sound", "silence speakers",
-                        "mute audio", "speakers off", "sound off"]
-        SPEAKER_UNMUTE = ["unmute", "sound on", "restore audio", "speakers on",
-                         "audio on", "turn on speakers", "enable sound"]
+        # Note: "mic" is excluded to prevent speaker commands on mic phrases
+        SPEAKER_MUTE = ["mute speakers", "mute system", "mute audio", "kill sound", 
+                        "silence speakers", "speakers off", "sound off", "mute volume"]
+        SPEAKER_UNMUTE = ["unmute speakers", "unmute system", "sound on", "restore audio", 
+                          "speakers on", "audio on", "turn on speakers", "enable sound",
+                          "unmute volume", "unmute audio"]
         
         # 🔇 TTS (Stop Speaking)
         TTS_STOP = ["stop talking", "shh", "quiet", "shut up", "be quiet", "hush"]
@@ -347,7 +435,7 @@ class NIAAssistant:
         SYS_STATUS = ["status", "report", "system check", "diagnostics", "health",
                       "stats", "specs", "performance", "usage", "sys stats", "system stats"]
         SYS_CLEAR = ["clear", "cls", "clean screen"]
-        SYS_EXIT = ["exit", "quit", "shutdown", "bye", "goodbye", "terminate", "close"]
+        SYS_EXIT = ["exit", "quit", "bye", "goodbye", "terminate", "close"]
         SYS_HELP = ["help", "commands", "what can you do"]
         
         # =================================================================
@@ -385,47 +473,26 @@ class NIAAssistant:
         # 2. 🔊 SPEAKER MUTE/UNMUTE (Zero-Latency TARA Reflex)
         # =================================================================
         # UNMUTE first (to avoid "unmute" matching "mute")
-        if matches(SPEAKER_UNMUTE):
+        if matches(SPEAKER_UNMUTE) and "mic" not in cmd and "microphone" not in cmd:
             try:
                 from tara.units.system_control import mute_volume
                 result = mute_volume(mute=False)
-                print(f"🔊 {result}")
+                print(result)  # Tool returns "🔊 System Unmuted"
             except Exception as e:
                 print(f"⚠️  Audio control error: {e}")
             return True
         
-        # MUTE (but not "mute mic" - that's NOLA)
-        if matches(SPEAKER_MUTE) and "mic" not in cmd:
+        # MUTE SPEAKERS (exclude "mic" to prevent false matches)
+        if matches(SPEAKER_MUTE) and "mic" not in cmd and "microphone" not in cmd:
             try:
                 from tara.units.system_control import mute_volume
                 result = mute_volume(mute=True)
-                print(f"🔇 {result}")
+                print(result)  # Tool returns "🔇 System Muted"
             except Exception as e:
                 print(f"⚠️  Audio control error: {e}")
             return True
         
-        # =================================================================
-        # 3. 🎤 NOLA VOICE CONTROL (Microphone)
-        # =================================================================
-        if matches(NOLA_ON):
-            if not self.voice_mode:
-                self.voice_mode = True
-                if self._init_nola():
-                    print("🎤 Voice mode enabled")
-                    self.speak("Voice mode enabled.")
-                else:
-                    self.voice_mode = False
-            else:
-                if self._nola:
-                    self._nola.resume_listening()
-                print("🎤 Microphone active")
-            return True
-        
-        if matches(NOLA_OFF):
-            if self._nola:
-                self._nola.pause_listening()
-            print("🔇 Microphone muted")
-            return True
+        # Microphone commands now handled by fuzzy matching above
         
         # =================================================================
         # 4. 🔇 TTS CONTROL (Stop Speaking)

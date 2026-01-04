@@ -68,3 +68,11 @@ frontend/
 # Data and logs
 data/
 logs/
+
+# Large ML Models & Binaries (downloadable on first run)
+nola/vosk_model/
+nola/piper_bin/
+nola/models/
+
+*.onnx
+*.bin

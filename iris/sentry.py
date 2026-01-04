@@ -9,6 +9,9 @@ Usage:
     # Start monitoring in background
     start_sentry(callback=lambda msg: print(msg))
     
+    # Start in stealth mode (no visible window)
+    start_sentry(callback=lambda msg: print(msg), headless=True)
+    
     # Stop monitoring
     stop_sentry()
 """
@@ -82,6 +85,9 @@ SCAN_INTERVAL = 8
 
 # Screen capture region (None = full screen)
 CAPTURE_REGION = None
+
+# Debug mode flag
+DEBUG_MODE = False
 
 
 # =============================================================================
@@ -241,6 +247,7 @@ class SentryThread(threading.Thread):
         callback: Callable[[str, str], None],
         interval: float = SCAN_INTERVAL,
         keywords: List[str] = None,
+        headless: bool = False,
     ) -> None:
         """Initialize sentry thread.
         
@@ -248,11 +255,13 @@ class SentryThread(threading.Thread):
             callback: Function(alert_type, keyword) to call on detection.
             interval: Seconds between scans.
             keywords: Optional custom keywords (uses TRIGGERS if None).
+            headless: If True, run in stealth mode (no visible window).
         """
         super().__init__(daemon=True, name="IRIS-Sentry")
         self.callback = callback
         self.interval = interval
         self.keywords = keywords or []
+        self.headless = headless
         self._stop_event = threading.Event()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
     
@@ -262,8 +271,12 @@ class SentryThread(threading.Thread):
     
     def run(self) -> None:
         """Main sentry loop - monitors for SECURITY and COMMS events."""
-        print("👁️", end="", flush=True)
-        logger.info("👁️ ✅ Sentry: ONLINE (Monitoring...)")
+        if self.headless:
+            print("👁️", end="", flush=True)
+            logger.info("👁️ ✅ Sentry: ONLINE (Stealth Mode - No Window)")
+        else:
+            print("👁️", end="", flush=True)
+            logger.info("👁️ ✅ Sentry: ONLINE (Monitoring...)")
         
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
@@ -324,7 +337,10 @@ class SentryThread(threading.Thread):
                 
         finally:
             self._loop.close()
-            logger.info("👁️ Sentry thread stopped")
+            if self.headless:
+                logger.info("👁️ Sentry thread stopped (Stealth Mode)")
+            else:
+                logger.info("👁️ Sentry thread stopped")
 
 
 # =============================================================================
@@ -338,6 +354,7 @@ def start_sentry(
     callback: Callable[[str], None] = None,
     interval: float = SCAN_INTERVAL,
     keywords: List[str] = None,
+    headless: bool = False,
 ) -> bool:
     """Start the background sentry.
     
@@ -345,6 +362,7 @@ def start_sentry(
         callback: Function to call when danger is detected.
         interval: Seconds between scans.
         keywords: Keywords to watch for.
+        headless: If True, run in stealth mode (no visible window).
         
     Returns:
         True if started, False if already running or not available.
@@ -367,6 +385,7 @@ def start_sentry(
         callback=callback,
         interval=interval,
         keywords=keywords,
+        headless=headless,
     )
     _sentry_thread.start()
     

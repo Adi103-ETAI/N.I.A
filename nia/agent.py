@@ -149,6 +149,14 @@ TARA_ROUTING_KEYWORDS = [
     # Media playback
     "play", "watch", "stream", "listen", "youtube", "video", "song", "music", "audio",
     "movie", "podcast", "radio", "pause", "stop", "resume", "skip", "next", "previous",
+    # Volume & Audio Control
+    "volume", "mute", "unmute", "sound", "louder", "quieter", "speaker",
+    # Power & Battery
+    "battery", "power", "charge", "lock", "shutdown", "restart", "reboot", "hibernate",
+    # Maintenance
+    "recycle", "bin", "trash", "empty",
+    # Ghost Protocol
+    "ghost", "conceal", "hide", "panic",
     # Clipboard
     "copy", "paste", "clipboard",
     # Web/Search/URLs
@@ -342,8 +350,7 @@ class SupervisorAgent:
                 result = chain.invoke({"messages": messages})
                 response = result.content
             except Exception as exc:
-                logger.warning("Primary model failed: %s", exc)
-                print(f"⚠️ Primary Brain Failed. Engaging Backup (70B)...")
+                logger.warning("⚠️ Primary Brain Failed: %s. Engaging Backup (70B)...", exc)
                 
                 # ATTEMPT 2: Backup Model (70B)
                 try:
@@ -508,43 +515,15 @@ class SupervisorAgent:
         # No routing - direct response from supervisor
         return AGENT_END, response, "Direct response"
 
-
 # =============================================================================
-# Placeholder Agents
+# Placeholder Agents (TaraAgent only - IrisAgent removed, use iris.agent)
 # =============================================================================
-
-class IrisAgent:
-    """IRIS - Intelligent Recognition & Image System (Placeholder).
-    
-    This is a placeholder for the vision specialist agent.
-    Will be replaced with actual vision capabilities.
-    """
-    
-    name = AGENT_IRIS
-    description = "Vision specialist for image analysis"
-    
-    def process(self, state: AgentState) -> AgentState:
-        """Process vision request (placeholder implementation)."""
-        logger.info("IRIS agent invoked (placeholder)")
-        
-        if _HAS_LANGCHAIN:
-            ai_message = AIMessage(content=IRIS_PLACEHOLDER_RESPONSE)
-        else:
-            ai_message = {"role": "assistant", "content": IRIS_PLACEHOLDER_RESPONSE}
-        
-        return {
-            **state,
-            "messages": [ai_message],
-            "next": AGENT_END,
-            "final_response": IRIS_PLACEHOLDER_RESPONSE,
-        }
-
 
 class TaraAgent:
     """TARA - Tactical Analysis & Reasoning Agent (Placeholder).
     
-    This is a placeholder for the logic/reasoning specialist.
-    Will be replaced with actual reasoning capabilities.
+    This is a placeholder for when the real tara.agent import fails.
+    The real TaraAgent lives in tara/agent.py.
     """
     
     name = AGENT_TARA
@@ -552,7 +531,7 @@ class TaraAgent:
     
     def process(self, state: AgentState) -> AgentState:
         """Process logic request (placeholder implementation)."""
-        logger.info("TARA agent invoked (placeholder)")
+        logger.info("TARA placeholder agent invoked")
         
         if _HAS_LANGCHAIN:
             ai_message = AIMessage(content=TARA_PLACEHOLDER_RESPONSE)
@@ -573,7 +552,7 @@ class TaraAgent:
 
 __all__ = [
     "SupervisorAgent",
-    "IrisAgent",
     "TaraAgent",
-    "SUPERVISOR_SYSTEM_PROMPT",
+    "SUPERVISOR_SYSTEM_PROMPT_FALLBACK",
 ]
+

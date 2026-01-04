@@ -26,9 +26,7 @@ from .state import (
     create_initial_state,
     extract_response,
 )
-from .agent import SupervisorAgent
-from .agent import IrisAgent as IrisAgentPlaceholder
-from .agent import TaraAgent as TaraAgentPlaceholder
+from .agent import SupervisorAgent, TaraAgent as TaraAgentPlaceholder
 
 # Try to import real TaraAgent
 try:
@@ -38,13 +36,13 @@ except ImportError:
     _HAS_TARA = False
     RealTaraAgent = None  # type: ignore
 
-# Try to import real IrisAgent
+# Try to import real IrisAgent (the ONLY IrisAgent now)
 try:
-    from iris.agent import IrisAgent as RealIrisAgent
+    from iris.agent import IrisAgent
     _HAS_IRIS = True
 except ImportError:
     _HAS_IRIS = False
-    RealIrisAgent = None  # type: ignore
+    IrisAgent = None  # type: ignore
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -130,13 +128,14 @@ class NIAGraph:
             temperature=temperature,
         )
         
-        # Use real IRIS if available, otherwise placeholder
-        if _HAS_IRIS and RealIrisAgent:
-            self.iris = RealIrisAgent(temperature=temperature)
+        # Use real IRIS if available
+        if _HAS_IRIS and IrisAgent:
+            self.iris = IrisAgent(temperature=temperature)
             logger.info("Using real IRIS agent with vision")
         else:
-            self.iris = IrisAgentPlaceholder()
-            logger.info("Using IRIS placeholder (vision not available)")
+            # No placeholder - IRIS unavailable
+            self.iris = None
+            logger.warning("IRIS agent not available (vision disabled)")
         
         # Use real TARA if available, otherwise placeholder
         if _HAS_TARA and RealTaraAgent:
@@ -243,10 +242,12 @@ class NIAGraph:
     
     def _route_from_supervisor(self, state: AgentState) -> str:
         """Determine next node based on supervisor's routing decision."""
-        # FORCE VISION ROUTING - Keyword Override
-        # Check user message for vision keywords before supervisor decision
+        # 1. FORCE VISION ROUTING (Keyword Override)
+        # We check this first to ensure camera commands go to IRIS immediately.
         messages = state.get("messages", [])
         last_user_msg = ""
+        
+        # Safely extract the last user message text
         for msg in reversed(messages):
             if hasattr(msg, "type") and msg.type == "human":
                 last_user_msg = msg.content.lower()
@@ -255,22 +256,27 @@ class NIAGraph:
                 last_user_msg = msg.get("content", "").lower()
                 break
         
+        # KEYWORDS: Both Screen AND Camera terms
         vision_keywords = [
-            "look", "see", "screen", "watch", "view", "vision",
-            "read this", "what do you see", "analyze screen", "screenshot",
-            "what's on my screen", "look at the screen", "describe this"
+            # Screen
+            "screen", "screenshot", "window", "monitor", "display", 
+            "terminal", "code", "what is on",
+            # Camera
+            "camera", "webcam", "photo", "picture", "selfie", 
+            "room", "face", "capture", "see me", "snapshot",
+            # Actions
+            "look at", "what do you see", "analyze this", "vision",
+            "look", "see", "watch", "view", "read this",
         ]
         
+        # If keyword found -> Send to IRIS
         if any(k in last_user_msg for k in vision_keywords):
-            print(f"👀 Routing to IRIS (Vision keyword detected)")
-            logger.info("Force routing to IRIS: vision keyword in '%s'", last_user_msg[:50])
+            logger.info("👀 Routing to IRIS (Vision keyword detected)")
             return AGENT_IRIS
         
-        # Standard routing from supervisor decision
+        # 2. Standard Routing (LLM Decision)
+        # If no keywords matched, trust the Supervisor LLM's decision
         next_agent = state.get("next", AGENT_END)
-        route_reason = state.get("route_reason", "No reason provided")
-        
-        logger.debug("Routing decision: %s (reason: %s)", next_agent, route_reason)
         
         if next_agent == AGENT_IRIS:
             return AGENT_IRIS

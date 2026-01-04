@@ -1,16 +1,29 @@
 """IRIS Agent - Intelligent Recognition & Image System.
 
-Vision specialist agent using NVIDIA Llama 3.2 Vision for screen analysis.
+Vision specialist agent using NVIDIA Llama 3.2 Vision for image analysis.
+Autonomously captures screen or webcam based on user intent, then analyzes.
+
+Usage:
+    from iris.agent import IrisAgent
+    
+    agent = IrisAgent()
+    
+    # Direct string input
+    result = agent.process("What's on my screen?")
+    
+    # LangGraph state dict input
+    result = agent.process({"messages": [HumanMessage(content="Look at screen")]})
 """
 from __future__ import annotations
 
+import base64
 import logging
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Union
 
 logger = logging.getLogger(__name__)
 
-# Try to import NVIDIA vision model
+# Import vision model
 try:
     from langchain_nvidia_ai_endpoints import ChatNVIDIA
     _HAS_NVIDIA = True
@@ -19,7 +32,7 @@ except ImportError:
     ChatNVIDIA = None  # type: ignore
     logger.warning("langchain-nvidia-ai-endpoints not installed")
 
-# Try to import LangChain messages
+# Import LangChain messages
 try:
     from langchain_core.messages import HumanMessage, AIMessage
     _HAS_LANGCHAIN = True
@@ -28,13 +41,31 @@ except ImportError:
     HumanMessage = None  # type: ignore
     AIMessage = None  # type: ignore
 
-# Import our screen capture tool
+# Import capture tools
 try:
-    from .tools import capture_screen_raw
+    from iris.tools import capture_screen, capture_webcam
     _HAS_TOOLS = True
 except ImportError:
     _HAS_TOOLS = False
-    capture_screen_raw = None  # type: ignore
+    capture_screen = None  # type: ignore
+    capture_webcam = None  # type: ignore
+
+
+# =============================================================================
+# Intent Keywords
+# =============================================================================
+
+SCREEN_KEYWORDS = [
+    "screen", "window", "monitor", "display", "desktop",
+    "look at this", "what's here", "what do you see",
+    "look at the", "analyze this", "look at my",
+]
+
+WEBCAM_KEYWORDS = [
+    "camera", "webcam", "room", "selfie", "photo",
+    "take a picture", "take a photo", "capture",
+    "see me", "look at me", "my face",
+]
 
 
 # =============================================================================
@@ -44,15 +75,15 @@ except ImportError:
 class IrisAgent:
     """IRIS - Intelligent Recognition & Image System.
     
-    Vision specialist that captures the screen and analyzes it using
-    NVIDIA's Llama 3.2 Vision model.
+    Vision specialist that:
+    1. Detects user intent (screen vs webcam)
+    2. Captures image automatically or uses provided path
+    3. Analyzes with NVIDIA Llama 3.2 Vision
     
-    Example:
-        agent = IrisAgent()
-        result = agent.run("What is on my screen?")
+    Handles both string input and LangGraph state dict input.
     """
     
-    # NVIDIA Llama 3.2 Vision model (11B instruct)
+    # NVIDIA Llama 3.2 Vision model
     MODEL_NAME = "meta/llama-3.2-11b-vision-instruct"
     
     def __init__(self, temperature: float = 0.1) -> None:
@@ -61,9 +92,11 @@ class IrisAgent:
         Args:
             temperature: LLM temperature (lower = more deterministic).
         """
+        self.model = self.MODEL_NAME
         self.temperature = temperature
         self._llm = None
         self._initialized = False
+        self._sentry = None
         
         self._initialize()
     
@@ -90,116 +123,267 @@ class IrisAgent:
             logger.exception("Failed to initialize IRIS: %s", exc)
             return False
     
-    def run(self, query: str) -> str:
-        """Capture screen and analyze with vision model.
+    # =========================================================================
+    # Input Extraction
+    # =========================================================================
+    
+    def _extract_user_input(self, input_data: Union[str, Dict[str, Any]]) -> str:
+        """Extract user text from string or LangGraph state dict.
         
         Args:
-            query: User's question about what they see.
+            input_data: Either a string or a LangGraph state dict.
             
         Returns:
-            Description/analysis of the screen content.
+            The user's text input as a string.
         """
-        if not self._initialized or not self._llm:
-            return "IRIS is not initialized. Check NVIDIA_API_KEY."
+        # If it's already a string, return directly
+        if isinstance(input_data, str):
+            return input_data
         
+        # If it's a dict (LangGraph state), extract from messages
+        if isinstance(input_data, dict):
+            messages = input_data.get("messages", [])
+            if messages:
+                # Get the last message
+                last_msg = messages[-1]
+                # Extract content
+                if hasattr(last_msg, "content"):
+                    return last_msg.content
+                elif isinstance(last_msg, dict):
+                    return last_msg.get("content", "")
+        
+        # Fallback: convert to string
+        return str(input_data)
+    
+    # =========================================================================
+    # Intent Detection
+    # =========================================================================
+    
+    def _detect_intent(self, text: str) -> Optional[callable]:
+        """Detect capture intent from user text.
+        
+        Args:
+            text: User's query text.
+            
+        Returns:
+            Capture function (capture_screen or capture_webcam), or None.
+        """
         if not _HAS_TOOLS:
-            return "Screen capture tools not available."
+            return None
         
+        text_lower = text.lower()
+        
+        # Check for webcam keywords first (more specific)
+        for keyword in WEBCAM_KEYWORDS:
+            if keyword in text_lower:
+                return capture_webcam
+        
+        # Check for screen keywords
+        for keyword in SCREEN_KEYWORDS:
+            if keyword in text_lower:
+                return capture_screen
+        
+        return None
+    
+    # =========================================================================
+    # Image Encoding
+    # =========================================================================
+    
+    def _encode_image(self, image_path: str) -> Optional[str]:
+        """Encode image file to base64."""
         try:
-            print("👁️ 📸 IRIS: Capturing visual data...")
+            with open(image_path, "rb") as f:
+                return base64.b64encode(f.read()).decode("utf-8")
+        except Exception as exc:
+            logger.error("Failed to encode image: %s", exc)
+            return None
+    
+    def _get_mime_type(self, image_path: str) -> str:
+        """Get MIME type from file extension."""
+        ext = os.path.splitext(image_path)[1].lower()
+        return {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+        }.get(ext, "image/png")
+    
+    # =========================================================================
+    # Main Processing
+    # =========================================================================
+    
+    def process(
+        self,
+        input_data: Union[str, Dict[str, Any]],
+        image_path: str = None
+    ) -> Union[str, Dict[str, Any]]:
+        """Process vision query with auto-capture or provided image.
+        
+        Handles both string input and LangGraph state dict input.
+        
+        Args:
+            input_data: Either a string query or LangGraph state dict.
+            image_path: Optional path to existing image file.
             
-            # 1. Capture screen as Base64
-            b64_image = capture_screen_raw()
+        Returns:
+            String response (if input was string) or updated state dict.
+        """
+        # Track if input was a dict (for return format)
+        is_langgraph = isinstance(input_data, dict)
+        
+        # Step 1: Extract user text
+        user_input = self._extract_user_input(input_data)
+        
+        if not self._initialized or not self._llm:
+            response = "❌ IRIS is not initialized. Check NVIDIA_API_KEY."
+            return self._format_response(response, input_data, is_langgraph)
+        
+        path = image_path
+        
+        # Step 2: Auto-Capture if no image provided
+        if path is None:
+            intent_func = self._detect_intent(user_input)
             
-            # 2. Prepare multimodal message
-            # IMPROVED PROMPT: Strict Observation - Discourages guessing
+            if intent_func is not None:
+                print("👁️ 📸 IRIS: Capturing visual data...")
+                result = intent_func()
+                
+                # Check if tool returned an error
+                if result.startswith("Error"):
+                    response = f"❌ {result}"
+                    return self._format_response(response, input_data, is_langgraph)
+                
+                path = result
+        
+        # Step 3: Validate - must have an image
+        if path is None:
+            response = (
+                "👁️ I need an image to answer that. "
+                "Tell me to 'look at the screen' or 'take a photo'."
+            )
+            return self._format_response(response, input_data, is_langgraph)
+        
+        # Verify file exists
+        if not os.path.exists(path):
+            response = f"❌ Image file not found: {path}"
+            return self._format_response(response, input_data, is_langgraph)
+        
+        # Step 4: Encode image and run inference
+        try:
+            print("👁️ 🤔 IRIS: Analyzing image...")
+            
+            b64_image = self._encode_image(path)
+            if not b64_image:
+                response = "❌ Failed to encode image."
+                return self._format_response(response, input_data, is_langgraph)
+            
+            mime_type = self._get_mime_type(path)
+            
+            # Build prompt with observation instructions
             prompt_text = (
-                f"User Query: {query}\n\n"
+                f"User Query: {user_input}\n\n"
                 "INSTRUCTIONS:\n"
-                "1. Identify the MAIN active windows in focus (e.g., Code Editor, Terminal, Browser).\n"
-                "2. Read window titles or tabs to identify specific apps (e.g., 'Visual Studio Code', 'Brave', 'Chrome').\n"
-                "3. Describe the screen layout (Left vs Right).\n"
-                "4. CRITICAL: Do NOT guess about small icons or minimized windows if you cannot clearly read their text.\n"
-                "5. Be concise and factual."
+                "1. Describe what you see clearly and factually.\n"
+                "2. If analyzing a screen, identify visible applications and windows.\n"
+                "3. Read any visible text accurately.\n"
+                "4. Do NOT guess about things you cannot clearly see.\n"
+                "5. Be concise but thorough."
             )
             
+            # Create multimodal message
             message = HumanMessage(content=[
                 {"type": "text", "text": prompt_text},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_image}"}}
+                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_image}"}}
             ])
             
-            # 3. Inference
-            print("👁️ 🧠 IRIS: Analyzing image...")
-            response = self._llm.invoke([message])
-            
-            return response.content
+            # Invoke vision model
+            response_obj = self._llm.invoke([message])
+            response = response_obj.content
             
         except Exception as exc:
             logger.exception("IRIS analysis failed: %s", exc)
-            return f"Visual analysis failed: {exc}"
+            response = f"❌ Visual analysis failed: {exc}"
+        
+        return self._format_response(response, input_data, is_langgraph)
     
-    def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Process state dict for NIA graph integration.
+    def _format_response(
+        self,
+        response: str,
+        original_input: Union[str, Dict[str, Any]],
+        is_langgraph: bool
+    ) -> Union[str, Dict[str, Any]]:
+        """Format response based on input type.
         
         Args:
-            state: AgentState dict with messages.
+            response: The text response.
+            original_input: The original input (for state preservation).
+            is_langgraph: Whether input was a LangGraph state dict.
             
         Returns:
-            Updated state with IRIS response.
+            String (if input was string) or updated state dict.
         """
-        messages = state.get("messages", [])
+        if not is_langgraph:
+            return response
         
-        # Extract the task from messages
-        query = ""
-        for msg in reversed(messages):
-            if hasattr(msg, "type") and msg.type == "human":
-                query = msg.content
-                break
-            elif hasattr(msg, "content"):
-                query = msg.content
-                break
-        
-        if query:
-            response = self.run(query)
-        else:
-            response = "No visual query provided."
-        
-        # Build response
+        # Build LangGraph-compatible response
         if _HAS_LANGCHAIN:
             ai_message = AIMessage(content=response)
         else:
             ai_message = {"role": "assistant", "content": response}
         
-        new_messages = list(messages) + [ai_message]
+        # Preserve original state and add response
+        if isinstance(original_input, dict):
+            messages = list(original_input.get("messages", []))
+            messages.append(ai_message)
+            return {
+                **original_input,
+                "messages": messages,
+                "next": "__end__",
+            }
         
-        return {
-            **state,
-            "messages": new_messages,
-            "next": "__end__",
-        }
+        return {"messages": [ai_message], "next": "__end__"}
+    
+    def run(self, query: str) -> str:
+        """Convenience method - same as process() with string input.
+        
+        Args:
+            query: User's question about what they see.
+            
+        Returns:
+            Description/analysis of the visual content.
+        """
+        result = self.process(query)
+        # Ensure we return a string
+        if isinstance(result, dict):
+            messages = result.get("messages", [])
+            if messages:
+                last = messages[-1]
+                if hasattr(last, "content"):
+                    return last.content
+                elif isinstance(last, dict):
+                    return last.get("content", "")
+        return result
+    
+    # =========================================================================
+    # Sentry Control
+    # =========================================================================
     
     def start_sentry(self) -> bool:
-        """Start the Sentry background monitoring thread.
-        
-        Returns:
-            True if sentry was started, False if already running or failed.
-        """
-        # Lazy import to avoid circular dependency
+        """Start the Sentry background monitoring thread."""
         try:
-            from .sentry import SentryThread
+            from iris.sentry import start_sentry
         except ImportError:
             print("👁️ Sentry module not available")
             return False
         
-        # Check if already running
-        if hasattr(self, '_sentry') and self._sentry is not None:
+        if self._sentry is not None and hasattr(self._sentry, 'is_alive'):
             if self._sentry.is_alive():
                 print("👁️ Sentry is already running")
                 return False
         
         try:
-            self._sentry = SentryThread(self)
-            self._sentry.start()
+            self._sentry = start_sentry()
             print("👁️ ✅ Sentry: ENABLED")
             return True
         except Exception as e:
@@ -207,17 +391,14 @@ class IrisAgent:
             return False
     
     def stop_sentry(self) -> bool:
-        """Stop the Sentry background monitoring thread.
-        
-        Returns:
-            True if sentry was stopped, False if not running.
-        """
-        if not hasattr(self, '_sentry') or self._sentry is None:
+        """Stop the Sentry background monitoring thread."""
+        if self._sentry is None:
             print("⚠️  Sentry is not active")
             return False
         
         try:
-            self._sentry.stop()
+            from iris.sentry import stop_sentry
+            stop_sentry()
             self._sentry = None
             print("👁️ ❌ Sentry: DISABLED")
             return True
@@ -231,12 +412,12 @@ class IrisAgent:
         return self._initialized and self._llm is not None
 
 
+# =============================================================================
+# LangGraph Node Function
+# =============================================================================
+
 def run_iris_agent(state: dict) -> dict:
     """IRIS LangGraph Node function.
-    
-    1. Captures the screen.
-    2. Sends Image + User Query to NVIDIA.
-    3. Returns the observation.
     
     Args:
         state: LangGraph state dict.
@@ -246,3 +427,13 @@ def run_iris_agent(state: dict) -> dict:
     """
     agent = IrisAgent()
     return agent.process(state)
+
+
+# =============================================================================
+# Exports
+# =============================================================================
+
+__all__ = [
+    "IrisAgent",
+    "run_iris_agent",
+]

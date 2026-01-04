@@ -15,40 +15,62 @@ def check_dependencies() -> dict:
     """
     deps = {}
     
-    # NIA brain
+    # NIA brain (Core LLM Agent)
     try:
+        import nia
         deps["nia"] = True
     except ImportError as e:
         deps["nia"] = False
         deps["nia_error"] = str(e)
     
-    # NOLA voice I/O
+    # NOLA voice I/O (TTS + STT)
     try:
+        import nola
         deps["nola"] = True
     except ImportError as e:
         deps["nola"] = False
         deps["nola_error"] = str(e)
     
-    # LangGraph
+    # IRIS vision agent
     try:
+        import iris
+        deps["iris"] = True
+    except ImportError as e:
+        deps["iris"] = False
+        deps["iris_error"] = str(e)
+    
+    # TARA tool agent
+    try:
+        import tara
+        deps["tara"] = True
+    except ImportError as e:
+        deps["tara"] = False
+        deps["tara_error"] = str(e)
+    
+    # LangGraph (workflow engine)
+    try:
+        import langgraph
         deps["langgraph"] = True
     except ImportError:
         deps["langgraph"] = False
     
     # Vosk STT
     try:
+        import vosk
         deps["vosk"] = True
     except ImportError:
         deps["vosk"] = False
     
-    # Sounddevice
+    # Sounddevice (audio I/O)
     try:
+        import sounddevice
         deps["sounddevice"] = True
     except ImportError:
         deps["sounddevice"] = False
     
-    # psutil
+    # psutil (system monitoring)
     try:
+        import psutil
         deps["psutil"] = True
     except ImportError:
         deps["psutil"] = False

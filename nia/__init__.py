@@ -66,10 +66,9 @@ from .state import (
     extract_response,
 )
 
-# Agent implementations
+# Agent implementations (IrisAgent now lives in iris.agent)
 from .agent import (
     SupervisorAgent,
-    IrisAgent,
     TaraAgent,
 )
 
@@ -84,7 +83,7 @@ from .graph import (
 )
 
 # Package metadata
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "NIA Team"
 
 __all__ = [
@@ -100,7 +99,6 @@ __all__ = [
     
     # Agents
     "SupervisorAgent",
-    "IrisAgent", 
     "TaraAgent",
     
     # State
