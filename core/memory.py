@@ -5,7 +5,6 @@ Optional vector features (FAISS) are supported but not required to run.
 from __future__ import annotations
 
 import json
-import logging
 import os
 import sqlite3
 import threading
@@ -17,11 +16,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Avoid heavy or platform-specific imports at module import time. VectorStore
-# will perform lazy imports of numpy and faiss when instantiated.
-
-
-logger = logging.getLogger(__name__)
+# Centralized logging
+from core.logger import setup_logger
+logger = setup_logger("MEMORY")
 
 
 class MemoryBackend(ABC):
@@ -94,11 +91,13 @@ class VectorStore:
         # itself is imported but VectorStore is not used.
         try:
             import numpy as np
-        except Exception:
+        except ImportError as e:
+            logger.error(f"numpy import failed: {e}")
             raise ImportError("numpy is required for VectorStore")
         try:
             import faiss
-        except Exception:
+        except ImportError as e:
+            logger.error(f"FAISS import failed: {e}")
             raise ImportError("FAISS is required for VectorStore")
 
         # Save modules on instance to prefer instance-level references rather
@@ -152,8 +151,10 @@ class VectorStore:
                 try:
                     self.faiss.write_index(self.index, self.index_path)
                     self._last_save = time.time()
-                except Exception:
-                    logger.exception("Failed to auto-save FAISS index")
+                except OSError as e:
+                    logger.error(f"Failed to auto-save FAISS index (I/O error): {e}", exc_info=True)
+                except RuntimeError as e:
+                    logger.error(f"Failed to auto-save FAISS index (runtime error): {e}", exc_info=True)
 
     def search(self, query_vector: List[float], k: int = 10) -> List[Tuple[str, float]]:
         if len(query_vector) != self.dimension:
@@ -206,10 +207,17 @@ class MemoryQuery:
 
 class MemoryManager:
     def __init__(self, db_path: str, model_dim: int = 1536, index_path: Optional[str] = None, max_memories: int = 1_000_000, cache_size: int = 10000, save_interval: int = 300, memory_ttl: Optional[int] = None, vector_backend: str = "faiss") -> None:
+        import time
+        t0 = time.perf_counter()
+        logger.debug("Memory: Step 1 - Connecting to DB...")
+        
         self.store = SqliteBackend(db_path)
         self.db_path = db_path
         self.max_memories = int(max_memories)
         self.memory_ttl = int(memory_ttl) if memory_ttl is not None else None
+
+        t1 = time.perf_counter()
+        logger.debug(f"Memory: Step 2 - DB connected ({t1-t0:.2f}s). Loading vector backend...")
 
         backend = (vector_backend or "faiss").lower()
         # Attempt to instantiate a VectorStore only when the backend is
@@ -230,6 +238,9 @@ class MemoryManager:
             self.vectors = None
             self._has_vectors = False
 
+        t2 = time.perf_counter()
+        logger.debug(f"Memory: Step 3 - Vector backend done ({t2-t1:.2f}s). Creating meta table...")
+
         self._context: Dict[str, Any] = {}
 
         with sqlite3.connect(self.db_path) as conn:
@@ -245,6 +256,16 @@ class MemoryManager:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_expires ON memory_meta(expires_at)")
+        
+        t3 = time.perf_counter()
+        logger.debug(f"Memory: Step 4 - Meta table ready ({t3-t2:.2f}s). Running vacuum...")
+        
+        # Run database vacuum on startup for hygiene
+        self._vacuum_db()
+        
+        t4 = time.perf_counter()
+        logger.debug(f"Memory: Step 5 - Vacuum complete. Total init: {t4-t0:.2f}s")
+
 
     def store_memory(self, collection: str, key: str, memory: Dict[str, Any], embedding: Optional[List[float]] = None, ttl: Optional[int] = None) -> None:
         stats = self.get_stats()
@@ -282,8 +303,8 @@ class MemoryManager:
                     if datetime.now() > expires_at:
                         self._remove_memory(collection, key)
                         return None
-                except Exception:
-                    pass
+                except ValueError as e:
+                    logger.warning(f"Invalid expiration timestamp for {collection}/{key}: {e}")
 
         return self.store.retrieve(collection, key)
 
@@ -322,7 +343,7 @@ class MemoryManager:
             for m in results:
                 try:
                     created = datetime.fromisoformat(m.get("created_at", ""))
-                except Exception:
+                except ValueError:
                     created = None
                 if query.start_time and created and created < query.start_time:
                     continue
@@ -333,10 +354,41 @@ class MemoryManager:
 
         return results
 
+    def _vacuum_db(self) -> None:
+        """Run SQLite VACUUM to reclaim unused space and optionally clean old data.
+        
+        This is called during initialization to keep the database healthy.
+        Also removes history records older than 7 days for performance.
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # Optional: Clean history older than 7 days
+                try:
+                    cur = conn.execute(
+                        "DELETE FROM memory WHERE collection = 'history' AND created_at < date('now', '-7 days')"
+                    )
+                    if cur.rowcount > 0:
+                        logger.info(f"Cleaned {cur.rowcount} old history records (>7 days)")
+                except sqlite3.OperationalError:
+                    # Table might not have created_at column in history collection
+                    pass
+                
+                # Run VACUUM to reclaim space
+                conn.execute("VACUUM")
+                
+            db_size_mb = os.path.getsize(self.db_path) / (1024 * 1024)
+            logger.info(f"Database vacuum complete | Size: {db_size_mb:.2f} MB")
+            
+        except sqlite3.OperationalError as e:
+            logger.warning(f"Database vacuum failed (operational error): {e}")
+        except OSError as e:
+            logger.error(f"Database vacuum failed (I/O error): {e}", exc_info=True)
+
     def _remove_memory(self, collection: str, key: str) -> None:
         self.store.delete(collection, key)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM memory_meta WHERE collection = ? AND key = ?", (collection, key))
+
 
     def _cleanup_old_memories(self) -> int:
         removed = 0
@@ -369,7 +421,8 @@ class MemoryManager:
 
         try:
             stats["db_size_bytes"] = os.path.getsize(self.db_path) if os.path.exists(self.db_path) else 0
-        except Exception:
+        except OSError as e:
+            logger.debug(f"Could not get db size: {e}")
             stats["db_size_bytes"] = 0
 
         if self._has_vectors and self.vectors is not None:

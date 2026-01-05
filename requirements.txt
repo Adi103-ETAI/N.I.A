@@ -34,3 +34,5 @@ requests>=2.28.0
 
 # --- Dev/Test (Optional) ---
 pytest>=7.0
+pytest-asyncio>=0.21.0
+pydantic-settings>=2.0.0

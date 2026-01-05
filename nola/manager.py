@@ -14,7 +14,6 @@ Singleton Pattern:
 """
 from __future__ import annotations
 
-import logging
 import queue
 import threading
 import time
@@ -24,8 +23,9 @@ from typing import Callable, List, Optional
 # Import I/O classes
 from .io import HybridTTS, VoskSTT, get_async_tts, get_async_ear
 
-# Configure logger
-logger = logging.getLogger(__name__)
+# Centralized logging
+from core.logger import setup_logger
+logger = setup_logger("NOLA")
 
 
 # =============================================================================
@@ -228,16 +228,24 @@ class NOLAManager:
                     logger.info("🔇 Microphone Hardware Released")
                     continue  # Go back to wait state
                     
-            except Exception as e:
+            except OSError as e:
                 retry_count += 1
-                logger.error("STT stream error (attempt %d/%d): %s", 
-                           retry_count, max_retries, e)
+                logger.error(f"Audio device error (attempt {retry_count}/{max_retries}): {e}", exc_info=True)
                 
                 if retry_count >= max_retries:
                     logger.error("Max retries reached. Voice input disabled.")
                     break
                 
-                # Wait before retry
+                time.sleep(1.0)
+                logger.info("Restarting STT stream...")
+            except Exception as e:
+                retry_count += 1
+                logger.error(f"STT stream error (attempt {retry_count}/{max_retries}): {e}", exc_info=True)
+                
+                if retry_count >= max_retries:
+                    logger.error("Max retries reached. Voice input disabled.")
+                    break
+                
                 time.sleep(1.0)
                 logger.info("Restarting STT stream...")
     
@@ -256,11 +264,11 @@ class NOLAManager:
                 
                 if command:
                     # One-shot: "Hey Nia what time is it?"
-                    print(f"🎤 One-Shot: '{text}' → '{command}'")
+                    logger.info(f"One-shot command: '{text}' → '{command}'")
                     self._enqueue_input(command)
                 else:
                     # Just wake word, wait for next utterance
-                    print("🎤 Listening...")
+                    logger.debug("Wake word only, awaiting command...")
                     
         elif self.state == STATE_AWAKE:
             # Check for sleep command
@@ -272,12 +280,12 @@ class NOLAManager:
             if not self.config.auto_sleep_after_command:
                 elapsed = time.time() - self._last_wake_time
                 if elapsed > self.config.active_window_seconds:
-                    print("💤 Timeout - going to sleep")
+                    logger.info(f"Timeout after {elapsed:.1f}s - going to sleep")
                     self._go_to_sleep()
                     return
             
             # Accept command
-            print(f"🎤 Command: '{text}'")
+            logger.info(f"Command received: '{text}'")
             self._enqueue_input(text)
             
             # Auto-sleep after command
@@ -304,23 +312,25 @@ class NOLAManager:
     
     def _wake_up(self) -> None:
         """Transition to AWAKE state."""
+        old_state = self.state
         self.state = STATE_AWAKE
         self._last_wake_time = time.time()
         
-        print("🔔 Wake Word Detected!")
-        logger.info("NOLA: ASLEEP → AWAKE")
+        logger.info(f"State transition: {old_state} → {self.state}")
         
         if self._on_wake:
             try:
                 self._on_wake()
-            except Exception as e:
-                logger.debug("on_wake callback error: %s", e)
+            except TypeError as e:
+                logger.warning(f"on_wake callback type error: {e}")
+            except RuntimeError as e:
+                logger.warning(f"on_wake callback runtime error: {e}")
     
     def _go_to_sleep(self) -> None:
         """Transition to ASLEEP state."""
+        old_state = self.state
         self.state = STATE_ASLEEP
-        print("💤 Sleeping...")
-        logger.info("NOLA: AWAKE → ASLEEP")
+        logger.info(f"State transition: {old_state} → {self.state}")
     
     def _enqueue_input(self, text: str) -> None:
         """Add command to input queue."""

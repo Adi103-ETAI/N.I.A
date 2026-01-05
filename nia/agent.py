@@ -12,7 +12,6 @@ The supervisor uses the ModelManager to get the best available model
 """
 from __future__ import annotations
 
-import logging
 import os
 
 from dotenv import load_dotenv
@@ -25,8 +24,11 @@ from .state import (
     AGENT_END,
 )
 
-# Configure module logger
-logger = logging.getLogger(__name__)
+# Centralized logging and config
+from core.logger import setup_logger
+from core.config import settings
+
+logger = setup_logger("NIA.AGENT")
 
 # Load environment variables
 load_dotenv()
@@ -391,11 +393,12 @@ class SupervisorAgent:
             # Try NVIDIA 70B first
             from langchain_nvidia_ai_endpoints import ChatNVIDIA
             backup = ChatNVIDIA(
-                model="meta/llama-3.1-70b-instruct",
+                model=settings.LLM_MODEL,
                 temperature=self.temperature,
                 max_tokens=1024,
+                api_key=settings.NVIDIA_API_KEY.get_secret_value(),
             )
-            logger.info("Initialized backup LLM: meta/llama-3.1-70b-instruct")
+            logger.info(f"Initialized backup LLM: {settings.LLM_MODEL}")
             return backup
         except Exception as e:
             logger.debug("NVIDIA backup failed: %s", e)
@@ -403,17 +406,16 @@ class SupervisorAgent:
         # Try OpenAI as second backup
         try:
             from langchain_openai import ChatOpenAI
-            api_key = os.environ.get("OPENAI_API_KEY")
-            if api_key:
+            if settings.has_openai_key:
                 backup = ChatOpenAI(
                     model="gpt-4o-mini",
                     temperature=self.temperature,
-                    api_key=api_key,
+                    api_key=settings.OPENAI_API_KEY.get_secret_value(),
                 )
                 logger.info("Initialized backup LLM: gpt-4o-mini")
                 return backup
         except Exception as e:
-            logger.debug("OpenAI backup failed: %s", e)
+            logger.debug(f"OpenAI backup failed: {e}")
         
         return None
     

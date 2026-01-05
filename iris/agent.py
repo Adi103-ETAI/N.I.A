@@ -17,11 +17,13 @@ Usage:
 from __future__ import annotations
 
 import base64
-import logging
 import os
 from typing import Any, Dict, Optional, Union
 
-logger = logging.getLogger(__name__)
+from core.logger import setup_logger
+from core.config import settings
+
+logger = setup_logger("IRIS")
 
 # Import vision model
 try:
@@ -83,8 +85,8 @@ class IrisAgent:
     Handles both string input and LangGraph state dict input.
     """
     
-    # NVIDIA Llama 3.2 Vision model
-    MODEL_NAME = "meta/llama-3.2-11b-vision-instruct"
+    # Vision model from settings
+    MODEL_NAME = settings.LLM_MODEL_VISION
     
     def __init__(self, temperature: float = 0.1) -> None:
         """Initialize IRIS agent.
@@ -92,7 +94,7 @@ class IrisAgent:
         Args:
             temperature: LLM temperature (lower = more deterministic).
         """
-        self.model = self.MODEL_NAME
+        self.model = settings.LLM_MODEL_VISION
         self.temperature = temperature
         self._llm = None
         self._initialized = False
@@ -106,22 +108,25 @@ class IrisAgent:
             logger.error("NVIDIA AI endpoints not available")
             return False
         
-        if not os.environ.get("NVIDIA_API_KEY"):
-            logger.error("NVIDIA_API_KEY not set")
+        if not settings.has_nvidia_key:
+            logger.error("NVIDIA_API_KEY not set or invalid")
             return False
         
         try:
             self._llm = ChatNVIDIA(
-                model=self.MODEL_NAME,
+                model=settings.LLM_MODEL_VISION,
                 temperature=self.temperature,
                 max_tokens=1024,
+                api_key=settings.NVIDIA_API_KEY.get_secret_value(),
+                timeout=5,  # Fast fail on startup - prevents 60s hang
             )
             self._initialized = True
-            logger.info("IRIS agent initialized with %s", self.MODEL_NAME)
+            logger.info(f"IRIS agent initialized with {settings.LLM_MODEL_VISION}")
             return True
         except Exception as exc:
             logger.exception("Failed to initialize IRIS: %s", exc)
             return False
+
     
     # =========================================================================
     # Input Extraction

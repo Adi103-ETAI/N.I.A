@@ -30,18 +30,17 @@ except ImportError:
 
 
 # =============================================================================
-# Logging Configuration (Single Source of Truth)
+# Logging Configuration (Uses Centralized Logger)
 # =============================================================================
 
 def setup_logging(debug: bool = False) -> None:
-    """Configure standard Python logging."""
-    log_level = logging.DEBUG if debug else logging.INFO
+    """Configure logging using centralized logger module."""
+    # Import here to avoid circular imports
+    from core.logger import setup_logger
     
-    logging.basicConfig(
-        level=log_level,
-        format="[%(asctime)s] %(levelname)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    # Initialize the main logger (also sets up file handler)
+    console_level = logging.DEBUG if debug else logging.INFO
+    setup_logger("MAIN", console_level=console_level)
     
     # Silence noisy third-party libraries
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -115,11 +114,21 @@ def main() -> int:
     # Setup logging BEFORE any other imports
     setup_logging(debug=args.debug)
     
+    # Get logger for this module
+    from core.logger import setup_logger
+    logger = setup_logger("MAIN")
+    
     # Status check mode
     if args.status:
         from core.health import print_system_status
         print_system_status()
         return 0
+    
+    # Log startup configuration
+    logger.info("N.I.A. v2.1.0 starting...")
+    logger.info(f"Mode: {'Voice' if args.voice else 'Text'} | Debug: {args.debug} | Thread: {args.thread_id}")
+    if args.voice:
+        logger.info(f"Wake words: {args.wake_words} | Wake required: {not args.no_wake}")
     
     # Import and run engine
     from core.engine import NIAAssistant
@@ -135,13 +144,16 @@ def main() -> int:
     )
     
     try:
+        logger.debug("Entering main loop")
         assistant.run()
+        logger.info("N.I.A. shutdown complete")
         return 0
     except KeyboardInterrupt:
+        logger.info("Interrupted by user (Ctrl+C)")
         print("\n👋 Interrupted by user")
         return 0
     except Exception as exc:
-        logging.exception("Unexpected error: %s", exc)
+        logger.error(f"Unexpected error: {exc}", exc_info=True)
         return 1
 
 

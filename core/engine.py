@@ -5,10 +5,12 @@ Contains the NIAAssistant class that orchestrates all components.
 from __future__ import annotations
 
 import json
-import logging
 import os
 from datetime import datetime
 from typing import Optional, Tuple
+
+# Centralized Logging
+from core.logger import setup_logger
 
 # Import banner
 try:
@@ -30,49 +32,93 @@ except ImportError:
 class NIAAssistant:
     """Main NIA Voice Assistant application.
     
-    Combines NIA (brain) and NOLA (voice I/O) into a unified interface.
+    The NIAAssistant orchestrates all N.I.A. components including:
+    - NIA Brain (LangGraph-based reasoning)
+    - NOLA (Voice I/O with wake word detection)
+    - IRIS (Vision analysis)
+    - TARA (Tool execution)
+    
+    Attributes:
+        voice_mode: Whether voice I/O is enabled.
+        wake_word_enabled: Whether wake word detection is active.
+        wake_words: List of wake word triggers.
+        thread_id: Conversation thread identifier.
+        debug: Enable debug logging.
+        
+    Example:
+        >>> assistant = NIAAssistant(voice_mode=True)
+        >>> assistant.run()  # Blocking main loop
     """
     
     def __init__(
         self,
         voice_mode: bool = False,
         wake_word_enabled: bool = True,
-        wake_words: Optional[list] = None,
+        wake_words: Optional[list[str]] = None,
         thread_id: str = "root",
         debug: bool = False,
     ) -> None:
-        """Initialize the assistant."""
-        self.voice_mode = voice_mode
-        self.wake_word_enabled = wake_word_enabled
-        self.wake_words = wake_words or ["jarvis", "nia", "hey nia"]
-        self.thread_id = thread_id
-        self.debug = debug
+        """Initialize the NIAAssistant.
         
-        # Get logger (main.py configures logging)
-        self.logger = logging.getLogger("NIA")
-        if debug:
-            self.logger.setLevel(logging.DEBUG)
+        Args:
+            voice_mode: Enable voice input/output via NOLA.
+            wake_word_enabled: Require wake word before accepting commands.
+            wake_words: List of wake word triggers (default: ["jarvis", "nia", "hey nia"]).
+            thread_id: Unique identifier for conversation thread persistence.
+            debug: Enable verbose debug logging.
+        """
+        self.voice_mode: bool = voice_mode
+        self.wake_word_enabled: bool = wake_word_enabled
+        self.wake_words: list[str] = wake_words or ["jarvis", "nia", "hey nia"]
+        self.thread_id: str = thread_id
+        self.debug: bool = debug
+        
+        # Centralized logger
+        self.logger = setup_logger("BRAIN")
         
         # Components (lazy initialization)
-        self._nia_process = None
-        self._nola = None
-        self.iris = None
-        self.sentry_thread = None  # Track sentry thread
-        self._running = False
+        self._nia_process: Optional[callable] = None
+        self._nola: Optional[object] = None
+        self.sentry_thread: Optional[object] = None
+        self._running: bool = False
     
     def _init_nia(self) -> bool:
-        """Initialize the NIA brain."""
+        """Initialize the NIA brain (LangGraph reasoning engine).
+        
+        Returns:
+            True if NIA brain initialized successfully, False otherwise.
+        """
+        import time
         try:
+            self.logger.debug("Step 1: Starting NIA import...")
+            t0 = time.perf_counter()
+            
             from nia import process_input
+            
+            t1 = time.perf_counter()
+            self.logger.debug(f"Step 2: NIA import complete ({t1-t0:.2f}s)")
+            
             self._nia_process = process_input
-            self.logger.info("🧠 NIA brain initialized")
+            
+            t2 = time.perf_counter()
+            self.logger.debug(f"Step 3: Process function assigned ({t2-t1:.2f}s)")
+            
+            self.logger.info("🧠 NIA brain initialized (total: %.2fs)", t2-t0)
             return True
         except ImportError as exc:
             self.logger.error("❌ Failed to import NIA: %s", exc)
             return False
+
     
     def _init_nola(self) -> bool:
-        """Initialize NOLA voice system via singleton."""
+        """Initialize NOLA voice system via singleton.
+        
+        Creates the NOLAManager with wake word configuration and starts
+        the voice processing loop if voice_mode is enabled.
+        
+        Returns:
+            True if NOLA initialized and started, False otherwise.
+        """
         if not self.voice_mode:
             return True
         
@@ -101,16 +147,7 @@ class NIAAssistant:
             self.logger.error("❌ Failed to import NOLA: %s", exc)
             return False
     
-    def _init_iris(self) -> bool:
-        """Initialize IRIS vision agent."""
-        try:
-            from iris.agent import IrisAgent
-            self.iris = IrisAgent()
-            self.logger.info("👁️ IRIS vision agent initialized")
-            return True
-        except ImportError as exc:
-            self.logger.debug("IRIS not available: %s", exc)
-            return False
+    # NOTE: IRIS is now managed by NIAGraph singleton - no separate init needed
     
     def _check_ghost_state(self) -> Tuple[bool, int]:
         """Check if ghost mode is active by reading state file.
@@ -130,8 +167,14 @@ class NIAAssistant:
             layer = state.get("layer", 0)
             return (active, layer)
             
-        except (json.JSONDecodeError, IOError, KeyError, TypeError):
-            # File missing, empty, or corrupted - default to normal mode
+        except json.JSONDecodeError as e:
+            self.logger.warning(f"Ghost state file corrupted: {e}")
+            return (False, 0)
+        except (OSError, IOError) as e:
+            self.logger.debug(f"Ghost state file not readable: {e}")
+            return (False, 0)
+        except (KeyError, TypeError) as e:
+            self.logger.warning(f"Invalid ghost state format: {e}")
             return (False, 0)
     
     def _init_sentry(self, headless: bool = False) -> None:
@@ -167,45 +210,59 @@ class NIAAssistant:
             self.logger.debug("IRIS Sentry not available")
     
     def start(self) -> bool:
-        """Start the assistant."""
+        """Start the assistant and initialize all components.
+        
+        Initializes NIA brain, IRIS vision (optional), and NOLA voice (if enabled).
+        Must be called before run() or process().
+        
+        Returns:
+            True if core components initialized successfully.
+            
+        Example:
+            >>> assistant = NIAAssistant()
+            >>> if assistant.start():
+            ...     response = assistant.process("Hello")
+        """
         print(MINI_BANNER)
-        print("🚀 Initializing N.I.A. Core...")
+        self.logger.info("Initializing N.I.A. Core Engine...")
         
         # Initialize NIA
         if not self._init_nia():
-            print("❌ Failed to initialize NIA brain.")
+            self.logger.error("Failed to initialize NIA brain")
             return False
         
-        # Initialize IRIS
-        self._init_iris()
+        # NOTE: IRIS is initialized via NIAGraph singleton (no duplicate needed)
         
         # Initialize NOLA (if voice mode)
         if self.voice_mode:
             if not self._init_nola():
-                print("⚠️  Voice mode unavailable. Continuing in text mode.")
+                self.logger.warning("Voice mode unavailable, continuing in text mode")
                 self.voice_mode = False
         
         self._running = True
         
         # Sentry now manual-start only (use 'sentry on')
-        # self._init_sentry()
-        print("👁️ 💤 Sentry: Standby (Use 'sentry on' to activate)")
+        self.logger.debug("Sentry in standby mode (use 'sentry on' to activate)")
         
-        # Print mode info
+        # Log mode info
         if self.voice_mode:
             if self.wake_word_enabled:
-                print(f"🎤 Voice mode active. Wake words: {', '.join(self.wake_words)}")
+                self.logger.info(f"Voice mode active | Wake words: {', '.join(self.wake_words)}")
             else:
-                print("🎤 Voice mode active (always listening)")
+                self.logger.info("Voice mode active (always listening)")
         else:
-            print("⌨️  Text mode active")
+            self.logger.info("Text mode active")
         
         print("\nType 'help' for commands, 'exit' to quit.\n")
         
         return True
     
     def stop(self) -> None:
-        """Stop the assistant gracefully."""
+        """Stop the assistant and cleanup all resources.
+        
+        Gracefully shuts down NOLA voice system and IRIS Sentry.
+        Safe to call multiple times.
+        """
         self._running = False
         
         # Stop IRIS Sentry
@@ -223,7 +280,21 @@ class NIAAssistant:
         self.logger.info("👋 NIA shutdown complete")
     
     def process(self, text: str) -> str:
-        """Process user input through NIA."""
+        """Process user input through the NIA brain.
+        
+        Handles wake word detection, fast-path responses (time/date),
+        and routes complex queries to the LangGraph reasoning engine.
+        
+        Args:
+            text: User input text to process.
+            
+        Returns:
+            AI response string.
+            
+        Raises:
+            ConnectionError: Network issues with AI service.
+            TimeoutError: Request timeout.
+        """
         if not text:
             return ""
         
@@ -258,12 +329,28 @@ class NIAAssistant:
         
         try:
             return self._nia_process(text, thread_id=self.thread_id)
+        except ConnectionError as exc:
+            self.logger.error(f"Network error during NIA processing: {exc}", exc_info=True)
+            return "I couldn't connect to the AI service. Please check your network."
+        except TimeoutError as exc:
+            self.logger.error(f"Timeout during NIA processing: {exc}", exc_info=True)
+            return "The request timed out. Please try again."
         except Exception as exc:
-            self.logger.exception("❌ NIA processing error: %s", exc)
+            self.logger.error(f"Unexpected NIA processing error: {exc}", exc_info=True)
             return f"I encountered an error: {exc}"
     
     def _handle_fast_path(self, text: str) -> Optional[str]:
-        """Handle simple utility queries locally (no LLM needed)."""
+        """Handle simple utility queries locally without LLM.
+        
+        Provides instant responses for time and date queries,
+        bypassing the AI for zero-latency user experience.
+        
+        Args:
+            text: User input to check for fast-path patterns.
+            
+        Returns:
+            Response string if fast-path matched, None otherwise.
+        """
         query = text.lower().strip()
         now = datetime.now()
         
@@ -281,30 +368,57 @@ class NIAAssistant:
         return None
     
     def _get_day_suffix(self, day: int) -> str:
-        """Get ordinal suffix for day."""
+        """Get ordinal suffix for a day number (st, nd, rd, th).
+        
+        Args:
+            day: Day of month (1-31).
+            
+        Returns:
+            Ordinal suffix string.
+        """
         if 11 <= day <= 13:
             return "th"
         return {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
     
     def speak(self, text: str) -> None:
-        """Speak text through NOLA.
+        """Speak text through NOLA voice system.
         
-        Respects Ghost Protocol - suppresses audio when ghost mode is active.
+        Respects Ghost Protocol - suppresses audio when ghost mode is active
+        to maintain operational security.
+        
+        Args:
+            text: Text to speak aloud.
+            
+        Note:
+            Silent operation when ghost mode is active (layer 1+).
         """
         # Check ghost mode before speaking
         is_ghost, layer = self._check_ghost_state()
         if is_ghost:
+            self.logger.debug(f"Ghost mode active (layer {layer}), audio suppressed")
             print(f"🤫 [Ghost Mode: Audio Suppressed] NIA: {text}")
             return
         
         if self._nola and text:
             try:
                 self._nola.speak(text)
-            except Exception as exc:
-                self.logger.debug("❌ TTS error: %s", exc)
+            except OSError as exc:
+                self.logger.error(f"Audio device error: {exc}", exc_info=True)
+            except RuntimeError as exc:
+                self.logger.error(f"TTS runtime error: {exc}", exc_info=True)
     
     def run(self) -> None:
-        """Main loop (synchronous blocking)."""
+        """Main application loop (synchronous blocking).
+        
+        Starts the assistant, displays the terminal UI, and processes
+        user input in a loop until 'exit' or Ctrl+C.
+        
+        This is the primary entry point for running NIA interactively.
+        
+        Example:
+            >>> assistant = NIAAssistant(voice_mode=True)
+            >>> assistant.run()  # Blocks until exit
+        """
         if not self.start():
             return
         
@@ -317,7 +431,7 @@ class NIAAssistant:
                 def context(self):
                     import contextlib
                     return contextlib.nullcontext()
-                def get_input(self, prompt):
+                def get_input(self, prompt: str) -> str:
                     return input(prompt)
                 def print(self, *args, **kwargs):
                     print(*args, **kwargs)
@@ -330,7 +444,7 @@ class NIAAssistant:
                     # Ghost Protocol Watchdog - Auto-engage stealth sentry on Layer 3
                     is_ghost, layer = self._check_ghost_state()
                     if is_ghost and layer >= 3 and self.sentry_thread is None:
-                        print("\n👁️ 🔒 Ghost Layer 3: Auto-Engaging Sentry (Stealth Mode)")
+                        self.logger.info("Ghost Layer 3: Auto-engaging Sentry (Stealth Mode)")
                         self._init_sentry(headless=True)
                     
                     user_input = ui.get_input("You: ")
@@ -345,7 +459,7 @@ class NIAAssistant:
                         continue
                     
                     # Process through NIA brain
-                    ui.print("🧠 Processing...")
+                    self.logger.debug(f"Processing: {user_input[:50]}...")
                     response = self.process(user_input)
                     ui.print(f"\n💬 NIA: {response}\n")
                     self.speak(response)
@@ -361,7 +475,14 @@ class NIAAssistant:
     def _handle_command(self, text: str) -> bool:
         """Handle built-in commands using vocabulary-based reflex matching.
         
-        Reflex commands bypass the brain for zero-latency response.
+        Reflex commands bypass the NIA brain for zero-latency response.
+        Supports fuzzy keyword matching for natural variations.
+        
+        Args:
+            text: User input to check for commands.
+            
+        Returns:
+            True if command was handled, False to continue to NIA brain.
         """
         cmd = text.lower().strip()
         

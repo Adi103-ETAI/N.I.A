@@ -1,7 +1,32 @@
+"""Unit tests for core/memory.py - Memory Management System.
+
+Tests MemoryManager including:
+- Basic CRUD operations
+- TTL expiry and cleanup
+- Collection statistics
+- Vacuum database hygiene
+"""
 from core.memory import MemoryManager, InMemoryMemory
 import tempfile
 import os
 import time
+
+
+def test_vacuum_db_runs_without_error():
+    """Test that _vacuum_db completes without raising."""
+    tf = tempfile.NamedTemporaryFile(delete=False)
+    path = tf.name
+    tf.close()
+    try:
+        mgr = MemoryManager(path, model_dim=8)
+        # Vacuum is called in __init__, call again explicitly
+        mgr._vacuum_db()
+        assert True  # Should not raise
+    finally:
+        import gc
+        gc.collect()
+        if os.path.exists(path):
+            os.unlink(path)
 
 def test_inmemory_basic_crud():
     mem = InMemoryMemory()

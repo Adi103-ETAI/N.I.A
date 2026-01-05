@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 
 # Suppress pygame welcome message BEFORE importing pygame
@@ -26,8 +25,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
-# Configure module logger
-logger = logging.getLogger(__name__)
+# Centralized logging
+from core.logger import setup_logger
+logger = setup_logger("NOLA.IO")
+
+# Centralized configuration
+from core.config import settings
 
 
 # =============================================================================
@@ -35,11 +38,11 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 # TTS cache directory
-TTS_CACHE = Path("data/tts_cache")
+TTS_CACHE = settings.DATA_DIR / "tts_cache"
 TTS_CACHE.mkdir(parents=True, exist_ok=True)
 
-# Edge TTS voice (Cortana-like)
-EDGE_VOICE = "en-US-AriaNeural"
+# Edge TTS voice (from settings)
+EDGE_VOICE = settings.TTS_VOICE
 
 # Piper paths (fallback)
 NOLA_DIR = Path(__file__).parent
@@ -114,8 +117,10 @@ class HybridTTS:
             self._has_pygame = True
         except ImportError:
             logger.warning("pygame not installed. Run: pip install pygame")
-        except Exception as e:
-            logger.warning("pygame.mixer init failed: %s", e)
+        except OSError as e:
+            logger.warning(f"pygame.mixer init failed (audio device error): {e}")
+        except RuntimeError as e:
+            logger.warning(f"pygame.mixer init failed (runtime error): {e}")
         
         # Check Piper availability
         self._piper_model = None
@@ -167,8 +172,8 @@ class HybridTTS:
             if self._has_piper:
                 try:
                     return self._speak_piper(text)
-                except Exception as e:
-                    logger.error("Piper TTS also failed: %s", e)
+                except (subprocess.SubprocessError, OSError) as e:
+                    logger.error(f"Piper TTS also failed: {e}", exc_info=True)
             
             # No TTS available - print to console
             print(f"🔊 [Console] {text}")
@@ -207,19 +212,19 @@ class HybridTTS:
             pygame.mixer.music.unload()
             try:
                 mp3_file.unlink()
-            except Exception:
+            except OSError:
                 pass
             
             logger.debug("Edge TTS spoke: %s", text[:50])
             return True
             
-        except Exception as e:
-            logger.error("Edge TTS playback error: %s", e)
+        except (OSError, RuntimeError) as e:
+            logger.error(f"Edge TTS playback error: {e}", exc_info=True)
             # Cleanup on error
             try:
                 if mp3_file.exists():
                     mp3_file.unlink()
-            except Exception:
+            except OSError:
                 pass
             raise
     
@@ -279,7 +284,7 @@ class HybridTTS:
             # Cleanup
             try:
                 wav_file.unlink()
-            except Exception:
+            except OSError:
                 pass
             
             logger.debug("Piper TTS spoke: %s", text[:50])
@@ -288,8 +293,8 @@ class HybridTTS:
         except subprocess.TimeoutExpired:
             logger.error("Piper timed out")
             return False
-        except Exception as e:
-            logger.error("Piper error: %s", e)
+        except (subprocess.SubprocessError, OSError) as e:
+            logger.error(f"Piper subprocess error: {e}", exc_info=True)
             raise
     
     def stop(self) -> None:
@@ -298,7 +303,7 @@ class HybridTTS:
             try:
                 import pygame
                 pygame.mixer.music.stop()
-            except Exception:
+            except (ImportError, OSError, RuntimeError):
                 pass
     
     @property
@@ -358,9 +363,11 @@ class VoskSTT:
             try:
                 self._model = self._vosk_module.Model(str(VOSK_MODEL_PATH))
                 self._recognizer = self._vosk_module.KaldiRecognizer(self._model, 16000)
-                logger.info("👂 VoskSTT: Model loaded and ready")
-            except Exception as e:
-                logger.error("Failed to load Vosk model: %s", e)
+                logger.info("VoskSTT: Model loaded and ready")
+            except OSError as e:
+                logger.error(f"Failed to load Vosk model (I/O error): {e}", exc_info=True)
+            except RuntimeError as e:
+                logger.error(f"Failed to load Vosk model (runtime error): {e}", exc_info=True)
         else:
             if not VOSK_MODEL_PATH.exists():
                 logger.warning("Vosk model not found at: %s", VOSK_MODEL_PATH)
@@ -402,12 +409,14 @@ class VoskSTT:
                             if text:
                                 yield text
                     
-                    except Exception as e:
-                        logger.debug("Stream error: %s", e)
+                    except (OSError, json.JSONDecodeError) as e:
+                        logger.debug(f"Stream processing error: {e}")
                         time.sleep(0.1)
                         
-        except Exception as e:
-            logger.error("VoskSTT stream error: %s", e)
+        except OSError as e:
+            logger.error(f"VoskSTT audio device error: {e}", exc_info=True)
+        except RuntimeError as e:
+            logger.error(f"VoskSTT stream runtime error: {e}", exc_info=True)
         finally:
             self._is_running = False
     

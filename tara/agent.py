@@ -6,11 +6,14 @@ Uses dynamic tool discovery via ToolRegistry.
 from __future__ import annotations
 
 import json
-import logging
 import re
 from typing import Any, Dict, Optional
 
-logger = logging.getLogger(__name__)
+# Centralized logging and config
+from core.logger import setup_logger
+from core.config import settings
+
+logger = setup_logger("TARA")
 
 # Import ToolRegistry for dynamic tool discovery
 try:
@@ -105,13 +108,11 @@ class TaraAgent:
                 # Fallback to direct import
                 try:
                     from langchain_openai import ChatOpenAI
-                    import os
-                    api_key = os.environ.get("OPENAI_API_KEY")
-                    if api_key:
+                    if settings.has_openai_key:
                         self._llm = ChatOpenAI(
                             model="gpt-4o",
                             temperature=self.temperature,
-                            api_key=api_key
+                            api_key=settings.OPENAI_API_KEY.get_secret_value()
                         )
                 except ImportError:
                     logger.error("No LLM provider available")
@@ -269,30 +270,29 @@ class TaraAgent:
         try:
             from langchain_nvidia_ai_endpoints import ChatNVIDIA
             backup = ChatNVIDIA(
-                model="meta/llama-3.1-70b-instruct",
+                model=settings.LLM_MODEL,
                 temperature=self.temperature,
                 max_tokens=1024,
+                api_key=settings.NVIDIA_API_KEY.get_secret_value(),
             )
-            logger.info("TARA initialized backup LLM: meta/llama-3.1-70b-instruct")
+            logger.info(f"TARA initialized backup LLM: {settings.LLM_MODEL}")
             return backup
         except Exception as e:
-            logger.debug("NVIDIA backup failed: %s", e)
+            logger.debug(f"NVIDIA backup failed: {e}")
         
         # Try OpenAI as second backup
         try:
             from langchain_openai import ChatOpenAI
-            import os
-            api_key = os.environ.get("OPENAI_API_KEY")
-            if api_key:
+            if settings.has_openai_key:
                 backup = ChatOpenAI(
                     model="gpt-4o-mini",
                     temperature=self.temperature,
-                    api_key=api_key,
+                    api_key=settings.OPENAI_API_KEY.get_secret_value(),
                 )
                 logger.info("TARA initialized backup LLM: gpt-4o-mini")
                 return backup
         except Exception as e:
-            logger.debug("OpenAI backup failed: %s", e)
+            logger.debug(f"OpenAI backup failed: {e}")
         
         return None
     

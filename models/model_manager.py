@@ -442,6 +442,7 @@ class ModelFactory:
             temperature=temperature,
             max_tokens=max_tokens or self.config.default_max_tokens,
             base_url=self.config.nvidia_base_url,
+            timeout=5,  # Fast fail on startup - prevents 60s hang
             **kwargs,
         )
     
@@ -470,6 +471,7 @@ class ModelFactory:
             api_key=api_key,
             temperature=temperature,
             max_tokens=max_tokens or self.config.default_max_tokens,
+            request_timeout=5,  # Fast fail on startup
             **kwargs,
         )
     
@@ -498,6 +500,7 @@ class ModelFactory:
             base_url=self.config.ollama_base_url,
             temperature=temperature,
             num_predict=max_tokens or self.config.default_max_tokens,
+            timeout=5,  # Fast fail if Ollama not running
             **kwargs,
         )
     
@@ -526,6 +529,7 @@ class ModelFactory:
             api_key=api_key,
             temperature=temperature,
             max_tokens=max_tokens or self.config.default_max_tokens,
+            request_timeout=5,  # Fast fail on startup
             **kwargs,
         )
     
