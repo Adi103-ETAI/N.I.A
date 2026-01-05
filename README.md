@@ -8,7 +8,7 @@
 ║    ██╔██╗ ██║   ██║   ███████║     ─────────────────────────────          ║
 ║    ██║╚██╗██║   ██║   ██╔══██║     CLASSIFICATION: DIRECTOR_LEVEL_ACCESS  ║
 ║    ██║ ╚████║██╗██║██╗██║  ██║     DEVELOPER: SentArc Labs                ║
-║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 2.1.0                         ║
+║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 2.2.0                         ║
 ║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 ```
@@ -111,6 +111,16 @@ The system extracts keywords (`mic` + `off`) regardless of phrasing.
 Built-in command vocabulary bypasses the LLM for instant response:
 - Voice control, mute/unmute, sentry toggle — all sub-50ms
 
+### ⚙️ Centralized Configuration (NEW)
+- Type-safe config via `pydantic-settings`
+- Single `.env` file for all API keys
+- Automatic fallback when APIs unreachable
+- 5-second timeout on startup (no more 60s hangs)
+
+### 🧪 Test Suite (NEW)
+- 39 unit tests covering config, memory, and model manager
+- Run with `python -m pytest tests/ -v`
+
 ### Privacy-First Sentry
 - Screen monitoring runs **100% locally**
 - LLama 3.2 Vision analyzes frames on-device
@@ -156,7 +166,8 @@ Create a `.env` file in the project root:
 ```env
 # Required: At least one LLM provider
 NVIDIA_API_KEY=nvapi-xxxx
-OPENAI_API_KEY=sk-xxxx
+GROQ_API_KEY=gsk_xxxx      # Fast inference (optional)
+OPENAI_API_KEY=sk-xxxx     # Fallback (optional)
 
 # Optional
 HUGGINGFACE_API_KEY=hf_xxxx
@@ -247,6 +258,9 @@ N.I.A/
 │
 ├── core/                   # Core engine & orchestration
 │   ├── engine.py           # NIAAssistant + Fuzzy Reflex Layer
+│   ├── config.py           # Centralized pydantic-settings config
+│   ├── logger.py           # Centralized logging setup
+│   ├── memory.py           # Memory manager (SQLite + FAISS)
 │   └── health.py           # System diagnostics
 │
 ├── nia/                    # 🧠 Brain module
@@ -278,8 +292,14 @@ N.I.A/
 ├── persona/                # Personality config
 │   └── default.py          # Default persona
 │
-├── models/                 # ML models (Vosk, etc.)
+├── models/                 # ML models & LLM manager
+│   └── model_manager.py    # Multi-provider LLM factory
+├── tests/                  # Unit tests (39 tests)
+│   ├── test_config.py      # Config loading tests
+│   ├── test_memory.py      # Memory manager tests
+│   └── test_model_manager.py # Model factory tests
 └── data/                   # Persistent state
+    └── state.db            # LangGraph conversation history
 ```
 
 ---
