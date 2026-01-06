@@ -8,7 +8,7 @@
 ║    ██╔██╗ ██║   ██║   ███████║     ─────────────────────────────          ║
 ║    ██║╚██╗██║   ██║   ██╔══██║     CLASSIFICATION: DIRECTOR_LEVEL_ACCESS  ║
 ║    ██║ ╚████║██╗██║██╗██║  ██║     DEVELOPER: SentArc Labs                ║
-║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 2.2.0                         ║
+║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 2.3.1                         ║
 ║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 ```
@@ -45,14 +45,16 @@
 
 ## 🏗️ Architecture
 
-N.I.A. is composed of four specialized units working in concert:
+N.I.A. uses a **Dual-Path Architecture** with four specialized units:
 
-| Unit | Name     |         Role               |              Technology              |
-|------|----------|--------------------------  |--------------------------------------|
+| Unit | Name     | Role                       | Technology                           |
+|------|----------|--------------------------- |--------------------------------------|
 | 🧠  | **NIA**  | Core Brain & Supervisor    | LangGraph + NVIDIA NIM               |
 | 🎤  | **NOLA** | Voice I/O (STT/TTS)        | Vosk (Offline) + Edge TTS (Aria)     |
 | 👁️  | **IRIS** | Vision & Security Sentry   | Llama 3.2 Vision + mss               |
-| 🛠️  | **TARA** | Tool Execution & Automation| Dynamic Registry + 14 Tools          |
+| 🛠️  | **TARA** | Tool Execution & Automation| Dynamic Registry + 17 Tools          |
+
+### Dual-Path Execution Model (v2.3.1)
 
 ```
                     ┌──────────────────┐
@@ -66,15 +68,28 @@ N.I.A. is composed of four specialized units working in concert:
               └──────────────┬──────────────┘
                              │
          ┌───────────────────▼───────────────────┐
-         │           🧠 NIA CORE                 │
-         │      (LangGraph Supervisor)           │
-         └───┬───────────┬───────────────┬───────┘
-             │           │               │
-      ┌──────▼──────┐ ┌──▼──────────┐ ┌──▼──────────┐
-      │ 🎤 NOLA     │ │ 👁️ IRIS    │ │ 🛠️ TARA     │
-      │ Voice I/O   │ │ Vision      │ │ Tools       │
-      └─────────────┘ └─────────────┘ └─────────────┘
+         │           🧠 NIA SUPERVISOR           │
+         │         (LangGraph Router)            │
+         └───┬─────────────────────────────┬─────┘
+             │                             │
+    ╔════════▼════════╗           ╔════════▼════════╗
+    ║  PATH A:        ║           ║  PATH B:        ║
+    ║  COGNITIVE      ║           ║  DIRECT         ║
+    ║  ─────────────  ║           ║  ─────────────  ║
+    ║  LLM ↔ LLM      ║           ║  JSON_CMD:{}    ║
+    ║  Conversation   ║           ║  Zero-Latency   ║
+    ╚════════╤════════╝           ╚════════╤════════╝
+             │                             │
+      ┌──────▼──────┐              ┌───────▼───────┐
+      │ 🎤 NOLA     │              │ 🛠️ TARA      │
+      │ 👁️ IRIS     │              │ Direct Exec  │
+      │ Standard    │              │ (No LLM Call) │
+      └─────────────┘              └───────────────┘
 ```
+
+**Path A (Cognitive)**: Standard LLM-to-LLM conversation flow for general queries.
+
+**Path B (Direct)**: JSON Protocol for memory operations and OS control. The Supervisor sends structured `JSON_CMD:{}` payloads directly to TARA, bypassing TARA's LLM entirely for 100% reliable tool execution.
 
 ### Singleton Pattern
 
@@ -87,19 +102,47 @@ The Voice Manager (`NOLAManager`) uses a **Singleton Pattern** for stability:
 
 ## ⚡ Features
 
-### 🔇 True Hardware Mute (NEW)
+### ⚡ Neural Short-Circuit (v2.3.0)
+Zero-latency tool execution via direct JSON injection:
+- Memory commands bypass LLM entirely
+- `JSON_CMD:{"tool":"save_user_preference",...}` protocol
+- 100% reliable tool execution (no hallucinations)
+- Input sanitization strips memory context before saving
+
+### 👂 Active Listening (v2.3.1 NEW)
+Intelligent preference extraction without interrupting:
+- Detects soft preferences ("I love", "I prefer") in conversation
+- Saves facts FIRST, then completes user request
+- Loop-breaker prevents infinite re-triggers
+- Dynamic injection forces LLM to prioritize memory operations
+
+### 📈 Skill Mastery Tracking (v2.3.1 NEW)
+Self-reinforcing tool proficiency:
+- Tracks successful tool executions in `skill_stats` table
+- Records usage counts and last-used timestamps
+- Skill chains saved to procedural memory (NetworkX)
+- Enables future "recipe recall" for complex tasks
+
+### 🧠 4-Layer Hybrid Memory
+Intelligent memory system:
+- **Layer 1 (Episodic)**: ChromaDB for semantic search (local embeddings)
+- **Layer 2 (Procedural)**: NetworkX for skill chains
+- **Layer 3 (Preferences)**: SQLite for user facts + skill stats
+- **Layer 4 (Security)**: SQLite for audit logs
+
+### 🔇 True Hardware Mute
 The "Kill Mic" command **physically releases the microphone driver**:
 - Closes the audio input stream entirely
 - No "software mute" — the hardware is truly freed
 - Say "mic on" to reopen the stream
 
-### 🎙️ Edge TTS Integration (NEW)
+### 🎙️ Edge TTS Integration
 High-quality neural voice synthesis:
 - **Voice**: Microsoft `en-US-AriaNeural` (Cortana-like)
 - **Fallback**: Piper TTS for offline operation
 - Smooth playback via pygame
 
-### 🧠 Smart Fuzzy Routing (NEW)
+### 🧠 Smart Fuzzy Routing
 Natural language command recognition with **order-independent keyword matching**:
 - "Kill the mic" → Mic Off
 - "Turn off microphone" → Mic Off  
@@ -111,13 +154,13 @@ The system extracts keywords (`mic` + `off`) regardless of phrasing.
 Built-in command vocabulary bypasses the LLM for instant response:
 - Voice control, mute/unmute, sentry toggle — all sub-50ms
 
-### ⚙️ Centralized Configuration (NEW)
+### ⚙️ Centralized Configuration
 - Type-safe config via `pydantic-settings`
 - Single `.env` file for all API keys
 - Automatic fallback when APIs unreachable
 - 5-second timeout on startup (no more 60s hangs)
 
-### 🧪 Test Suite (NEW)
+### 🧪 Test Suite
 - 39 unit tests covering config, memory, and model manager
 - Run with `python -m pytest tests/ -v`
 

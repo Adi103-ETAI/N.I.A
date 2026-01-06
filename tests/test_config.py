@@ -54,7 +54,7 @@ class TestSettingsDefaults:
         
         assert settings.DEBUG is False
         assert settings.MEMORY_RETENTION_DAYS == 7
-        assert settings.VERSION == "2.1.0"
+        assert settings.VERSION == "2.3.0"
     
     def test_temperature_range(self):
         """Test that temperature has valid range."""

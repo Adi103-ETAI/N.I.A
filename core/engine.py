@@ -12,6 +12,9 @@ from typing import Optional, Tuple
 # Centralized Logging
 from core.logger import setup_logger
 
+# 4-Layer Memory System
+from core.memory import get_memory_manager
+
 # Import banner
 try:
     from interface.banner import MINI_BANNER
@@ -81,6 +84,9 @@ class NIAAssistant:
         self._nola: Optional[object] = None
         self.sentry_thread: Optional[object] = None
         self._running: bool = False
+        
+        # 4-Layer Memory System
+        self.memory = None
     
     def _init_nia(self) -> bool:
         """Initialize the NIA brain (LangGraph reasoning engine).
@@ -104,6 +110,19 @@ class NIAAssistant:
             self.logger.debug(f"Step 3: Process function assigned ({t2-t1:.2f}s)")
             
             self.logger.info("🧠 NIA brain initialized (total: %.2fs)", t2-t0)
+            
+            # Initialize Memory System
+            try:
+                self.memory = get_memory_manager()
+                self.logger.info("💾 Memory connected: %s", self.memory.get_stats())
+                
+                # Housekeeping: vacuum SQLite databases on startup
+                if hasattr(self.memory, '_vacuum_memory_db'):
+                    self.memory._vacuum_memory_db()
+            except Exception as mem_exc:
+                self.logger.warning("Memory init failed (continuing without): %s", mem_exc)
+                self.memory = None
+            
             return True
         except ImportError as exc:
             self.logger.error("❌ Failed to import NIA: %s", exc)
@@ -327,8 +346,43 @@ class NIAAssistant:
         if not self._nia_process:
             return "❌ NIA brain not initialized."
         
+        # Security Check (Layer 4)
+        if self.memory and self.memory.is_blocked(text):
+            self.logger.warning("🚫 Blocked by security: %s", text[:50])
+            return "🚫 Blocked by security protocol."
+        
+        # Get Memory Context (Layers 1-3)
+        memory_context = ""
+        if self.memory:
+            try:
+                ctx = self.memory.get_full_context(text)
+                if ctx.get("relevant_episodes") or ctx.get("relevant_skills") or ctx.get("preferences"):
+                    memory_context = self._format_memory_context(ctx)
+                    self.logger.debug("Memory context: %d episodes, %d skills", 
+                                      len(ctx.get('relevant_episodes', [])),
+                                      len(ctx.get('relevant_skills', [])))
+            except Exception as mem_exc:
+                self.logger.debug("Memory context error: %s", mem_exc)
+        
         try:
-            return self._nia_process(text, thread_id=self.thread_id)
+            # Inject memory context into prompt
+            if memory_context:
+                augmented_input = f"{memory_context}\n\nUser Input: {text}"
+                self.logger.debug("Injecting memory context (%d chars) into prompt", len(memory_context))
+            else:
+                augmented_input = text
+            
+            response = self._nia_process(augmented_input, thread_id=self.thread_id)
+            
+            # Store Episodes (Layer 1) - store original text, not augmented
+            if self.memory:
+                try:
+                    self.memory.store_episode(text, role="user")
+                    self.memory.store_episode(response, role="assistant")
+                except Exception:
+                    pass  # Don't fail on memory storage errors
+            
+            return response
         except ConnectionError as exc:
             self.logger.error(f"Network error during NIA processing: {exc}", exc_info=True)
             return "I couldn't connect to the AI service. Please check your network."
@@ -338,6 +392,29 @@ class NIAAssistant:
         except Exception as exc:
             self.logger.error(f"Unexpected NIA processing error: {exc}", exc_info=True)
             return f"I encountered an error: {exc}"
+    
+    def _format_memory_context(self, ctx: dict) -> str:
+        """Format memory context for LLM injection.
+        
+        Args:
+            ctx: Context dictionary from memory.get_full_context().
+            
+        Returns:
+            Formatted context string.
+        """
+        parts = ["[MEMORY CONTEXT]"]
+        
+        if ctx.get("preferences"):
+            parts.append(f"- User Preferences: {ctx['preferences']}")
+        
+        if ctx.get("relevant_episodes"):
+            episodes = ctx["relevant_episodes"][:3]  # Limit to 3
+            parts.append(f"- Relevant Past Chats: {episodes}")
+        
+        if ctx.get("relevant_skills"):
+            parts.append(f"- Known Skills: {ctx['relevant_skills']}")
+        
+        return "\n".join(parts)
     
     def _handle_fast_path(self, text: str) -> Optional[str]:
         """Handle simple utility queries locally without LLM.
@@ -652,7 +729,22 @@ class NIAAssistant:
             return True
         
         # =================================================================
-        # 6. 📜 HISTORY MANAGEMENT
+        # 6. 📋 PREFERENCES (God Mode - Direct DB Access)
+        # =================================================================
+        if cmd == "prefs":
+            try:
+                import json
+                prefs = self.memory.get_all_preferences() if self.memory else {}
+                if prefs:
+                    print(f"\n📋 [User Preferences]:\n{json.dumps(prefs, indent=2)}\n")
+                else:
+                    print("\n📋 No preferences saved yet.\n")
+            except Exception as exc:
+                print(f"⚠️  Could not retrieve preferences: {exc}")
+            return True
+        
+        # =================================================================
+        # 7. 📜 HISTORY MANAGEMENT
         # =================================================================
         if cmd == "history":
             try:
@@ -715,6 +807,7 @@ class NIAAssistant:
 │    sentry on/off  - Toggle vision monitoring               │
 │                                                            │
 │  Memory:                                                   │
+│    prefs          - View all saved user preferences        │
 │    history        - Show conversation history              │
 │    clear history  - Clear conversation history             │
 ╰────────────────────────────────────────────────────────────╯

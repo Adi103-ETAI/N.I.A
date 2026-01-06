@@ -1,472 +1,483 @@
-"""Memory system for NIA - single corrected implementation.
+"""N.I.A. 4-Layer Hybrid Memory System.
 
-Optional vector features (FAISS) are supported but not required to run.
+Architecture:
+    Layer 1 - Episodic (ChromaDB): Semantic search of past conversations
+    Layer 2 - Procedural (NetworkX): Skill chains and task sequences
+    Layer 3 - Preferences (SQLite): User facts and settings
+    Layer 4 - Security (SQLite): Security logs and blocked triggers
+
+Storage (all in data/ directory):
+    - data/vectors/   : ChromaDB persistent storage
+    - data/skills.gml : NetworkX graph file
+    - data/memory.db  : SQLite for preferences and security
+
+Usage:
+    from core.memory import MemoryManager, get_memory_manager
+    
+    memory = get_memory_manager()
+    
+    # Store a conversation episode
+    memory.store_episode("What's the weather?", role="user")
+    
+    # Recall relevant episodes
+    episodes = memory.recall_episodes("weather forecast", n=5)
+    
+    # Store a skill path
+    memory.add_skill_path("open browser", ["launch app", "navigate to url"])
+    
+    # Get full context for LLM
+    context = memory.get_full_context("open chrome")
 """
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
-import threading
-import time
-from abc import ABC, abstractmethod
-from collections import OrderedDict
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-# Centralized logging
 from core.logger import setup_logger
+from core.config import settings
+
 logger = setup_logger("MEMORY")
 
 
-class MemoryBackend(ABC):
-    @abstractmethod
-    def store(self, collection: str, key: str, value: Dict[str, Any]) -> None:
-        raise NotImplementedError()
+# =============================================================================
+# Optional Dependencies
+# =============================================================================
 
-    @abstractmethod
-    def retrieve(self, collection: str, key: str) -> Optional[Dict[str, Any]]:
-        raise NotImplementedError()
+try:
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+    _HAS_CHROMADB = True
+except ImportError:
+    _HAS_CHROMADB = False
+    logger.warning("chromadb not installed. Episodic memory disabled.")
 
-    @abstractmethod
-    def search(self, collection: str, query: Dict[str, Any], limit: int = 10) -> List[Dict[str, Any]]:
-        raise NotImplementedError()
-
-    @abstractmethod
-    def delete(self, collection: str, key: str) -> bool:
-        raise NotImplementedError()
-
-
-class SqliteBackend(MemoryBackend):
-    def __init__(self, db_path: str) -> None:
-        self.db_path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-
-    def _init_db(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS memory (
-                    collection TEXT,
-                    key TEXT,
-                    value TEXT,
-                    created_at TIMESTAMP,
-                    PRIMARY KEY (collection, key)
-                )
-                """
-            )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_collection ON memory(collection)")
-
-    def store(self, collection: str, key: str, value: Dict[str, Any]) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO memory (collection, key, value, created_at) VALUES (?, ?, ?, ?)",
-                (collection, key, json.dumps(value), datetime.now().isoformat()),
-            )
-
-    def retrieve(self, collection: str, key: str) -> Optional[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute("SELECT value FROM memory WHERE collection = ? AND key = ?", (collection, key)).fetchone()
-            return json.loads(row[0]) if row else None
-
-    def search(self, collection: str, query: Dict[str, Any], limit: int = 10) -> List[Dict[str, Any]]:
-        text = query.get("text", "") or ""
-        pattern = f"%{text}%"
-        with sqlite3.connect(self.db_path) as conn:
-            rows = conn.execute("SELECT value FROM memory WHERE collection = ? AND value LIKE ? LIMIT ?", (collection, pattern, limit)).fetchall()
-            return [json.loads(r[0]) for r in rows]
-
-    def delete(self, collection: str, key: str) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.execute("DELETE FROM memory WHERE collection = ? AND key = ?", (collection, key))
-            return cur.rowcount > 0
+try:
+    import networkx as nx
+    _HAS_NETWORKX = True
+except ImportError:
+    _HAS_NETWORKX = False
+    logger.warning("networkx not installed. Procedural memory disabled.")
 
 
-class VectorStore:
-    def __init__(self, dimension: int, index_path: Optional[str] = None, cache_size: int = 10000, save_interval: int = 300, vector_ttl: Optional[int] = None) -> None:
-        # Lazy import numpy and faiss to avoid heavy imports when the module
-        # itself is imported but VectorStore is not used.
-        try:
-            import numpy as np
-        except ImportError as e:
-            logger.error(f"numpy import failed: {e}")
-            raise ImportError("numpy is required for VectorStore")
-        try:
-            import faiss
-        except ImportError as e:
-            logger.error(f"FAISS import failed: {e}")
-            raise ImportError("FAISS is required for VectorStore")
+# =============================================================================
+# Configuration (All in data/ directory)
+# =============================================================================
 
-        # Save modules on instance to prefer instance-level references rather
-        # than relying on module-level variables.
-        self.np = np
-        self.faiss = faiss
-
-        self.dimension = int(dimension)
-        self.index_path = index_path
-        self.cache_size = int(cache_size)
-        self.save_interval = int(save_interval)
-        self.vector_ttl = int(vector_ttl) if vector_ttl is not None else None
-
-        self._lock = threading.RLock()
-        self._last_save = time.time()
-
-        if index_path and os.path.exists(index_path):
-            self.index = self.faiss.read_index(index_path)
-        else:
-            self.index = self.faiss.IndexFlatL2(self.dimension)
-
-        self._vector_map: Dict[int, str] = {}
-        self._key_map: Dict[str, int] = {}
-        self._next_id = 0
-
-        self._cache: "OrderedDict[str, Any]" = OrderedDict()
-        self._timestamps: Dict[str, float] = {}
-
-    def add_vector(self, key: str, vector: List[float]) -> None:
-        if len(vector) != self.dimension:
-            raise ValueError(f"Vector dimension mismatch: expected {self.dimension}")
-
-        with self._lock:
-            arr = self.np.asarray([vector], dtype=self.np.float32)
-            self.index.add(arr)
-
-            vid = self._next_id
-            self._next_id += 1
-            self._vector_map[vid] = key
-            self._key_map[key] = vid
-
-            if key in self._cache:
-                self._cache.pop(key)
-            self._cache[key] = arr
-            while len(self._cache) > self.cache_size:
-                self._cache.popitem(last=False)
-
-            self._timestamps[key] = time.time()
-
-            if self.index_path and (time.time() - self._last_save) > self.save_interval:
-                try:
-                    self.faiss.write_index(self.index, self.index_path)
-                    self._last_save = time.time()
-                except OSError as e:
-                    logger.error(f"Failed to auto-save FAISS index (I/O error): {e}", exc_info=True)
-                except RuntimeError as e:
-                    logger.error(f"Failed to auto-save FAISS index (runtime error): {e}", exc_info=True)
-
-    def search(self, query_vector: List[float], k: int = 10) -> List[Tuple[str, float]]:
-        if len(query_vector) != self.dimension:
-            raise ValueError(f"Query dimension mismatch: expected {self.dimension}")
-
-        with self._lock:
-            now = time.time()
-            if self.vector_ttl:
-                expired = [kk for kk, ts in self._timestamps.items() if now - ts > self.vector_ttl]
-                for key in expired:
-                    self._remove_vector(key)
-
-            D, idxs = self.index.search(self.np.asarray([query_vector], dtype=self.np.float32), k)
-            out: List[Tuple[str, float]] = []
-            for idx, dist in zip(idxs[0], D[0]):
-                if idx == -1:
-                    continue
-                key = self._vector_map.get(int(idx))
-                if key is None:
-                    continue
-                if self.vector_ttl and (now - self._timestamps.get(key, 0) > self.vector_ttl):
-                    continue
-                out.append((key, float(dist)))
-            return out
-
-    def _remove_vector(self, key: str) -> None:
-        if key in self._key_map:
-            vid = self._key_map.pop(key)
-            self._vector_map.pop(vid, None)
-        self._cache.pop(key, None)
-        self._timestamps.pop(key, None)
-
-    def save(self) -> None:
-        if not self.index_path:
-            return
-        with self._lock:
-            faiss.write_index(self.index, self.index_path)
-            self._last_save = time.time()
+DATA_DIR = Path("data")
+VECTORS_DIR = DATA_DIR / "vectors"
+SKILLS_FILE = DATA_DIR / "skills.gml"
+MEMORY_DB = DATA_DIR / "memory.db"
 
 
-@dataclass
-class MemoryQuery:
-    collection: str
-    text: Optional[str] = None
-    embedding: Optional[List[float]] = None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    limit: int = 10
-
+# =============================================================================
+# Memory Manager (4-Layer Hybrid)
+# =============================================================================
 
 class MemoryManager:
-    def __init__(self, db_path: str, model_dim: int = 1536, index_path: Optional[str] = None, max_memories: int = 1_000_000, cache_size: int = 10000, save_interval: int = 300, memory_ttl: Optional[int] = None, vector_backend: str = "faiss") -> None:
-        import time
-        t0 = time.perf_counter()
-        logger.debug("Memory: Step 1 - Connecting to DB...")
+    """4-Layer Hybrid Memory System for N.I.A.
+    
+    Storage:
+        - data/vectors/   : ChromaDB (episodic)
+        - data/skills.gml : NetworkX (procedural)
+        - data/memory.db  : SQLite (preferences + security)
+    """
+    
+    def __init__(
+        self,
+        vectors_dir: Optional[str] = None,
+        skills_file: Optional[str] = None,
+        db_path: Optional[str] = None,
+    ) -> None:
+        """Initialize the 4-Layer Memory System.
         
-        self.store = SqliteBackend(db_path)
-        self.db_path = db_path
-        self.max_memories = int(max_memories)
-        self.memory_ttl = int(memory_ttl) if memory_ttl is not None else None
-
-        t1 = time.perf_counter()
-        logger.debug(f"Memory: Step 2 - DB connected ({t1-t0:.2f}s). Loading vector backend...")
-
-        backend = (vector_backend or "faiss").lower()
-        # Attempt to instantiate a VectorStore only when the backend is
-        # 'faiss'. VectorStore performs its own lazy import of numpy/faiss
-        # and will raise ImportError on missing deps; handle that gracefully.
-        if backend == "faiss":
-            try:
-                self.vectors = VectorStore(dimension=model_dim, index_path=index_path, cache_size=cache_size, save_interval=save_interval, vector_ttl=memory_ttl)
-                self._has_vectors = True
-            except Exception:
-                # Missing optional dependencies or init failure: fall back
-                self.vectors = None
-                self._has_vectors = False
-        elif backend in {"pinecone", "weaviate", "external"}:
-            self.vectors = None
-            self._has_vectors = False
-        else:
-            self.vectors = None
-            self._has_vectors = False
-
-        t2 = time.perf_counter()
-        logger.debug(f"Memory: Step 3 - Vector backend done ({t2-t1:.2f}s). Creating meta table...")
-
-        self._context: Dict[str, Any] = {}
-
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS memory_meta (
-                    collection TEXT,
-                    key TEXT,
-                    created_at TIMESTAMP,
-                    expires_at TIMESTAMP,
-                    PRIMARY KEY (collection, key)
-                )
-                """
+        Args:
+            vectors_dir: ChromaDB path (default: data/vectors/).
+            skills_file: NetworkX graph path (default: data/skills.gml).
+            db_path: SQLite path (default: data/memory.db).
+        """
+        self._vectors_dir = Path(vectors_dir) if vectors_dir else VECTORS_DIR
+        self._skills_file = Path(skills_file) if skills_file else SKILLS_FILE
+        self._db_path = Path(db_path) if db_path else MEMORY_DB
+        
+        # Ensure data directory exists
+        os.makedirs(str(DATA_DIR), exist_ok=True)
+        os.makedirs(str(self._vectors_dir), exist_ok=True)
+        
+        # Initialize all layers
+        self._init_episodic()
+        self._init_procedural()
+        self._init_sql()
+        
+        logger.info("MemoryManager initialized (4-Layer Hybrid)")
+    
+    # =========================================================================
+    # Layer 1: Episodic Memory (ChromaDB)
+    # =========================================================================
+    
+    def _init_episodic(self) -> None:
+        """Initialize ChromaDB with Default (Free) Embeddings.
+        
+        Uses local all-MiniLM-L6-v2 for semantic understanding.
+        Auto-downloads the model if missing on first run.
+        """
+        self._chroma_client = None
+        self._episodes = None
+        
+        if not _HAS_CHROMADB:
+            return
+        
+        try:
+            # Connect to DB (Persistent Storage) with default embeddings
+            self._chroma_client = chromadb.PersistentClient(
+                path=str(self._vectors_dir),
+                settings=ChromaSettings(anonymized_telemetry=False),
             )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_expires ON memory_meta(expires_at)")
+            
+            # Create/Connect to collection (Uses default local model)
+            self._episodes = self._chroma_client.get_or_create_collection(
+                name="episodes"
+            )
+            logger.debug("🧠 Episodic Memory: Connected (Local/Free)")
+            
+        except Exception as exc:
+            logger.error("❌ ChromaDB Init Failed: %s", exc)
+            self._episodes = None
+    
+    def store_episode(
+        self,
+        text: str,
+        role: str = "user",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Store a conversation episode."""
+        if not self._episodes:
+            return False
         
-        t3 = time.perf_counter()
-        logger.debug(f"Memory: Step 4 - Meta table ready ({t3-t2:.2f}s). Running vacuum...")
+        try:
+            episode_id = f"{role}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+            meta = metadata or {}
+            meta.update({"role": role, "timestamp": datetime.now().isoformat()})
+            
+            self._episodes.add(
+                documents=[text],
+                metadatas=[meta],
+                ids=[episode_id],
+            )
+            return True
+        except Exception as exc:
+            logger.error("store_episode failed: %s", exc)
+            return False
+    
+    def recall_episodes(self, query: str, n: int = 5) -> List[str]:
+        """Recall relevant past episodes via semantic search."""
+        if not self._episodes:
+            return []
         
-        # Run database vacuum on startup for hygiene
-        self._vacuum_db()
+        try:
+            results = self._episodes.query(query_texts=[query], n_results=n)
+            return results.get("documents", [[]])[0]
+        except Exception as exc:
+            logger.error("recall_episodes failed: %s", exc)
+            return []
+    
+    # =========================================================================
+    # Layer 2: Procedural Memory (NetworkX)
+    # =========================================================================
+    
+    def _init_procedural(self) -> None:
+        """Initialize NetworkX graph for skill chains."""
+        self._graph = None
         
-        t4 = time.perf_counter()
-        logger.debug(f"Memory: Step 5 - Vacuum complete. Total init: {t4-t0:.2f}s")
-
-
-    def store_memory(self, collection: str, key: str, memory: Dict[str, Any], embedding: Optional[List[float]] = None, ttl: Optional[int] = None) -> None:
-        stats = self.get_stats()
-        if stats.get("total_memories", 0) >= self.max_memories:
-            self._cleanup_old_memories()
-            stats = self.get_stats()
-            if stats.get("total_memories", 0) >= self.max_memories:
-                raise RuntimeError("Memory limit reached")
-
-        created_at = datetime.now()
-        expires_at = None
-        use_ttl = ttl if ttl is not None else self.memory_ttl
-        if use_ttl:
-            expires_at = created_at + timedelta(seconds=use_ttl)
-
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("INSERT OR REPLACE INTO memory_meta (collection, key, created_at, expires_at) VALUES (?, ?, ?, ?)", (collection, key, created_at.isoformat(), expires_at.isoformat() if expires_at else None))
-
-        memory = dict(memory)
-        memory.setdefault("created_at", created_at.isoformat())
-        if expires_at:
-            memory["expires_at"] = expires_at.isoformat()
-
-        self.store.store(collection, key, memory)
-
-        if embedding and self._has_vectors and self.vectors is not None:
-            self.vectors.add_vector(key, embedding)
-
-    def get_memory(self, collection: str, key: str) -> Optional[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute("SELECT expires_at FROM memory_meta WHERE collection = ? AND key = ?", (collection, key)).fetchone()
-            if row and row[0]:
-                try:
-                    expires_at = datetime.fromisoformat(row[0])
-                    if datetime.now() > expires_at:
-                        self._remove_memory(collection, key)
-                        return None
-                except ValueError as e:
-                    logger.warning(f"Invalid expiration timestamp for {collection}/{key}: {e}")
-
-        return self.store.retrieve(collection, key)
-
-    def search_similar(self, collection: str, query_embedding: List[float], limit: int = 10) -> List[Dict[str, Any]]:
-        if not self._has_vectors or self.vectors is None:
-            raise RuntimeError("Vector search not available (configure `vector_backend` or integrate an external provider)")
-        hits = self.vectors.search(query_embedding, k=limit)
-        results: List[Dict[str, Any]] = []
-        for key, score in hits:
-            mem = self.get_memory(collection, key)
-            if mem:
-                mem = dict(mem)
-                mem["similarity_score"] = score
-                results.append(mem)
-        return results
-
-    def search_text(self, collection: str, text: str, limit: int = 10) -> List[Dict[str, Any]]:
-        return self.store.search(collection, {"text": text}, limit)
-
-    def update_context(self, updates: Dict[str, Any]) -> None:
-        self._context.update(updates)
-
-    def get_context(self) -> Dict[str, Any]:
-        return dict(self._context)
-
-    def search(self, query: MemoryQuery) -> List[Dict[str, Any]]:
-        results: List[Dict[str, Any]] = []
-        if query.embedding and self._has_vectors and self.vectors is not None:
-            results = self.search_similar(query.collection, query.embedding, query.limit)
-
-        if not results and query.text:
-            results = self.search_text(query.collection, query.text, query.limit)
-
-        if (query.start_time or query.end_time) and results:
-            filtered: List[Dict[str, Any]] = []
-            for m in results:
-                try:
-                    created = datetime.fromisoformat(m.get("created_at", ""))
-                except ValueError:
-                    created = None
-                if query.start_time and created and created < query.start_time:
-                    continue
-                if query.end_time and created and created > query.end_time:
-                    continue
-                filtered.append(m)
-            results = filtered[: query.limit]
-
-        return results
-
-    def _vacuum_db(self) -> None:
-        """Run SQLite VACUUM to reclaim unused space and optionally clean old data.
+        if not _HAS_NETWORKX:
+            return
         
-        This is called during initialization to keep the database healthy.
-        Also removes history records older than 7 days for performance.
+        try:
+            if self._skills_file.exists():
+                self._graph = nx.read_gml(str(self._skills_file))
+                logger.debug("Loaded skills: %d nodes", self._graph.number_of_nodes())
+            else:
+                self._graph = nx.DiGraph()
+                logger.debug("Created new skills graph")
+        except Exception as exc:
+            logger.error("Graph init failed: %s", exc)
+            self._graph = nx.DiGraph() if _HAS_NETWORKX else None
+    
+    def _save_graph(self) -> bool:
+        """Persist the skills graph to disk."""
+        if not self._graph:
+            return False
+        try:
+            nx.write_gml(self._graph, str(self._skills_file))
+            return True
+        except Exception as exc:
+            logger.error("_save_graph failed: %s", exc)
+            return False
+    
+    def add_skill_path(self, goal: str, steps: List[str]) -> bool:
+        """Add a skill path: goal -> step1 -> step2 -> ..."""
+        if not self._graph:
+            return False
+        
+        try:
+            self._graph.add_node(goal, type="goal")
+            prev = goal
+            for i, step in enumerate(steps):
+                step_id = f"{goal}__step_{i}"
+                self._graph.add_node(step_id, type="step", label=step)
+                self._graph.add_edge(prev, step_id)
+                prev = step_id
+            
+            self._save_graph()
+            logger.debug("Added skill: %s (%d steps)", goal, len(steps))
+            return True
+        except Exception as exc:
+            logger.error("add_skill_path failed: %s", exc)
+            return False
+    
+    def get_skill_path(self, goal: str) -> List[str]:
+        """Get ordered steps for a goal."""
+        if not self._graph or goal not in self._graph:
+            return []
+        
+        try:
+            steps = []
+            for _, successors in nx.bfs_successors(self._graph, goal):
+                for s in successors:
+                    steps.append(self._graph.nodes[s].get("label", s))
+            return steps
+        except Exception:
+            return []
+    
+    def find_similar_goal(self, query: str) -> Optional[str]:
+        """Find a goal matching the query (substring match)."""
+        if not self._graph:
+            return None
+        
+        q = query.lower()
+        for node in self._graph.nodes:
+            if self._graph.nodes[node].get("type") == "goal":
+                if node.lower() in q or q in node.lower():
+                    return node
+        return None
+    
+    # =========================================================================
+    # Layer 3: Preferences (SQLite)
+    # =========================================================================
+    
+    def _init_sql(self) -> None:
+        """Initialize SQLite tables."""
+        try:
+            with sqlite3.connect(str(self._db_path)) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS preferences (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        category TEXT DEFAULT 'general'
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS security_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT,
+                        trigger TEXT NOT NULL,
+                        action TEXT NOT NULL
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS skill_stats (
+                        tool_name TEXT PRIMARY KEY,
+                        usage_count INTEGER DEFAULT 1,
+                        last_used TEXT
+                    )
+                """)
+            logger.debug("SQL tables ready: %s", self._db_path)
+        except Exception as exc:
+            logger.error("SQL init failed: %s", exc)
+    
+    def set_preference(self, key: str, value: str, category: str = "general") -> bool:
+        """Set a user preference."""
+        try:
+            with sqlite3.connect(str(self._db_path)) as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO preferences (key, value, category) VALUES (?, ?, ?)",
+                    (key, value, category),
+                )
+            return True
+        except Exception:
+            return False
+    
+    def get_preference(self, key: str) -> Optional[str]:
+        """Get a user preference."""
+        try:
+            with sqlite3.connect(str(self._db_path)) as conn:
+                row = conn.execute(
+                    "SELECT value FROM preferences WHERE key = ?", (key,)
+                ).fetchone()
+                return row[0] if row else None
+        except Exception:
+            return None
+    
+    def get_all_preferences(self) -> Dict[str, str]:
+        """Get all preferences as key-value dict."""
+        try:
+            with sqlite3.connect(str(self._db_path)) as conn:
+                rows = conn.execute("SELECT key, value FROM preferences").fetchall()
+                return {r[0]: r[1] for r in rows}
+        except Exception:
+            return {}
+    
+    def record_skill_usage(self, tool_name: str) -> bool:
+        """Increment usage count for a successful tool execution.
+        
+        Uses SQLite upsert to create or increment the counter.
+        
+        Args:
+            tool_name: Name of the tool that was executed.
+            
+        Returns:
+            True if recorded successfully, False otherwise.
         """
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                # Optional: Clean history older than 7 days
-                try:
-                    cur = conn.execute(
-                        "DELETE FROM memory WHERE collection = 'history' AND created_at < date('now', '-7 days')"
-                    )
-                    if cur.rowcount > 0:
-                        logger.info(f"Cleaned {cur.rowcount} old history records (>7 days)")
-                except sqlite3.OperationalError:
-                    # Table might not have created_at column in history collection
-                    pass
-                
-                # Run VACUUM to reclaim space
-                conn.execute("VACUUM")
-                
-            db_size_mb = os.path.getsize(self.db_path) / (1024 * 1024)
-            logger.info(f"Database vacuum complete | Size: {db_size_mb:.2f} MB")
-            
-        except sqlite3.OperationalError as e:
-            logger.warning(f"Database vacuum failed (operational error): {e}")
-        except OSError as e:
-            logger.error(f"Database vacuum failed (I/O error): {e}", exc_info=True)
-
-    def _remove_memory(self, collection: str, key: str) -> None:
-        self.store.delete(collection, key)
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("DELETE FROM memory_meta WHERE collection = ? AND key = ?", (collection, key))
-
-
-    def _cleanup_old_memories(self) -> int:
-        removed = 0
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.execute("DELETE FROM memory_meta WHERE expires_at IS NOT NULL AND expires_at < ?", (datetime.now().isoformat(),))
-            removed += cur.rowcount
-
-            cur_total = conn.execute("SELECT COUNT(*) FROM memory").fetchone()
-            total = cur_total[0] if cur_total else 0
-            if total >= self.max_memories:
-                rows = conn.execute("SELECT collection, key FROM memory_meta ORDER BY created_at ASC LIMIT ?", (min(1000, total),)).fetchall()
-                for col, key in rows:
-                    self._remove_memory(col, key)
-                    removed += 1
-
-        return removed
-
-    def clear_collection(self, collection: str) -> int:
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.execute("DELETE FROM memory WHERE collection = ?", (collection,))
-            conn.execute("DELETE FROM memory_meta WHERE collection = ?", (collection,))
-            return cur.rowcount
-
-    def get_stats(self) -> Dict[str, Any]:
-        stats: Dict[str, Any] = {"total_memories": 0, "by_category": {}, "vector_enabled": self._has_vectors, "db_size_bytes": 0}
-        with sqlite3.connect(self.db_path) as conn:
-            for row in conn.execute("SELECT collection, COUNT(*) FROM memory GROUP BY collection"):
-                stats["by_category"][row[0]] = row[1]
-                stats["total_memories"] += row[1]
-
+            with sqlite3.connect(str(self._db_path)) as conn:
+                timestamp = datetime.now().isoformat()
+                conn.execute("""
+                    INSERT INTO skill_stats (tool_name, usage_count, last_used)
+                    VALUES (?, 1, ?)
+                    ON CONFLICT(tool_name) DO UPDATE SET
+                    usage_count = usage_count + 1,
+                    last_used = ?
+                """, (tool_name, timestamp, timestamp))
+            logger.debug("📈 Skill Reinforced: %s", tool_name)
+            return True
+        except Exception as e:
+            logger.error("Failed to record skill: %s", e)
+            return False
+    
+    def get_skill_stats(self) -> Dict[str, Any]:
+        """Get all skill usage statistics.
+        
+        Returns:
+            Dict mapping tool_name to {usage_count, last_used}.
+        """
         try:
-            stats["db_size_bytes"] = os.path.getsize(self.db_path) if os.path.exists(self.db_path) else 0
-        except OSError as e:
-            logger.debug(f"Could not get db size: {e}")
-            stats["db_size_bytes"] = 0
-
-        if self._has_vectors and self.vectors is not None:
-            stats["vector_count"] = len(self.vectors._timestamps)
-            if self.vectors.index_path and os.path.exists(self.vectors.index_path):
-                stats["vector_size_bytes"] = os.path.getsize(self.vectors.index_path)
-
+            with sqlite3.connect(str(self._db_path)) as conn:
+                rows = conn.execute(
+                    "SELECT tool_name, usage_count, last_used FROM skill_stats ORDER BY usage_count DESC"
+                ).fetchall()
+                return {
+                    r[0]: {"usage_count": r[1], "last_used": r[2]} 
+                    for r in rows
+                }
+        except Exception:
+            return {}
+    
+    # =========================================================================
+    # Layer 4: Security (SQLite)
+    # =========================================================================
+    
+    def log_security_event(self, trigger: str, action: str) -> bool:
+        """Log a security event."""
+        try:
+            with sqlite3.connect(str(self._db_path)) as conn:
+                conn.execute(
+                    "INSERT INTO security_logs (timestamp, trigger, action) VALUES (?, ?, ?)",
+                    (datetime.now().isoformat(), trigger, action),
+                )
+            logger.info("Security: %s -> %s", trigger, action)
+            return True
+        except Exception:
+            return False
+    
+    def is_blocked(self, trigger: str) -> bool:
+        """Check if a trigger is blocked."""
+        try:
+            with sqlite3.connect(str(self._db_path)) as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM security_logs WHERE trigger = ? AND action = 'blocked' LIMIT 1",
+                    (trigger,),
+                ).fetchone()
+                return row is not None
+        except Exception:
+            return False
+    
+    # =========================================================================
+    # Context Assembler
+    # =========================================================================
+    
+    def get_full_context(self, query: str) -> Dict[str, Any]:
+        """Assemble full context from all memory layers.
+        
+        Returns:
+            Dict with preferences, relevant_episodes, relevant_skills, is_blocked.
+        """
+        context = {
+            "preferences": self.get_all_preferences(),
+            "relevant_episodes": self.recall_episodes(query, n=5),
+            "relevant_skills": [],
+            "is_blocked": self.is_blocked(query),
+        }
+        
+        # Check for matching skill
+        goal = self.find_similar_goal(query)
+        if goal:
+            context["relevant_skills"] = self.get_skill_path(goal)
+            context["matched_goal"] = goal
+        
+        return context
+    
+    # =========================================================================
+    # Stats
+    # =========================================================================
+    
+    def _vacuum_memory_db(self) -> None:
+        """Vacuum SQLite database to reclaim space and optimize."""
+        try:
+            with sqlite3.connect(str(self._db_path)) as conn:
+                conn.execute("VACUUM")
+            logger.debug("Memory database vacuumed")
+        except Exception as exc:
+            logger.debug("Vacuum failed: %s", exc)
+    
+    def get_stats(self) -> Dict[str, int]:
+        """Get memory statistics."""
+        stats = {"episodic": 0, "skills": 0, "preferences": 0, "security": 0}
+        
+        if self._episodes:
+            try:
+                stats["episodic"] = self._episodes.count()
+            except Exception:
+                pass
+        
+        if self._graph:
+            stats["skills"] = self._graph.number_of_nodes()
+        
+        try:
+            with sqlite3.connect(str(self._db_path)) as conn:
+                stats["preferences"] = conn.execute("SELECT COUNT(*) FROM preferences").fetchone()[0]
+                stats["security"] = conn.execute("SELECT COUNT(*) FROM security_logs").fetchone()[0]
+        except Exception:
+            pass
+        
         return stats
 
 
-class InMemoryMemory(MemoryBackend):
-    def __init__(self) -> None:
-        self._store: List[Dict[str, Any]] = []
-        self._lock = threading.RLock()
 
-    def store(self, collection: str, key: str, value: Dict[str, Any]) -> None:
-        with self._lock:
-            self._store.append({"collection": collection, "key": key, "value": value})
+# =============================================================================
+# Singleton
+# =============================================================================
 
-    def retrieve(self, collection: str, key: str) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            for item in self._store:
-                if item["collection"] == collection and item["key"] == key:
-                    return item["value"]
-            return None
+_instance: Optional[MemoryManager] = None
 
-    def search(self, collection: str, query: Dict[str, Any], limit: int = 10) -> List[Dict[str, Any]]:
-        with self._lock:
-            res: List[Dict[str, Any]] = []
-            text = query.get("text", "") or ""
-            for item in self._store:
-                if item["collection"] != collection:
-                    continue
-                if text and text not in json.dumps(item["value"]):
-                    continue
-                res.append(item["value"])
-                if len(res) >= limit:
-                    break
-            return res
 
-    def delete(self, collection: str, key: str) -> bool:
-        with self._lock:
-            for i, item in enumerate(self._store):
-                if item["collection"] == collection and item["key"] == key:
-                    self._store.pop(i)
-                    return True
-            return False
+def get_memory_manager(**kwargs) -> MemoryManager:
+    """Get or create the MemoryManager singleton."""
+    global _instance
+    if _instance is None:
+        _instance = MemoryManager(**kwargs)
+    return _instance
+
+
+__all__ = ["MemoryManager", "get_memory_manager"]

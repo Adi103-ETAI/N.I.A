@@ -14,7 +14,17 @@ from __future__ import annotations
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, List
+
+# Import LangChain messages for summarization
+try:
+    from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+    _HAS_LANGCHAIN_MESSAGES = True
+except ImportError:
+    _HAS_LANGCHAIN_MESSAGES = False
+    SystemMessage = None  # type: ignore
+    HumanMessage = None  # type: ignore
+    AIMessage = None  # type: ignore
 
 # Import state and agents
 from .state import (
@@ -137,10 +147,18 @@ class NIAGraph:
             self.iris = None
             logger.warning("IRIS agent not available (vision disabled)")
         
+        # Get memory manager for skill tracking
+        try:
+            from core.memory import get_memory_manager
+            self.memory = get_memory_manager()
+        except Exception:
+            self.memory = None
+            logger.debug("MemoryManager not available for skill tracking")
+        
         # Use real TARA if available, otherwise placeholder
         if _HAS_TARA and RealTaraAgent:
-            self.tara = RealTaraAgent(temperature=temperature)
-            logger.info("Using real TARA agent with tools")
+            self.tara = RealTaraAgent(temperature=temperature, memory=self.memory)
+            logger.info("Using real TARA agent with tools (skill tracking enabled)")
         else:
             self.tara = TaraAgentPlaceholder()
             logger.info("Using TARA placeholder (tools not available)")
@@ -209,9 +227,18 @@ class NIAGraph:
             }
         )
         
-        # Add edges from specialists to END
+        # Add edge from IRIS to END
         graph.add_edge(AGENT_IRIS, END)
-        graph.add_edge(AGENT_TARA, END)
+        
+        # Add conditional edges from TARA (allows looping back for Active Listening)
+        graph.add_conditional_edges(
+            AGENT_TARA,
+            self._route_from_tara,
+            {
+                AGENT_SUPERVISOR: AGENT_SUPERVISOR,
+                AGENT_END: END,
+            }
+        )
         
         # Initialize checkpointer for persistence
         self._checkpointer = self._init_checkpointer()
@@ -225,9 +252,84 @@ class NIAGraph:
             self._compiled = graph.compile()
             logger.info("NIA graph compiled (no persistence)")
     
+    def _summarize_oldest(self, messages: List) -> List:
+        """Compress oldest messages into a summary if limit exceeded.
+        
+        This prevents context window overflow by summarizing old messages
+        into a concise summary paragraph.
+        
+        Args:
+            messages: List of message objects.
+            
+        Returns:
+            Compressed message list if over limit, original otherwise.
+        """
+        MAX_HISTORY = 50  # Balanced depth for deep work
+        PRUNE_COUNT = 15  # Summarize a chunk of 15 messages at a time
+        
+        if len(messages) <= MAX_HISTORY:
+            return messages
+        
+        if not _HAS_LANGCHAIN_MESSAGES:
+            # Fallback: just slice if LangChain not available
+            logger.warning("LangChain messages not available for summarization, truncating")
+            return messages[:MAX_HISTORY]
+        
+        logger.info(f"🧹 Pruning: History length {len(messages)} > {MAX_HISTORY}. Compressing...")
+        
+        # 1. Protect the System Prompt (Index 0)
+        system_prompt = messages[0]
+        
+        # 2. Identify the chunk to summarize
+        # Skip Index 0 (System), take the next PRUNE_COUNT messages
+        to_summarize = messages[1:1 + PRUNE_COUNT]
+        remaining = messages[1 + PRUNE_COUNT:]
+        
+        # 3. Generate Summary using supervisor's model
+        summary_request = [
+            SystemMessage(content=(
+                "You are a helpful assistant. Summarize the following conversation "
+                "into a concise context paragraph. Preserve key constraints, facts, "
+                "and user goals. Keep it under 200 words."
+            )),
+            HumanMessage(content=f"Conversation to summarize:\n{to_summarize}")
+        ]
+        
+        try:
+            # Use supervisor's model for summarization
+            if hasattr(self.supervisor, '_llm') and self.supervisor._llm:
+                response = self.supervisor._llm.invoke(summary_request)
+                summary_text = response.content if hasattr(response, 'content') else str(response)
+            else:
+                # Fallback: just slice
+                logger.warning("No LLM available for summarization, truncating")
+                return messages[:MAX_HISTORY]
+            
+            # 4. Create the Summary Message
+            summary_msg = SystemMessage(content=f"📝 [PREVIOUS CONTEXT SUMMARY]: {summary_text}")
+            
+            # 5. Reconstruct: [System Prompt] + [New Summary] + [Recent Messages]
+            new_messages = [system_prompt, summary_msg] + remaining
+            logger.info(f"🧹 Pruned {PRUNE_COUNT} messages into summary. New length: {len(new_messages)}")
+            return new_messages
+            
+        except Exception as e:
+            logger.error(f"❌ Summarization failed: {e}")
+            return messages  # Fail safe: return original list
+    
     def _supervisor_node(self, state: AgentState) -> AgentState:
-        """Supervisor node function."""
+        """Supervisor node function with smart summarization."""
         logger.debug("Executing supervisor node")
+        
+        # 1. Manage Memory (Summarize if needed)
+        current_messages = state.get("messages", [])
+        clean_messages = self._summarize_oldest(current_messages)
+        
+        # Update state if messages were pruned
+        if len(clean_messages) < len(current_messages):
+            state = {**state, "messages": clean_messages}
+        
+        # 2. Proceed with Supervisor Logic
         return self.supervisor.process(state)
     
     def _iris_node(self, state: AgentState) -> AgentState:
@@ -236,15 +338,66 @@ class NIAGraph:
         return self.iris.process(state)
     
     def _tara_node(self, state: AgentState) -> AgentState:
-        """TARA node function."""
+        """TARA node function - appends command suffix to force tool execution."""
         logger.debug("Executing TARA node")
+        
+        # Append command suffix to force tool execution (not chatty responses)
+        # BUT skip for JSON_CMD messages (they are already structured commands)
+        messages = state.get("messages", [])
+        if messages:
+            # Find the last human message and append the execution directive
+            for i in range(len(messages) - 1, -1, -1):
+                msg = messages[i]
+                if hasattr(msg, "type") and msg.type == "human":
+                    original = msg.content
+                    
+                    # Skip JSON protocol messages - they're already structured
+                    if original.strip().startswith("JSON_CMD:"):
+                        logger.debug("Skipping suffix for JSON_CMD message")
+                        break
+                    
+                    # Append execution directive to regular messages
+                    if "(EXECUTE TOOL ONLY" not in original:
+                        from langchain_core.messages import HumanMessage
+                        messages[i] = HumanMessage(content=f"{original} (EXECUTE TOOL ONLY - NO CHAT)")
+                    break
+            state = {**state, "messages": messages}
+        
         return self.tara.process(state)
+    
+    def _route_from_tara(self, state: AgentState) -> str:
+        """Route from TARA based on the 'next' field.
+        
+        This enables Active Listening loop: TARA can return to supervisor
+        to complete the user's original request after saving preferences.
+        """
+        next_agent = state.get("next", AGENT_END)
+        
+        # If TARA specifically requested to go back to supervisor (Active Listening)
+        if next_agent == "supervisor" or next_agent == AGENT_SUPERVISOR:
+            logger.info("🔄 TARA -> Supervisor: Active Listening loop")
+            return AGENT_SUPERVISOR
+        
+        # Default: End the turn
+        return AGENT_END
     
     def _route_from_supervisor(self, state: AgentState) -> str:
         """Determine next node based on supervisor's routing decision."""
+        messages = state.get("messages", [])
+        
+        # =====================================================================
+        # 0. ⚡ PRIORITY CHECK: JSON Command Protocol
+        # If the brain outputted our special JSON command, force route to TARA.
+        # =====================================================================
+        if messages:
+            last_message = messages[-1]
+            if hasattr(last_message, "content") and isinstance(last_message.content, str):
+                if "JSON_CMD:" in last_message.content:
+                    logger.info("⚡ Router: Intercepting JSON_CMD -> Routing to TARA")
+                    return AGENT_TARA
+        
         # 1. FORCE VISION ROUTING (Keyword Override)
         # We check this first to ensure camera commands go to IRIS immediately.
-        messages = state.get("messages", [])
         last_user_msg = ""
         
         # Safely extract the last user message text

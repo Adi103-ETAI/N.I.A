@@ -83,6 +83,7 @@ TARA handles ALL of these tasks. You MUST route to TARA for:
 - Web searches, current information, real-time data (weather, prices, news, stocks)
 - Math calculations, equations, analysis
 - Any technical or factual queries requiring external data
+- **MEMORY OPERATIONS: "remember that", "save this", "note that", "don't forget"**
 
 ### IRIS (Vision Agent) - ROUTE:IRIS:
 IRIS handles:
@@ -96,39 +97,47 @@ IRIS handles:
 2. DO NOT simulate actions (like "Opening Notepad..." without actually routing)
 3. DO NOT make up prices, weather, or any real-time data
 4. DO NOT pretend to perform system operations
-5. ALWAYS route to TARA for: search, open, close, check, system, calculate, weather, price, stats
+5. **DO NOT say "I will remember that" - you have NO memory. Route to TARA!**
+6. ALWAYS route to TARA for: search, open, close, check, system, calculate, weather, price, stats
 
-## HOW TO ROUTE
+=== 🧠 ACTIVE LISTENING (CRITICAL) ===
+You are a Long-Term Memory System. Your goal is to learn about the user.
 
-When routing, respond with EXACTLY this format:
-"I'll [brief action description]
-ROUTE:TARA: [detailed task for TARA]"
+RULES FOR PREFERENCE EXTRACTION:
+1.  **SCAN FIRST:** Before answering, scan the user's input for any personal facts, preferences, or traits (e.g., "I love simple code", "My name is Raj", "I hate comments").
+2.  **ACTION PRIORITY:** If you find a preference, you MUST call `save_user_preference` **IMMEDIATELY**.
+    * ❌ DO NOT write the code yet.
+    * ❌ DO NOT say "I will save this."
+    * ✅ ROUTE:TARA: save_user_preference(key="...", value="...")
+3.  **THE LOOP:** Understand that calling a tool does NOT end the conversation.
+    * Step 1: You call `save_user_preference` via ROUTE:TARA.
+    * Step 2: The system executes it.
+    * Step 3: You will be called AGAIN to generate the final answer (the Python code).
+    * THEREFORE: Save the data FIRST. The code can wait 1 second.
 
-Or for vision:
-"Let me look at that.
-ROUTE:IRIS: [detailed task for IRIS]"
+EXAMPLE:
+User: "Write a script, I hate comments."
+✅ Correct: ROUTE:TARA: save_user_preference(key="code_style", value="hates comments")
+❌ Wrong: Immediately outputting the script without saving the preference
 
-## EXAMPLES
+## HOW TO ROUTE (CLEAN HANDOFF)
 
-User: "Check system health"
-CORRECT: "I'll check that for you.
-ROUTE:TARA: Get CPU and RAM usage statistics"
+When routing, send CLEAN COMMANDS. Do NOT add conversational filler.
+Format: "ROUTE:TARA: [exact command]"
 
-User: "Open brave browser"  
-CORRECT: "Opening that now.
-ROUTE:TARA: Open the brave browser application"
+**CORRECT:**
+User: "Remember that I love Python"
+→ "ROUTE:TARA: Save preference: user loves Python"
 
-User: "What's the price of bitcoin?"
-CORRECT: "Let me look that up.
-ROUTE:TARA: Search for current bitcoin price"
+User: "Open brave browser"
+→ "ROUTE:TARA: Open brave browser"
 
-User: "What's the weather in Mumbai?"
-CORRECT: "I'll check the weather.
-ROUTE:TARA: Search for current weather in Mumbai"
+User: "Write code in Rust, my favorite"
+→ "ROUTE:TARA: Save preference: favorite language is Rust" (then continue with the code)
 
-WRONG: "Bitcoin is currently $45,000" (NEVER make up data!)
-WRONG: "Opening Notepad for you..." (without ROUTE:TARA)
-WRONG: "CPU usage is 25%" (NEVER guess system stats!)
+**WRONG:**
+→ "I'll remember that for you!" (NO! Route to TARA!)
+→ "Sure, let me go ahead and open that for you..." (Too verbose!)
 
 ## GENERAL CONVERSATION
 
@@ -167,6 +176,9 @@ TARA_ROUTING_KEYWORDS = [
     "url", "link", "website", "webpage", "http", "www", "go to", "navigate",
     # Math
     "calculate", "solve", "math", "equation", "compute", "analyze", "sum", "multiply",
+    # Memory/Preferences (CRITICAL: Forces routing for save operations)
+    "remember", "save", "note", "forget", "preference", "prefer", "like", "hate", "love",
+    "store", "record", "i am a", "i'm a", "my name", "call me",
 ]
 
 # Keywords that trigger IRIS routing
@@ -221,6 +233,9 @@ class SupervisorAgent:
         supervisor = SupervisorAgent()
         state = supervisor.process(state)
     """
+    
+    # Sliding window limit to prevent context overflow
+    MAX_HISTORY = 10
     
     def __init__(
         self,
@@ -318,6 +333,100 @@ class SupervisorAgent:
                 "final_response": "I didn't receive any input. How can I help you?",
             }
         
+        # =================================================================
+        # ⚡ SHORT-CIRCUIT TRAP: Send raw TOOL: command to bypass TARA's LLM
+        # This constructs regex-ready command that TARA executes immediately
+        # =================================================================
+        user_input_raw = ""
+        user_input_lower = ""
+        for msg in reversed(messages):
+            if _HAS_LANGCHAIN and hasattr(msg, "type") and msg.type == "human":
+                user_input_raw = msg.content
+                user_input_lower = msg.content.lower()
+                break
+            elif isinstance(msg, dict) and msg.get("role") == "user":
+                user_input_raw = msg.get("content", "")
+                user_input_lower = user_input_raw.lower()
+                break
+        
+        # ONLY explicit "Hard" commands trigger Short-Circuit
+        # Soft preferences ("I like", "prefer") are handled by LLM Active Listening
+        memory_triggers = [
+            "remember that", 
+            "save this", 
+            "note that", 
+            "don't forget",
+            "set my preference",
+            "set my setting",
+            "store this",
+        ]
+        
+        # 🛑 LOOP BREAKER: Check if we JUST came back from saving
+        last_msg = messages[-1] if messages else None
+        just_saved_preference = False
+        if _HAS_LANGCHAIN and hasattr(last_msg, "content"):
+            msg_content = str(last_msg.content)
+            if "Preference saved" in msg_content or "SAVED TO DATABASE" in msg_content:
+                just_saved_preference = True
+                logger.info("🛑 Loop Breaker: Action already completed. Skipping re-trigger.")
+        
+        # 🛑 GUARD: Do NOT short-circuit if it's a question (read request)
+        read_indicators = ["what", "show", "list", "tell me", "how many", "do you know"]
+        is_question = (
+            user_input_lower.endswith("?") or
+            any(user_input_lower.startswith(ind) for ind in read_indicators) or
+            "?" in user_input_lower
+        )
+        
+        if any(trigger in user_input_lower for trigger in memory_triggers) and not is_question and not just_saved_preference:
+            import json  # Import locally for bulletproof JSON serialization
+            
+            logger.info("⚡ Supervisor: Short-circuiting TARA (Clean Input Mode)")
+            
+            # =============================================================
+            # EXTRACT CLEAN INPUT (Strip Memory Context)
+            # The engine injects memory with "\n\nUser Input: " delimiter
+            # =============================================================
+            if "User Input:" in user_input_raw:
+                # Split and take the last part (the actual user message)
+                clean_text = user_input_raw.split("User Input:")[-1].strip()
+                logger.debug("Extracted clean input from augmented prompt")
+            else:
+                clean_text = user_input_raw.strip()
+            
+            # Create full payload with tool name AND args
+            payload = {
+                "tool": "save_user_preference",
+                "args": {
+                    "key": "user_fact",
+                    "value": clean_text  # Use clean text, not raw
+                }
+            }
+            
+            # Strict serialization: Compact mode removes all internal spaces
+            json_clean = json.dumps(payload, separators=(',', ':'))
+            
+            # Construct command with tight prefix (no space after colon)
+            command_text = f"JSON_CMD:{json_clean}"
+            
+            # Build as HumanMessage so TARA sees it as a task
+            if _HAS_LANGCHAIN:
+                from langchain_core.messages import HumanMessage
+                command_message = HumanMessage(content=command_text)
+            else:
+                command_message = {"role": "user", "content": command_text}
+            
+            return {
+                **state,
+                "messages": [command_message],
+                "next": AGENT_TARA,
+                "final_response": None,
+                "route_reason": "Memory operation (JSON Protocol)",
+            }
+        # =================================================================
+        # END SHORT-CIRCUIT TRAP
+        # =================================================================
+        
         # Get supervisor response
         response_text = self._get_response(messages)
         
@@ -338,18 +447,115 @@ class SupervisorAgent:
             "route_reason": route_reason,
         }
     
+    def _prune_messages(self, messages: list) -> list:
+        """Apply sliding window to prevent context overflow.
+        
+        Keeps system message (if present) + last MAX_HISTORY messages.
+        Old messages are safely discarded since they're stored in ChromaDB.
+        
+        Args:
+            messages: Full message history.
+            
+        Returns:
+            Pruned message list within context limits.
+        """
+        if len(messages) <= self.MAX_HISTORY:
+            return messages
+        
+        # Separate system message from conversation
+        system_msg = None
+        conversation = []
+        
+        for msg in messages:
+            if _HAS_LANGCHAIN and hasattr(msg, "type"):
+                if msg.type == "system":
+                    system_msg = msg
+                else:
+                    conversation.append(msg)
+            elif isinstance(msg, dict) and msg.get("role") == "system":
+                system_msg = msg
+            else:
+                conversation.append(msg)
+        
+        # Keep last MAX_HISTORY messages
+        recent = conversation[-self.MAX_HISTORY:]
+        
+        # Rebuild with system message first
+        if system_msg:
+            pruned = [system_msg] + recent
+        else:
+            pruned = recent
+        
+        logger.debug("Pruned messages: %d -> %d", len(messages), len(pruned))
+        return pruned
+    
     def _get_response(self, messages: list) -> str:
         """Get response from LLM with automatic backup model fallback.
         
         If the primary model (405B) fails, automatically switches to 70B backup.
         """
+        # Apply sliding window pruning to prevent context overflow
+        pruned_messages = self._prune_messages(messages)
+        
+        # =====================================================================
+        # 👂 ACTIVE LISTENING: Dynamic Input Injection
+        # If user input contains preference keywords, inject a "whisper" to force
+        # the LLM to save the preference BEFORE answering.
+        # =====================================================================
+        soft_triggers = ["i love", "i like", "i prefer", "i hate", "my favorite", "i am a", "my name is"]
+        user_input_lower = ""
+        
+        # Extract user input for soft trigger check
+        for msg in reversed(pruned_messages):
+            if _HAS_LANGCHAIN and hasattr(msg, "type") and msg.type == "human":
+                user_input_lower = msg.content.lower()
+                break
+            elif isinstance(msg, dict) and msg.get("role") == "user":
+                user_input_lower = msg.get("content", "").lower()
+                break
+        
+        # =====================================================================
+        # 🛑 LOOP BREAKER: Check if we JUST came back from saving
+        # Prevents infinite loop when preference keywords remain in history
+        # =====================================================================
+        just_saved_preference = False
+        if pruned_messages:
+            last_msg = pruned_messages[-1]
+            if _HAS_LANGCHAIN and hasattr(last_msg, "content"):
+                msg_content = str(last_msg.content)
+                if "Preference saved" in msg_content or "Preference Saved" in msg_content:
+                    just_saved_preference = True
+                    logger.info("🛑 Active Listening: Preference already saved. Skipping injection.")
+        
+        # Inject whisper instruction if preference detected AND not just saved
+        if any(trigger in user_input_lower for trigger in soft_triggers) and not just_saved_preference:
+            logger.info("👂 Active Listening: Detected preference. Injecting JSON instruction.")
+            
+            if _HAS_LANGCHAIN:
+                from langchain_core.messages import HumanMessage
+                # Use HumanMessage to maintain chat structure
+                # Instruct to use JSON_CMD format which router already handles
+                injection = HumanMessage(content="""
+[SYSTEM INTERVENTION]
+The user just expressed a personal preference. 
+You MUST save this immediately using the JSON Short-Circuit Protocol.
+OUTPUT EXACTLY THIS FORMAT:
+JSON_CMD:{"tool":"save_user_preference","args":{"key":"preference_key","value":"preference_value"}}
+
+Replace "preference_key" with a descriptive key (e.g., "code_style", "language_preference").
+Replace "preference_value" with what the user expressed.
+Do not answer the user's question yet. Save the preference data FIRST.
+""")
+                # Append to messages for this inference only
+                pruned_messages = list(pruned_messages) + [injection]
+        
         response = None
         
         # ATTEMPT 1: Primary Model
         if self._llm and self._prompt:
             try:
                 chain = self._prompt | self._llm
-                result = chain.invoke({"messages": messages})
+                result = chain.invoke({"messages": pruned_messages})
                 response = result.content
             except Exception as exc:
                 logger.warning("⚠️ Primary Brain Failed: %s. Engaging Backup (70B)...", exc)
@@ -359,16 +565,16 @@ class SupervisorAgent:
                     backup_llm = self._get_backup_llm()
                     if backup_llm:
                         backup_chain = self._prompt | backup_llm
-                        result = backup_chain.invoke({"messages": messages})
+                        result = backup_chain.invoke({"messages": pruned_messages})
                         response = result.content
                         logger.info("Backup model succeeded")
                     else:
-                        response = self._fallback_response(messages)
+                        response = self._fallback_response(pruned_messages)
                 except Exception as backup_exc:
                     logger.exception("Backup model also failed: %s", backup_exc)
-                    response = self._fallback_response(messages)
+                    response = self._fallback_response(pruned_messages)
         else:
-            response = self._fallback_response(messages)
+            response = self._fallback_response(pruned_messages)
         
         # APPLY THE ROUTING SAFETY NET
         # Extract last user message for keyword checking

@@ -45,18 +45,37 @@ except ImportError:
 # TARA System Prompt Template
 # =============================================================================
 
-TARA_SYSTEM_PROMPT = """You are TARA, the Technical Agent for Reasoning & Analysis.
-You are the Executive Operator of NIA, handling system-level tasks.
+TARA_SYSTEM_PROMPT = """You are TARA (Tool-Augmented Robotic Assistant).
 
+=== PROTOCOL (READ THIS FIRST) ===
+1. You are NOT a conversationalist. You are a DOER.
+2. If the user's request matches a tool, you MUST execute that tool immediately.
+3. Do NOT say "I will do that" or "Understood" or "I have noted that". JUST RUN THE TOOL.
+4. Do NOT make up results. Do NOT pretend to execute. Actually call the tool.
+5. If the user asks to 'remember', 'save', 'note', or 'set' something → MUST use 'save_user_preference'.
+6. If no tool matches the request, respond with exactly: NO_TOOL_MATCH
+
+=== AVAILABLE TOOLS ===
 {tool_descriptions}
 
-RULES:
-1. Act IMMEDIATELY. Do not ask for confirmation.
-2. Use the tool format above when you need to perform an action.
-3. After a tool executes, provide a brief summary of the result.
-4. For browsers, default to 'brave' unless specified.
-5. Be concise. One sentence responses when possible.
-6. If no tool is needed, just respond directly.
+=== TOOL CALL FORMAT ===
+When executing a tool, use EXACTLY this format:
+TOOL: tool_name
+ARGS: {{"param1": "value1", "param2": "value2"}}
+
+=== MEMORY COMMANDS (MANDATORY TOOL EXECUTION) ===
+These user phrases REQUIRE the save_user_preference tool:
+- "remember that I...", "save this...", "note that...", "don't forget..."
+- "I prefer...", "I like...", "I hate...", "I love...", "I am a..."
+→ You MUST call: TOOL: save_user_preference ARGS: {{"key": "...", "value": "..."}}
+
+=== BANNED RESPONSES ===
+NEVER say these phrases without executing a tool:
+- "I will remember that" ❌
+- "Noted" ❌
+- "I have saved that" ❌
+- "Understood, I'll keep that in mind" ❌
+→ These are LIES. You have NO memory. CALL THE TOOL.
 """
 
 
@@ -75,13 +94,15 @@ class TaraAgent:
         print(result)  # "CPU Load: 12.5% | RAM Usage: 45.2%..."
     """
     
-    def __init__(self, temperature: float = 0.3) -> None:
+    def __init__(self, temperature: float = 0.3, memory: Any = None) -> None:
         """Initialize TARA agent.
         
         Args:
             temperature: LLM temperature (lower = more deterministic)
+            memory: MemoryManager instance for skill tracking (optional)
         """
         self.temperature = temperature
+        self.memory = memory  # For skill mastery tracking
         self._llm = None
         self._initialized = False
         
@@ -188,7 +209,13 @@ class TaraAgent:
         # Execute with error handling
         try:
             result = tool.func(**args)
-            return str(result)
+            result_str = str(result)
+            
+            # Record successful execution for skill mastery tracking
+            if self.memory and not result_str.startswith("Error:") and not result_str.startswith("Tool error"):
+                self.memory.record_skill_usage(tool_name)
+            
+            return result_str
         except TypeError as e:
             # Argument mismatch
             return f"Error: Invalid arguments for '{tool_name}': {e}"
@@ -208,6 +235,9 @@ class TaraAgent:
         """
         if not self._initialized or not self._llm:
             return "TARA is not initialized. Check dependencies."
+        
+        # Track execution chain for procedural memory (skill chains)
+        execution_chain = []
         
         try:
             messages = [
@@ -248,18 +278,31 @@ class TaraAgent:
                     # Execute the tool
                     tool_result = self._execute_tool(tool_call["tool"], tool_call["args"])
                     
+                    # Track successful tool execution for skill chain
+                    if not tool_result.startswith("Error:") and not tool_result.startswith("Tool error"):
+                        execution_chain.append(tool_call["tool"])
+                    
                     # Add to conversation and let LLM summarize
                     messages.append(AIMessage(content=response_text))
                     messages.append(HumanMessage(content=f"Tool result: {tool_result}"))
                     
                     # If this is the last iteration, return the tool result directly
                     if iteration == max_iterations - 1:
-                        return tool_result
+                        break  # Exit loop to save skill chain
                 else:
                     # No tool call - return the response
+                    # Save skill chain before returning
+                    if self.memory and execution_chain:
+                        logger.info("🧠 Learning Skill Chain: %s", execution_chain)
+                        self.memory.add_skill_path(goal=task[:100], steps=execution_chain)
                     return response_text
             
-            return "Task completed."
+            # Save skill chain for multi-tool tasks
+            if self.memory and execution_chain:
+                logger.info("🧠 Learning Skill Chain: %s", execution_chain)
+                self.memory.add_skill_path(goal=task[:100], steps=execution_chain)
+            
+            return tool_result if 'tool_result' in dir() else "Task completed."
             
         except Exception as exc:
             logger.exception("TARA execution error: %s", exc)
@@ -313,21 +356,85 @@ class TaraAgent:
         messages = state.get("messages", [])
         if not messages:
             response = "No task provided to TARA."
-        else:
-            # Get the last human message as the task
-            task = ""
-            for msg in reversed(messages):
-                if hasattr(msg, "type") and msg.type == "human":
-                    task = msg.content
-                    break
-                elif hasattr(msg, "content"):
-                    task = msg.content
-                    break
+            return {
+                **state,
+                "messages": [AIMessage(content=response)],
+                "next": "__end__",
+            }
+        
+        # Get the last message as the task
+        task = ""
+        for msg in reversed(messages):
+            if hasattr(msg, "type") and msg.type == "human":
+                task = msg.content
+                break
+            elif hasattr(msg, "content"):
+                task = msg.content
+                break
+        
+        if not task:
+            response = "Could not extract task from messages."
+            return {
+                **state,
+                "messages": [AIMessage(content=response)],
+                "next": "__end__",
+            }
+        
+        # =============================================================
+        # ⚡ JSON PROTOCOL RECEIVER: Bulletproof command execution
+        # =============================================================
+        if task.strip().startswith("JSON_CMD:"):
+            import json
+            logger.info("⚡ TARA: Received JSON Command - Bypassing LLM")
             
-            if task:
-                response = self.run(task)
-            else:
-                response = "Could not extract task from messages."
+            try:
+                # Extract JSON string after prefix
+                json_str = task.replace("JSON_CMD:", "", 1).strip()
+                
+                # Parse the JSON payload
+                data = json.loads(json_str)
+                tool_name = data["tool"]
+                tool_args = data["args"]
+                
+                logger.info("⚡ TARA: Executing %s with args: %s", tool_name, list(tool_args.keys()))
+                
+                # Execute immediately without LLM
+                result = self._execute_tool(tool_name, tool_args)
+                
+                # Return to supervisor to continue with original user request
+                return {
+                    **state,
+                    "messages": list(messages) + [AIMessage(content=f"✅ SYSTEM: Preference saved ({result}). Now answer the user's original request.")],
+                    "next": "supervisor",  # LOOP BACK to fulfill main task
+                }
+                
+            except json.JSONDecodeError as e:
+                logger.error("⚡ TARA: JSON Parse Error: %s", e)
+                return {
+                    **state,
+                    "messages": list(messages) + [AIMessage(content=f"❌ JSON Protocol Error: {e}")],
+                    "next": "supervisor",  # Let supervisor handle the error
+                }
+            except KeyError as e:
+                logger.error("⚡ TARA: Missing key in JSON: %s", e)
+                return {
+                    **state,
+                    "messages": list(messages) + [AIMessage(content=f"❌ Missing field in command: {e}")],
+                    "next": "supervisor",  # Let supervisor handle the error
+                }
+            except Exception as e:
+                logger.error("⚡ TARA: Execution Error: %s", e)
+                return {
+                    **state,
+                    "messages": list(messages) + [AIMessage(content=f"❌ Tool Error: {e}")],
+                    "next": "supervisor",  # Let supervisor handle the error
+                }
+        # =============================================================
+        # END JSON PROTOCOL RECEIVER
+        # =============================================================
+        
+        # Standard execution path (invoke LLM)
+        response = self.run(task)
         
         # Update state
         new_messages = list(messages) + [AIMessage(content=response)]

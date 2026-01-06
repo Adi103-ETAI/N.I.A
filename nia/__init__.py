@@ -83,7 +83,7 @@ from .graph import (
 )
 
 # Package metadata
-__version__ = "1.1.0"
+__version__ = "2.3.0"
 __author__ = "NIA Team"
 
 __all__ = [
