@@ -38,20 +38,22 @@ Version: 2.0.0
 from __future__ import annotations
 
 import base64
-import logging
+import json
 import mimetypes
 import os
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from dotenv import load_dotenv
+from core.logger import setup_logger
 
 # Load environment variables
 load_dotenv()
 
 # Configure module logger
-logger = logging.getLogger(__name__)
+logger = setup_logger("Models")
 
 
 # =============================================================================
@@ -86,169 +88,62 @@ class ModelSpec:
     speed_tier: str = "medium"  # 'fast', 'medium', 'slow'
     
 
-# Model catalog
-MODEL_CATALOG: Dict[str, ModelSpec] = {
-    # NVIDIA NIM Models (Free Tier Available)
-    "nvidia/llama-3.1-405b": ModelSpec(
-        provider=Provider.NVIDIA,
-        model_name="meta/llama-3.1-405b-instruct",
-        display_name="Llama 3.1 405B (NVIDIA)",
-        context_window=128000,
-        supports_function_calling=True,
-        cost_tier="free",
-        speed_tier="slow",
-    ),
-    "nvidia/llama-3.1-70b": ModelSpec(
-        provider=Provider.NVIDIA,
-        model_name="meta/llama-3.1-70b-instruct",
-        display_name="Llama 3.1 70B (NVIDIA)",
-        context_window=128000,
-        supports_function_calling=True,
-        cost_tier="free",
-        speed_tier="medium",
-    ),
-    "nvidia/llama-3.1-8b": ModelSpec(
-        provider=Provider.NVIDIA,
-        model_name="meta/llama-3.1-8b-instruct",
-        display_name="Llama 3.1 8B (NVIDIA)",
-        context_window=128000,
-        supports_function_calling=True,
-        cost_tier="free",
-        speed_tier="fast",
-    ),
-    "nvidia/llama-3.2-vision": ModelSpec(
-        provider=Provider.NVIDIA,
-        model_name="meta/llama-3.2-90b-vision-instruct",
-        display_name="Llama 3.2 90B Vision (NVIDIA)",
-        context_window=128000,
-        supports_vision=True,
-        cost_tier="free",
-        speed_tier="slow",
-    ),
-    "nvidia/llama-3.2-11b-vision": ModelSpec(
-        provider=Provider.NVIDIA,
-        model_name="meta/llama-3.2-11b-vision-instruct",
-        display_name="Llama 3.2 11B Vision (NVIDIA)",
-        context_window=128000,
-        supports_vision=True,
-        cost_tier="free",
-        speed_tier="medium",
-    ),
-    "nvidia/nemotron": ModelSpec(
-        provider=Provider.NVIDIA,
-        model_name="nvidia/llama-3.1-nemotron-70b-instruct",
-        display_name="Nemotron 70B (NVIDIA)",
-        context_window=128000,
-        supports_function_calling=True,
-        cost_tier="free",
-        speed_tier="medium",
-    ),
-    "nvidia/mistral-nemo": ModelSpec(
-        provider=Provider.NVIDIA,
-        model_name="nv-mistralai/mistral-nemo-12b-instruct",
-        display_name="Mistral Nemo 12B (NVIDIA)",
-        context_window=128000,
-        cost_tier="free",
-        speed_tier="fast",
-    ),
+# =============================================================================
+# Catalog Loader (Dynamic from JSON)
+# =============================================================================
+
+def _load_catalog() -> Dict[str, ModelSpec]:
+    """Load model catalog from external JSON file.
     
-    # OpenAI Models
-    "openai/gpt-4o": ModelSpec(
-        provider=Provider.OPENAI,
-        model_name="gpt-4o",
-        display_name="GPT-4o (OpenAI)",
-        context_window=128000,
-        supports_vision=True,
-        supports_function_calling=True,
-        cost_tier="high",
-        speed_tier="fast",
-    ),
-    "openai/gpt-4o-mini": ModelSpec(
-        provider=Provider.OPENAI,
-        model_name="gpt-4o-mini",
-        display_name="GPT-4o Mini (OpenAI)",
-        context_window=128000,
-        supports_vision=True,
-        supports_function_calling=True,
-        cost_tier="low",
-        speed_tier="fast",
-    ),
-    "openai/gpt-4-turbo": ModelSpec(
-        provider=Provider.OPENAI,
-        model_name="gpt-4-turbo",
-        display_name="GPT-4 Turbo (OpenAI)",
-        context_window=128000,
-        supports_vision=True,
-        supports_function_calling=True,
-        cost_tier="high",
-        speed_tier="medium",
-    ),
+    Returns:
+        Dictionary mapping model keys to ModelSpec objects.
+        
+    Raises:
+        FileNotFoundError: If catalog.json is missing.
+        json.JSONDecodeError: If catalog.json has invalid JSON.
+    """
+    catalog_path = Path(__file__).parent / "catalog.json"
     
-    # Ollama Models (Local)
-    "ollama/llama3": ModelSpec(
-        provider=Provider.OLLAMA,
-        model_name="llama3",
-        display_name="Llama 3 8B (Ollama)",
-        context_window=8192,
-        is_local=True,
-        cost_tier="free",
-        speed_tier="fast",
-    ),
-    "ollama/llama3.1": ModelSpec(
-        provider=Provider.OLLAMA,
-        model_name="llama3.1",
-        display_name="Llama 3.1 8B (Ollama)",
-        context_window=128000,
-        is_local=True,
-        cost_tier="free",
-        speed_tier="fast",
-    ),
-    "ollama/mistral": ModelSpec(
-        provider=Provider.OLLAMA,
-        model_name="mistral",
-        display_name="Mistral 7B (Ollama)",
-        context_window=32768,
-        is_local=True,
-        cost_tier="free",
-        speed_tier="fast",
-    ),
-    "ollama/llava": ModelSpec(
-        provider=Provider.OLLAMA,
-        model_name="llava",
-        display_name="LLaVA (Ollama)",
-        context_window=4096,
-        supports_vision=True,
-        is_local=True,
-        cost_tier="free",
-        speed_tier="medium",
-    ),
+    if not catalog_path.exists():
+        logger.warning("catalog.json not found, using empty catalog")
+        return {}
     
-    # Groq Models (Fast)
-    "groq/llama-3.1-70b": ModelSpec(
-        provider=Provider.GROQ,
-        model_name="llama-3.1-70b-versatile",
-        display_name="Llama 3.1 70B (Groq)",
-        context_window=128000,
-        cost_tier="low",
-        speed_tier="fast",
-    ),
-    "groq/llama-3.1-8b": ModelSpec(
-        provider=Provider.GROQ,
-        model_name="llama-3.1-8b-instant",
-        display_name="Llama 3.1 8B (Groq)",
-        context_window=128000,
-        cost_tier="free",
-        speed_tier="fast",
-    ),
-    "groq/mixtral": ModelSpec(
-        provider=Provider.GROQ,
-        model_name="mixtral-8x7b-32768",
-        display_name="Mixtral 8x7B (Groq)",
-        context_window=32768,
-        cost_tier="low",
-        speed_tier="fast",
-    ),
-}
+    with open(catalog_path, "r", encoding="utf-8") as f:
+        raw_catalog = json.load(f)
+    
+    # Convert raw dicts to ModelSpec objects
+    catalog = {}
+    for key, spec_dict in raw_catalog.items():
+        catalog[key] = _spec_from_dict(spec_dict)
+    
+    logger.debug("Loaded %d models from catalog.json", len(catalog))
+    return catalog
+
+
+def _spec_from_dict(data: dict) -> ModelSpec:
+    """Convert a dictionary to a ModelSpec object.
+    
+    Args:
+        data: Dictionary with model specification fields.
+        
+    Returns:
+        ModelSpec instance.
+    """
+    return ModelSpec(
+        provider=Provider(data["provider"]),
+        model_name=data["model_name"],
+        display_name=data["display_name"],
+        context_window=data.get("context_window", 4096),
+        supports_vision=data.get("supports_vision", False),
+        supports_function_calling=data.get("supports_function_calling", False),
+        is_local=data.get("is_local", False),
+        cost_tier=data.get("cost_tier", "medium"),
+        speed_tier=data.get("speed_tier", "medium"),
+    )
+
+
+# Load catalog at module level (cached)
+MODEL_CATALOG: Dict[str, ModelSpec] = _load_catalog()
 
 
 # =============================================================================
@@ -630,8 +525,8 @@ class ModelManager:
         self._vision_model = None
         self._current_model = None
         
-        # Logger
-        self.logger = logging.getLogger(__name__)
+        # Logger - use module level logger
+        self.logger = logger  # Reference module-level setup_logger("Models")
         self.logger.info(
             "ModelManager initialized (providers: %s)",
             self.factory.get_available_providers()

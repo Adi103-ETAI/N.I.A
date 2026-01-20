@@ -10,7 +10,7 @@ Classes:
 """
 from __future__ import annotations
 
-import logging
+from core.logger import setup_logger
 import re
 import threading
 import time
@@ -19,7 +19,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 # Configure module logger
-logger = logging.getLogger(__name__)
+logger = setup_logger("NOLA.Security")
 
 
 class SecurityLevel(Enum):

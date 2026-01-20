@@ -107,7 +107,7 @@ def main() -> int:
     parser.add_argument("--status", "-s", action="store_true", help="Print system status and exit")
     parser.add_argument("--debug", "-d", action="store_true", help="Enable debug logging")
     parser.add_argument("--thread-id", "-t", type=str, default="root", help="Conversation thread ID")
-    parser.add_argument("--version", action="version", version="N.I.A. v2.3.1")
+    parser.add_argument("--version", action="version", version="N.I.A. v2.5.0")
     
     args = parser.parse_args()
     
@@ -125,7 +125,7 @@ def main() -> int:
         return 0
     
     # Log startup configuration
-    logger.info("N.I.A. v2.3.1 starting...")
+    logger.info("N.I.A. v2.5.0 starting...")
     logger.info(f"Mode: {'Voice' if args.voice else 'Text'} | Debug: {args.debug} | Thread: {args.thread_id}")
     if args.voice:
         logger.info(f"Wake words: {args.wake_words} | Wake required: {not args.no_wake}")

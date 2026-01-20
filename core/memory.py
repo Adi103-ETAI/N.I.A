@@ -37,7 +37,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.logger import setup_logger
-from core.config import settings
+from core.config import get_settings, get_embedding_function
+
+# Get cached settings singleton
+settings = get_settings()
 
 logger = setup_logger("MEMORY")
 
@@ -118,10 +121,11 @@ class MemoryManager:
     # =========================================================================
     
     def _init_episodic(self) -> None:
-        """Initialize ChromaDB with Default (Free) Embeddings.
+        """Initialize ChromaDB with embeddings from centralized config.
         
-        Uses local all-MiniLM-L6-v2 for semantic understanding.
-        Auto-downloads the model if missing on first run.
+        Uses get_embedding_function() which returns:
+        - OpenAI embeddings if key available
+        - None for default local embeddings (all-MiniLM-L6-v2)
         """
         self._chroma_client = None
         self._episodes = None
@@ -130,17 +134,27 @@ class MemoryManager:
             return
         
         try:
-            # Connect to DB (Persistent Storage) with default embeddings
+            # Connect to DB (Persistent Storage)
             self._chroma_client = chromadb.PersistentClient(
                 path=str(self._vectors_dir),
                 settings=ChromaSettings(anonymized_telemetry=False),
             )
             
-            # Create/Connect to collection (Uses default local model)
-            self._episodes = self._chroma_client.get_or_create_collection(
-                name="episodes"
-            )
-            logger.debug("🧠 Episodic Memory: Connected (Local/Free)")
+            # Get embedding function from centralized config
+            embedding_fn = get_embedding_function()
+            
+            # Create/Connect to collection with appropriate embeddings
+            if embedding_fn:
+                self._episodes = self._chroma_client.get_or_create_collection(
+                    name="episodes",
+                    embedding_function=embedding_fn
+                )
+                logger.debug("🧠 Episodic Memory: Connected (OpenAI Embeddings)")
+            else:
+                self._episodes = self._chroma_client.get_or_create_collection(
+                    name="episodes"
+                )
+                logger.debug("🧠 Episodic Memory: Connected (Local/Free)")
             
         except Exception as exc:
             logger.error("❌ ChromaDB Init Failed: %s", exc)

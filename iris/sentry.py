@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import io
-import logging
 import threading
 from typing import Callable, List, Optional, Tuple
 
-logger = logging.getLogger(__name__)
+from core.logger import setup_logger
+
+logger = setup_logger("IRIS.Sentry")
 
 # Try imports
 try:

@@ -1,0 +1,19 @@
+╭────────────────────────────────────────────────────────────╮
+│                      NIA Commands                          │
+├────────────────────────────────────────────────────────────┤
+│  General:                                                  │
+│    help           - Show this help                         │
+│    status         - Show system status                     │
+│    clear          - Clear the screen                       │
+│    exit/quit      - Exit the assistant                     │
+│                                                            │
+│  Voice:                                                    │
+│    voice on       - Enable voice mode                      │
+│    voice off      - Mute microphone                        │
+│    sentry on/off  - Toggle vision monitoring               │
+│                                                            │
+│  Memory:                                                   │
+│    prefs          - View all saved user preferences        │
+│    history        - Show conversation history              │
+│    clear history  - Clear conversation history             │
+╰────────────────────────────────────────────────────────────╯

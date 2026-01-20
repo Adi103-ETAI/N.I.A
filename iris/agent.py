@@ -54,20 +54,50 @@ except ImportError:
 
 
 # =============================================================================
-# Intent Keywords
+# Config Loader (Dynamic from External Files)
 # =============================================================================
 
-SCREEN_KEYWORDS = [
-    "screen", "window", "monitor", "display", "desktop",
-    "look at this", "what's here", "what do you see",
-    "look at the", "analyze this", "look at my",
-]
+import json
+from pathlib import Path
 
-WEBCAM_KEYWORDS = [
-    "camera", "webcam", "room", "selfie", "photo",
-    "take a picture", "take a photo", "capture",
-    "see me", "look at me", "my face",
-]
+def _load_iris_config() -> dict:
+    """Load IRIS configuration from external files.
+    
+    Returns:
+        Dictionary with intent keywords and vision prompt.
+    """
+    config_dir = Path(__file__).parent / "config"
+    config = {}
+    
+    vision_config_path = Path(__file__).parent.parent / "core" / "config" / "vision.json"
+    try:
+        with open(vision_config_path, "r", encoding="utf-8") as f:
+            vision_cfg = json.load(f)
+            triggers = vision_cfg.get("triggers", {})
+            config["screen_keywords"] = triggers.get("screen", [])
+            config["webcam_keywords"] = triggers.get("camera", [])
+            logger.debug("Loaded keywords from centralized vision.json")
+    except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+        logger.warning(f"Failed to load vision.json: {e}. Using defaults.")
+        config["screen_keywords"] = ["screen", "window", "monitor", "display"]
+        config["webcam_keywords"] = ["camera", "webcam", "photo", "picture"]
+    
+    # Load vision prompt template
+    prompt_path = config_dir / "prompt.txt"
+    if prompt_path.exists():
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            config["vision_prompt"] = f.read()
+    else:
+        config["vision_prompt"] = "User Query: {query}\n\nDescribe what you see."
+    
+    return config
+
+
+# Load at module level (cached)
+_IRIS_CONFIG = _load_iris_config()
+SCREEN_KEYWORDS = _IRIS_CONFIG["screen_keywords"]
+WEBCAM_KEYWORDS = _IRIS_CONFIG["webcam_keywords"]
+VISION_PROMPT_TEMPLATE = _IRIS_CONFIG["vision_prompt"]
 
 
 # =============================================================================
@@ -285,16 +315,8 @@ class IrisAgent:
             
             mime_type = self._get_mime_type(path)
             
-            # Build prompt with observation instructions
-            prompt_text = (
-                f"User Query: {user_input}\n\n"
-                "INSTRUCTIONS:\n"
-                "1. Describe what you see clearly and factually.\n"
-                "2. If analyzing a screen, identify visible applications and windows.\n"
-                "3. Read any visible text accurately.\n"
-                "4. Do NOT guess about things you cannot clearly see.\n"
-                "5. Be concise but thorough."
-            )
+            # Build prompt from external template
+            prompt_text = VISION_PROMPT_TEMPLATE.format(query=user_input)
             
             # Create multimodal message
             message = HumanMessage(content=[

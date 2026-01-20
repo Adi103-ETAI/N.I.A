@@ -20,8 +20,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
-# Import I/O classes
-from .io import HybridTTS, VoskSTT, get_async_tts, get_async_ear
+# Import I/O classes (explicit submodules)
+from .io.speech import HybridTTS, get_async_tts
+from .io.hearing import VoskSTT, get_async_ear
 
 # Centralized logging
 from core.logger import setup_logger
@@ -115,6 +116,7 @@ class NOLAManager:
         # Thread control
         self._is_running = False
         self._is_paused = False
+        self._user_paused = False  # Track if user explicitly paused (vs TTS auto-pause)
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         
@@ -376,6 +378,9 @@ class NOLAManager:
         if not text:
             return False
         
+        # Remember if already paused BEFORE we auto-pause for TTS
+        was_user_paused = self._user_paused
+        
         if block_listening:
             self._is_paused = True
         
@@ -384,7 +389,9 @@ class NOLAManager:
         finally:
             if block_listening:
                 time.sleep(0.3)
-                self._is_paused = False
+                # ONLY resume if user didn't explicitly pause
+                if not was_user_paused:
+                    self._is_paused = False
         
         return result
     
@@ -395,12 +402,14 @@ class NOLAManager:
     def pause_listening(self) -> None:
         """Pause microphone input (releases hardware)."""
         self._is_paused = True
+        self._user_paused = True  # Mark as user-initiated
         self._stt.stop()  # Signal stream to close
         logger.info("🔇 NOLA: Microphone paused (hardware released)")
     
     def resume_listening(self) -> None:
         """Resume microphone input (reopens hardware)."""
         self._is_paused = False
+        self._user_paused = False  # Clear user-pause flag
         logger.info("🎤 NOLA: Microphone resumed (awaiting stream open)")
     
     def wake(self) -> None:

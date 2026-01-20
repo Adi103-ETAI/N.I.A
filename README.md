@@ -8,14 +8,18 @@
 ║    ██╔██╗ ██║   ██║   ███████║     ─────────────────────────────          ║
 ║    ██║╚██╗██║   ██║   ██╔══██║     CLASSIFICATION: DIRECTOR_LEVEL_ACCESS  ║
 ║    ██║ ╚████║██╗██║██╗██║  ██║     DEVELOPER: SentArc Labs                ║
-║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 2.3.1                         ║
+║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 2.5.0 (Stable)                ║
 ║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 ```
 
-### A Modular, Multi-Modal AI System
+### A Production-Ready, Multi-Modal AI System
 
 **Voice • Vision • Tools • Reflexes**
+
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://python.org)
+[![Status](https://img.shields.io/badge/Status-Production%20Ready-green.svg)]()
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
 
@@ -23,38 +27,29 @@
 
 ## 🎯 Overview
 
-**N.I.A.** (Neural Intelligence Assistant) is a privacy-first, modular AI assistant designed for power users. It combines offline voice recognition, vision-based security monitoring, and automated tool execution into a unified system controlled by natural language or zero-latency reflexes.
+**N.I.A.** (Neural Intelligence Assistant) is a privacy-first, modular AI assistant designed for power users. It combines offline voice recognition, vision-based analysis, and automated desktop control into a unified system.
 
-```
-┌─────────────────────────────┬────────────────────────────────────┐
-│ N.I.A. SYSTEM DASHBOARD     │                2026-01-04 12:00:00 │
-├─────────────────────────────┼────────────────────────────────────┤
-│ 🧠 SUBSYSTEMS               │ 📊 RESOURCES                      │
-│ • BRAIN (NIA) : [ON ]       │  CPU: [████░░░░░░]  42%            │
-│ • VOICE (NOLA): [ON ]       │  RAM: [███████░░░]  76%            │
-│ • SENTRY(IRIS): [OFF]       │  DSK: [██░░░░░░░░]  27%            │
-│ • TOOLS (TARA): [ON ]       │                                    │
-├─────────────────────────────┼────────────────────────────────────┤
-│ 💾 MEMORY                   │ 🔐 SECURITY KEYS                  │
-│  RAM : 7.6/10.0 GB          │  NVIDIA API: [LINKED ]             │
-│  DISK: 680.5 GB Free        │  OPENAI API: [LINKED ]             │
-└─────────────────────────────┴────────────────────────────────────┘
-```
+**v2.5.0 "Resurrection" Release Highlights:**
+- 🏛️ **ServiceContainer DI** — No more singleton hacks
+- 🔄 **Unified Async Bridge** — Stable browser automation
+- 📝 **Protocol-based Routing** — Clean agent injection
+- ⚡ **Exponential Backoff** — Resilient retry logic
+- ✅ **Production Ready** — All critical issues resolved
 
 ---
 
 ## 🏗️ Architecture
 
-N.I.A. uses a **Dual-Path Architecture** with four specialized units:
+N.I.A. uses a **LangGraph-based Supervisor Pattern** with four specialized units:
 
 | Unit | Name     | Role                       | Technology                           |
 |------|----------|--------------------------- |--------------------------------------|
 | 🧠  | **NIA**  | Core Brain & Supervisor    | LangGraph + NVIDIA NIM               |
-| 🎤  | **NOLA** | Voice I/O (STT/TTS)        | Vosk (Offline) + Edge TTS (Aria)     |
-| 👁️  | **IRIS** | Vision & Security Sentry   | Llama 3.2 Vision + mss               |
-| 🛠️  | **TARA** | Tool Execution & Automation| Dynamic Registry + 17 Tools          |
+| 🎤  | **NOLA** | Voice I/O (STT/TTS)        | Vosk (Offline) + Edge TTS            |
+| 👁️  | **IRIS** | Vision & Screen Analysis   | Llama 3.2 Vision + mss               |
+| 🛠️  | **TARA** | Tool Execution (v2.0)      | Unified Async Bridge + 50 Tools      |
 
-### Dual-Path Execution Model (v2.3.1)
+### System Architecture (v2.5.0)
 
 ```
                     ┌──────────────────┐
@@ -67,112 +62,96 @@ N.I.A. uses a **Dual-Path Architecture** with four specialized units:
               │  (Fuzzy Command Matching)   │
               └──────────────┬──────────────┘
                              │
-         ┌───────────────────▼───────────────────┐
-         │           🧠 NIA SUPERVISOR           │
-         │         (LangGraph Router)            │
-         └───┬─────────────────────────────┬─────┘
-             │                             │
-    ╔════════▼════════╗           ╔════════▼════════╗
-    ║  PATH A:        ║           ║  PATH B:        ║
-    ║  COGNITIVE      ║           ║  DIRECT         ║
-    ║  ─────────────  ║           ║  ─────────────  ║
-    ║  LLM ↔ LLM      ║           ║  JSON_CMD:{}    ║
-    ║  Conversation   ║           ║  Zero-Latency   ║
-    ╚════════╤════════╝           ╚════════╤════════╝
-             │                             │
-      ┌──────▼──────┐              ┌───────▼───────┐
-      │ 🎤 NOLA     │              │ 🛠️ TARA      │
-      │ 👁️ IRIS     │              │ Direct Exec  │
-      │ Standard    │              │ (No LLM Call) │
-      └─────────────┘              └───────────────┘
+     ┌───────────────────────▼───────────────────────┐
+     │              🏛️ SERVICE CONTAINER             │
+     │  ┌─────────────────────────────────────────┐  │
+     │  │         🧠 NIA SUPERVISOR               │  │
+     │  │     (Protocol-based Agent Routing)      │  │
+     │  └───┬─────────────────────────────┬───────┘  │
+     │      │                             │          │
+     │ ╔════▼════╗   ╔════════╗   ╔═══════▼══════╗   │
+     │ ║  TARA   ║   ║  IRIS  ║   ║    CHAT      ║   │
+     │ ║(Tools)  ║   ║(Vision)║   ║  (General)   ║   │
+     │ ╚════╤════╝   ╚════════╝   ╚══════════════╝   │
+     │      │                                        │
+     │ ┌────▼────────────────────────────────┐       │
+     │ │      🌊 UNIFIED ASYNC BRIDGE        │       │
+     │ │   ThreadPool ↔ asyncio.run() ↔ LLM  │       │
+     │ └─────────────────────────────────────┘       │
+     └───────────────────────────────────────────────┘
 ```
 
-**Path A (Cognitive)**: Standard LLM-to-LLM conversation flow for general queries.
+### Dependency Injection (v2.5.0)
 
-**Path B (Direct)**: JSON Protocol for memory operations and OS control. The Supervisor sends structured `JSON_CMD:{}` payloads directly to TARA, bypassing TARA's LLM entirely for 100% reliable tool execution.
+The `ServiceContainer` replaces all singleton patterns:
 
-### Singleton Pattern
+```python
+from core.container import get_container
 
-The Voice Manager (`NOLAManager`) uses a **Singleton Pattern** for stability:
-- Single instance prevents hardware conflicts
-- Thread-safe microphone access
-- Consistent state across components
+container = get_container()
+memory = container.memory        # 4-Layer Memory
+browser = container.browser_manager  # Playwright
+```
 
 ---
 
-## ⚡ Features
+## ⚡ What's New in v2.5.0
 
-### ⚡ Neural Short-Circuit (v2.3.0)
-Zero-latency tool execution via direct JSON injection:
-- Memory commands bypass LLM entirely
-- `JSON_CMD:{"tool":"save_user_preference",...}` protocol
-- 100% reliable tool execution (no hallucinations)
-- Input sanitization strips memory context before saving
+### 🏛️ ServiceContainer (Dependency Injection)
+- **Before**: `WindowRegistry.__new__()` singleton hacks
+- **After**: Clean `ServiceContainer` with explicit injection
+- Enables unit testing with mock services
 
-### 👂 Active Listening (v2.3.1 NEW)
-Intelligent preference extraction without interrupting:
-- Detects soft preferences ("I love", "I prefer") in conversation
-- Saves facts FIRST, then completes user request
-- Loop-breaker prevents infinite re-triggers
-- Dynamic injection forces LLM to prioritize memory operations
+### 🌊 Unified Async Bridge
+- **Before**: Complex `is_async` detection with heuristics
+- **After**: Single `await tool.ainvoke()` for all tools
+- LangChain's polymorphic `ainvoke()` handles sync/async automatically
 
-### 📈 Skill Mastery Tracking (v2.3.1 NEW)
-Self-reinforcing tool proficiency:
-- Tracks successful tool executions in `skill_stats` table
-- Records usage counts and last-used timestamps
-- Skill chains saved to procedural memory (NetworkX)
-- Enables future "recipe recall" for complex tasks
+### 📝 Protocol-based Agent Routing
+```python
+@runtime_checkable
+class AgentProtocol(Protocol):
+    def process(self, state: Dict) -> Dict: ...
+    def run(self, query: str) -> str: ...
+```
+- Agents can be swapped without changing Supervisor code
+- Type-safe at IDE level, duck-typed at runtime
 
-### 🧠 4-Layer Hybrid Memory
-Intelligent memory system:
-- **Layer 1 (Episodic)**: ChromaDB for semantic search (local embeddings)
-- **Layer 2 (Procedural)**: NetworkX for skill chains
-- **Layer 3 (Preferences)**: SQLite for user facts + skill stats
-- **Layer 4 (Security)**: SQLite for audit logs
+### ⚡ Exponential Backoff
+```python
+# Retry logic with jitter (prevents retry storms)
+delay = min(0.5 * (2 ** attempt) + random.uniform(-0.125, 0.125), 5.0)
+```
 
-### 🔇 True Hardware Mute
-The "Kill Mic" command **physically releases the microphone driver**:
-- Closes the audio input stream entirely
-- No "software mute" — the hardware is truly freed
-- Say "mic on" to reopen the stream
+### ✅ Strict Type Safety
+- All node functions return `TaraStateUpdate` TypedDict
+- `from __future__ import annotations` throughout
+- Full TYPE_CHECKING support for IDE hints
 
-### 🎙️ Edge TTS Integration
-High-quality neural voice synthesis:
-- **Voice**: Microsoft `en-US-AriaNeural` (Cortana-like)
-- **Fallback**: Piper TTS for offline operation
-- Smooth playback via pygame
+---
 
-### 🧠 Smart Fuzzy Routing
-Natural language command recognition with **order-independent keyword matching**:
-- "Kill the mic" → Mic Off
-- "Turn off microphone" → Mic Off  
-- "Disable voice" → Mic Off
+## 🧠 4-Layer Hybrid Memory
 
-The system extracts keywords (`mic` + `off`) regardless of phrasing.
+| Layer | Storage | Purpose |
+|-------|---------|---------|
+| **Episodic** | ChromaDB | Semantic search over conversations |
+| **Procedural** | NetworkX | Skill chains and tool sequences |
+| **Preferences** | SQLite | User facts and settings |
+| **Security** | SQLite | Audit logs and command history |
 
-### Zero-Latency Reflexes
-Built-in command vocabulary bypasses the LLM for instant response:
-- Voice control, mute/unmute, sentry toggle — all sub-50ms
+---
 
-### ⚙️ Centralized Configuration
-- Type-safe config via `pydantic-settings`
-- Single `.env` file for all API keys
-- Automatic fallback when APIs unreachable
-- 5-second timeout on startup (no more 60s hangs)
+## 🛠️ TARA 2.0 Toolset (50 Tools)
 
-### 🧪 Test Suite
-- 39 unit tests covering config, memory, and model manager
-- Run with `python -m pytest tests/ -v`
-
-### Privacy-First Sentry
-- Screen monitoring runs **100% locally**
-- LLama 3.2 Vision analyzes frames on-device
-- No cloud uploads, no data leaves your machine
-
-### Director-Level Dashboard
-- Real-time system metrics (CPU, RAM, Disk)
-- Subsystem status at a glance
-- API key validation
+| Category | Tools |
+|----------|-------|
+| **Browser** | `browser_open_url`, `browser_click`, `browser_type`, `browser_scroll`, `browser_screenshot`, `browser_close`, `browser_new_tab`, `browser_get_content` |
+| **Apps** | `launch_app`, `close_app`, `focus_app`, `windows_manager` |
+| **File Ops** | `create_file`, `read_file`, `write_file`, `delete_file`, `list_directory`, `move_file`, `copy_file`, `search_files`, `zip_files`, `unzip_file`, `get_file_info` |
+| **System** | `system_power`, `set_volume`, `get_volume`, `system_stats`, `battery_status` |
+| **UI Automation** | `dump_ui_tree`, `find_ui_element`, `click_ui_element` |
+| **Memory** | `save_user_preference`, `get_user_preference`, `list_user_preferences` |
+| **Ghost** | `ghost_mode` |
 
 ---
 
@@ -182,46 +161,41 @@ Built-in command vocabulary bypasses the LLM for instant response:
 - **Python 3.10+**
 - **Windows 10/11** (Primary platform)
 - **NVIDIA GPU** (Optional, for faster inference)
-- **Nmap** (Optional, for network scanning tools)
 
-### Steps
+### Quick Start
 
 ```bash
-# Clone the repository
+# Clone
 git clone https://github.com/Adi103-ETAI/N.I.A.git
 cd N.I.A
 
-# Create virtual environment (recommended)
+# Create venv
 python -m venv .venv
 .venv\Scripts\activate
 
-# Install dependencies
+# Install
 pip install -r requirements.txt
 
-# Download Vosk model (required for voice)
-# Place in: nola/vosk_model/
+# Install Playwright browsers
+playwright install chromium
 ```
 
 ### Environment Setup
 
-Create a `.env` file in the project root:
+Create `.env` in project root:
 
 ```env
-# Required: At least one LLM provider
+# Required
 NVIDIA_API_KEY=nvapi-xxxx
-GROQ_API_KEY=gsk_xxxx      # Fast inference (optional)
-OPENAI_API_KEY=sk-xxxx     # Fallback (optional)
 
 # Optional
-HUGGINGFACE_API_KEY=hf_xxxx
-OLLAMA_HOST=http://localhost:11434
+GROQ_API_KEY=gsk_xxxx
+OPENAI_API_KEY=sk-xxxx
 ```
 
 ---
 
 ## 📖 Usage
-
-### Starting N.I.A.
 
 ```bash
 # Text mode (default)
@@ -230,64 +204,22 @@ python main.py
 # Voice mode
 python main.py --voice
 
-# Voice mode (always listening, no wake word)
+# Always listening (no wake word)
 python main.py --voice --no-wake
-
-# Check system status
-python main.py --status
 
 # Debug mode
 python main.py --debug
 ```
 
-### Command Reference
+### Example Commands
 
-#### 🎤 Voice Control (NOLA) — with Fuzzy Matching
-
-| Intent    | Example Phrases                                            | Action                  |
-|-----------|------------------------------------------------------------|-------------------------|
-| Mic On    | `mic on`,`enable microphone`,`start voice`,`activate mic`  | Open mic stream         |
-| Mic Off   | `mic off`,`kill the mic`,`disable voice`,`mute microphone` | Release mic hardware    |
-| Shh       | `quiet`,`shut up`,`hush`,`be quiet`,`stop talking`         | Stop TTS immediately    |
-
-#### 👁️ Vision Control (IRIS)
-| Command    | Aliases                                                  | Action                   |
-|------------|----------------------------------------------------------|--------------------------|
-| Sentry On  | `eyes on`, `guard mode`, `watch screen`, `start watching`| Enable screen monitoring |
-| Sentry Off | `eyes off`, `standby`, `stop watching`                   | Disable sentry           |
-
-#### 🔊 Audio Control (TARA Reflex)
-| Command   | Aliases                                              | Action                   |
-|-----------|------------------------------------------------------|--------------------------|
-| Mute      | `mute speakers`, `kill sound`, `sound off`           | Mute system audio        |
-| Unmute    | `sound on`, `restore audio`, `speakers on`           | Unmute audio             |
-
-#### 🔒 Ghost Protocol (Emergency Privacy)
-| Command         | Description                                          |
-|-----------------|------------------------------------------------------|
-| Ghost Layer 1   | Mute audio, disable TTS, minimize windows            |
-| Ghost Layer 2   | + Kill distraction apps (browsers, media players)    |
-| Ghost Layer 3   | + Lock workstation immediately                       |
-
-#### ⚙️ System Commands
-| Command   | Aliases                                              | Action                  |
-|-----------|------------------------------------------------------|-------------------------|
-| Status    | `report`, `stats`, `diagnostics`, `performance`      | Show dashboard          |
-| Clear     | `cls`, `clean screen`                                | Clear terminal          |
-| Exit      | `quit`, `bye`, `goodbye`, `shutdown`                 | Exit N.I.A.             |
-| Help      | `commands`, `what can you do`                        | Show help               |
-
----
-
-## 🛠️ TARA Toolset (14 Tools)
-
-| Category           | Tools                                                              |
-|--------------------|--------------------------------------------------------------------|
-| **System Control** | `system_power`, `empty_recycle_bin`, `set_volume`, `mute_volume`,  |
-|                    |   `get_volume`, `system_stats`, `battery_status`                   |
-| **Desktop Control**| `app_control`, `browser_general`, `window_manager`, `file_manager` |
-| **Web Search**     | `web_search`, `web_news`                                           |
-| **Ghost Protocol** | `ghost_mode`                                                       |
+| Intent | Command | Handler |
+|--------|---------|---------|
+| Browser | "open google.com" | TARA → browser_open_url |
+| App Launch | "open notepad" | TARA → launch_app |
+| Vision | "what's on my screen" | IRIS → screen_capture |
+| File | "create a file called notes.txt" | TARA → create_file |
+| Memory | "remember I like dark mode" | TARA → save_user_preference |
 
 ---
 
@@ -295,103 +227,89 @@ python main.py --debug
 
 ```
 N.I.A/
-├── main.py                 # Entry point (Standard Logging)
-├── requirements.txt        # Dependencies
-├── .env                    # API keys (create this)
+├── main.py                     # Entry point (v2.5.0)
+├── requirements.txt            # Dependencies
+├── .env                        # API keys
 │
-├── core/                   # Core engine & orchestration
-│   ├── engine.py           # NIAAssistant + Fuzzy Reflex Layer
-│   ├── config.py           # Centralized pydantic-settings config
-│   ├── logger.py           # Centralized logging setup
-│   ├── memory.py           # Memory manager (SQLite + FAISS)
-│   └── health.py           # System diagnostics
+├── core/                       # 🧠 Core services
+│   ├── engine.py               # NIAAssistant orchestrator
+│   ├── config.py               # Pydantic settings
+│   ├── container.py            # ServiceContainer (DI)
+│   ├── memory.py               # 4-Layer Memory
+│   └── logger.py               # Centralized logging
 │
-├── nia/                    # 🧠 Brain module
-│   ├── graph.py            # LangGraph supervisor
-│   └── state.py            # Conversation state
+├── nia/                        # 🧠 Brain module
+│   ├── agent.py                # SupervisorAgent (Protocol-based)
+│   ├── gatekeeper.py           # Routing validation
+│   └── graph/                  # LangGraph
+│       ├── builder.py          # Graph construction
+│       └── nodes.py            # Node definitions
 │
-├── nola/                   # 🎤 Voice module
-│   ├── io.py               # Edge TTS + Vosk STT (Singletons)
-│   ├── manager.py          # NOLAManager (Hardware Mute Logic)
-│   └── security.py         # Input sanitization
+├── tara/                       # 🛠️ Tool Execution
+│   ├── graph/                  # TARA 2.0 SubGraph
+│   │   ├── nodes.py            # Unified Async Bridge
+│   │   ├── state.py            # TaraState TypedDict
+│   │   └── workflow.py         # Graph builder
+│   └── tools/                  # 50 Tools
+│       ├── browser_ops.py      # Playwright browser
+│       ├── app_launcher.py     # Application control
+│       ├── file_ops.py         # File operations
+│       └── interface.py        # Tool discovery
 │
-├── iris/                   # 👁️ Vision module
-│   ├── agent.py            # Vision analysis agent
-│   └── sentry.py           # Background screen monitor
+├── nola/                       # 🎤 Voice I/O
+│   ├── manager.py              # NOLAManager
+│   └── io/
+│       ├── speech.py           # Edge TTS
+│       └── hearing.py          # Vosk STT
 │
-├── tara/                   # 🛠️ Tools module
-│   ├── agent.py            # Tool execution agent
-│   ├── registry.py         # Dynamic tool discovery
-│   └── units/              # Tool implementations (14 tools)
-│       ├── system_control.py   # Power, Volume, Stats
-│       ├── desktop_control.py  # Apps, Windows, Browser, Files
-│       ├── web_search.py       # DuckDuckGo Search & News
-│       └── ghost_protocol.py   # Emergency Privacy Mode
+├── iris/                       # 👁️ Vision
+│   ├── agent.py                # IrisAgent
+│   └── sentry.py               # Screen monitor
 │
-├── interface/              # UI components
-│   ├── banner.py           # ASCII banner
-│   └── chat.py             # Interactive prompt
-│
-├── persona/                # Personality config
-│   └── default.py          # Default persona
-│
-├── models/                 # ML models & LLM manager
-│   └── model_manager.py    # Multi-provider LLM factory
-├── tests/                  # Unit tests (39 tests)
-│   ├── test_config.py      # Config loading tests
-│   ├── test_memory.py      # Memory manager tests
-│   └── test_model_manager.py # Model factory tests
-└── data/                   # Persistent state
-    └── state.db            # LangGraph conversation history
+└── tests/                      # Unit tests
 ```
 
 ---
 
 ## 🔧 Tech Stack
 
-| Component     | Technology                                              |
-|---------------|---------------------------------------------------------|
-| **Brain**     | LangGraph, LangChain, NVIDIA NIM                        |
-| **Voice STT** | Vosk (Offline), sounddevice                             |
-| **Voice TTS** | edge-tts (`en-US-AriaNeural`), pygame                   |
-| **Vision**    | Llama 3.2 Vision (Local), mss, Pillow                   |
-| **Tools**     | pyautogui, AppOpener, pycaw, DuckDuckGo Search          |
-| **UI**        | prompt_toolkit                                          |
-
----
-
-## 🔧 Configuration
-
-### Persona Customization
-Edit `persona/profile.py` to change N.I.A.'s personality:
-
-```python
-SYSTEM_PROMPT = """You are N.I.A., a helpful AI assistant..."""
-```
-
-### Adding Custom Tools
-Create a new file in `tara/units/` with `@tara_tool` decorated functions:
-
-```python
-from tara.protocols import tara_tool
-
-@tara_tool(name="my_tool", category="custom", description="My custom tool")
-def my_tool(arg: str) -> str:
-    return f"Processed: {arg}"
-```
-
-Tools are automatically discovered on startup.
+| Component | Technology |
+|-----------|------------|
+| **Brain** | LangGraph, LangChain, NVIDIA NIM |
+| **LLM** | Llama 3.1 70B (NVIDIA), Llama 3.2 Vision |
+| **Voice STT** | Vosk (Offline) |
+| **Voice TTS** | edge-tts (Microsoft Aria) |
+| **Browser** | Playwright (Chromium) |
+| **Desktop** | pyautogui, AppOpener, pycaw |
 
 ---
 
 ## 🛡️ Security
 
-- **Offline Voice**: Vosk runs entirely on-device
-- **Local Vision**: Sentry uses local Llama Vision model
-- **Hardware Mute**: Mic stream is physically closed (not software muted)
-- **Input Sanitization**: All voice input passes through security filters
-- **Ghost Protocol**: Emergency privacy mode with hardware lock
-- **No Telemetry**: Zero data collection or cloud uploads
+- **Offline Voice**: Vosk runs 100% locally
+- **Local Vision**: Llama Vision on-device
+- **Hardware Mute**: Physical mic release
+- **Input Sanitization**: All inputs filtered
+- **Ghost Protocol**: Emergency privacy mode
+- **No Telemetry**: Zero data collection
+
+---
+
+## 🗺️ Roadmap
+
+### v2.5.0 (Current - Stable)
+- ✅ ServiceContainer Dependency Injection
+- ✅ Unified Async Bridge for browser tools
+- ✅ Protocol-based agent routing
+- ✅ Exponential backoff with jitter
+- ✅ Strict type safety (TypedDict, Protocols)
+
+### v3.0 (Future)
+- 🚀 **Native Async Graph** — Full async-first LangGraph
+- 📦 **Poetry Migration** — Modern dependency management
+- 🔌 **Plugin Architecture** — Dynamic tool loading
+- 🌐 **Multi-Provider LLM** — Anthropic, Groq, Ollama support
+- 🧪 **Integration Tests** — End-to-end automation testing
 
 ---
 
@@ -405,6 +323,6 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 **Built with ❤️ by SentArc Labs**
 
-*"Your Intelligence, Augmented."*
+*"N.I.A. v2.5.0 — Resurrected. Stable. Production Ready."*
 
 </div>

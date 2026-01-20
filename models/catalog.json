@@ -1,0 +1,189 @@
+{
+    "nvidia/llama-3.1-405b": {
+        "provider": "nvidia",
+        "model_name": "meta/llama-3.1-405b-instruct",
+        "display_name": "Llama 3.1 405B (NVIDIA)",
+        "context_window": 128000,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "is_local": false,
+        "cost_tier": "free",
+        "speed_tier": "slow"
+    },
+    "nvidia/llama-3.1-70b": {
+        "provider": "nvidia",
+        "model_name": "meta/llama-3.1-70b-instruct",
+        "display_name": "Llama 3.1 70B (NVIDIA)",
+        "context_window": 128000,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "is_local": false,
+        "cost_tier": "free",
+        "speed_tier": "medium"
+    },
+    "nvidia/llama-3.1-8b": {
+        "provider": "nvidia",
+        "model_name": "meta/llama-3.1-8b-instruct",
+        "display_name": "Llama 3.1 8B (NVIDIA)",
+        "context_window": 128000,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "is_local": false,
+        "cost_tier": "free",
+        "speed_tier": "fast"
+    },
+    "nvidia/llama-3.2-vision": {
+        "provider": "nvidia",
+        "model_name": "meta/llama-3.2-90b-vision-instruct",
+        "display_name": "Llama 3.2 90B Vision (NVIDIA)",
+        "context_window": 128000,
+        "supports_vision": true,
+        "supports_function_calling": false,
+        "is_local": false,
+        "cost_tier": "free",
+        "speed_tier": "slow"
+    },
+    "nvidia/llama-3.2-11b-vision": {
+        "provider": "nvidia",
+        "model_name": "meta/llama-3.2-11b-vision-instruct",
+        "display_name": "Llama 3.2 11B Vision (NVIDIA)",
+        "context_window": 128000,
+        "supports_vision": true,
+        "supports_function_calling": false,
+        "is_local": false,
+        "cost_tier": "free",
+        "speed_tier": "medium"
+    },
+    "nvidia/nemotron": {
+        "provider": "nvidia",
+        "model_name": "nvidia/llama-3.1-nemotron-70b-instruct",
+        "display_name": "Nemotron 70B (NVIDIA)",
+        "context_window": 128000,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "is_local": false,
+        "cost_tier": "free",
+        "speed_tier": "medium"
+    },
+    "nvidia/mistral-nemo": {
+        "provider": "nvidia",
+        "model_name": "nv-mistralai/mistral-nemo-12b-instruct",
+        "display_name": "Mistral Nemo 12B (NVIDIA)",
+        "context_window": 128000,
+        "supports_vision": false,
+        "supports_function_calling": false,
+        "is_local": false,
+        "cost_tier": "free",
+        "speed_tier": "fast"
+    },
+    "openai/gpt-4o": {
+        "provider": "openai",
+        "model_name": "gpt-4o",
+        "display_name": "GPT-4o (OpenAI)",
+        "context_window": 128000,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "is_local": false,
+        "cost_tier": "high",
+        "speed_tier": "fast"
+    },
+    "openai/gpt-4o-mini": {
+        "provider": "openai",
+        "model_name": "gpt-4o-mini",
+        "display_name": "GPT-4o Mini (OpenAI)",
+        "context_window": 128000,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "is_local": false,
+        "cost_tier": "low",
+        "speed_tier": "fast"
+    },
+    "openai/gpt-4-turbo": {
+        "provider": "openai",
+        "model_name": "gpt-4-turbo",
+        "display_name": "GPT-4 Turbo (OpenAI)",
+        "context_window": 128000,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "is_local": false,
+        "cost_tier": "high",
+        "speed_tier": "medium"
+    },
+    "ollama/llama3": {
+        "provider": "ollama",
+        "model_name": "llama3",
+        "display_name": "Llama 3 8B (Ollama)",
+        "context_window": 8192,
+        "supports_vision": false,
+        "supports_function_calling": false,
+        "is_local": true,
+        "cost_tier": "free",
+        "speed_tier": "fast"
+    },
+    "ollama/llama3.1": {
+        "provider": "ollama",
+        "model_name": "llama3.1",
+        "display_name": "Llama 3.1 8B (Ollama)",
+        "context_window": 128000,
+        "supports_vision": false,
+        "supports_function_calling": false,
+        "is_local": true,
+        "cost_tier": "free",
+        "speed_tier": "fast"
+    },
+    "ollama/mistral": {
+        "provider": "ollama",
+        "model_name": "mistral",
+        "display_name": "Mistral 7B (Ollama)",
+        "context_window": 32768,
+        "supports_vision": false,
+        "supports_function_calling": false,
+        "is_local": true,
+        "cost_tier": "free",
+        "speed_tier": "fast"
+    },
+    "ollama/llava": {
+        "provider": "ollama",
+        "model_name": "llava",
+        "display_name": "LLaVA (Ollama)",
+        "context_window": 4096,
+        "supports_vision": true,
+        "supports_function_calling": false,
+        "is_local": true,
+        "cost_tier": "free",
+        "speed_tier": "medium"
+    },
+    "groq/llama-3.1-70b": {
+        "provider": "groq",
+        "model_name": "llama-3.1-70b-versatile",
+        "display_name": "Llama 3.1 70B (Groq)",
+        "context_window": 128000,
+        "supports_vision": false,
+        "supports_function_calling": false,
+        "is_local": false,
+        "cost_tier": "low",
+        "speed_tier": "fast"
+    },
+    "groq/llama-3.1-8b": {
+        "provider": "groq",
+        "model_name": "llama-3.1-8b-instant",
+        "display_name": "Llama 3.1 8B (Groq)",
+        "context_window": 128000,
+        "supports_vision": false,
+        "supports_function_calling": false,
+        "is_local": false,
+        "cost_tier": "free",
+        "speed_tier": "fast"
+    },
+    "groq/mixtral": {
+        "provider": "groq",
+        "model_name": "mixtral-8x7b-32768",
+        "display_name": "Mixtral 8x7B (Groq)",
+        "context_window": 32768,
+        "supports_vision": false,
+        "supports_function_calling": false,
+        "is_local": false,
+        "cost_tier": "low",
+        "speed_tier": "fast"
+    }
+}

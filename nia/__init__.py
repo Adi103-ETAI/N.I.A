@@ -5,19 +5,19 @@ and multi-agent conversation handling.
 
 Architecture:
     ┌─────────────────────────────────────────────────────────────────┐
-    │                         NIA System                               │
-    │                                                                  │
+    │                         NIA System                              │
+    │                                                                 │
     │  [User Input] → [Supervisor] → routing decision                 │
-    │                      │                                           │
+    │                      │                                          │
     │          ┌───────────┼───────────┐                              │
     │          ▼           ▼           ▼                              │
-    │     [Direct]     [IRIS]      [TARA]                            │
+    │     [Direct]     [IRIS]      [TARA]                             │
     │      Chat        Vision      Logic                              │
     │          │           │           │                              │
     │          └───────────┴───────────┘                              │
-    │                      │                                           │
-    │                      ▼                                           │
-    │               [Response] → [Voice Output via NOLA]              │
+    │                      │                                          │
+    │                      ▼                                          │
+    │               [Response] → [Voice Output via NOLA]             │
     └─────────────────────────────────────────────────────────────────┘
 
 Components:
@@ -69,7 +69,7 @@ from .state import (
 # Agent implementations (IrisAgent now lives in iris.agent)
 from .agent import (
     SupervisorAgent,
-    TaraAgent,
+    # TaraAgent removed - TARA 2.0 uses tara.graph
 )
 
 # Graph and execution
@@ -83,7 +83,7 @@ from .graph import (
 )
 
 # Package metadata
-__version__ = "2.3.0"
+__version__ = "2.5.0"
 __author__ = "NIA Team"
 
 __all__ = [
@@ -99,7 +99,7 @@ __all__ = [
     
     # Agents
     "SupervisorAgent",
-    "TaraAgent",
+    # TaraAgent removed - use tara.graph.run_tara instead
     
     # State
     "AgentState",

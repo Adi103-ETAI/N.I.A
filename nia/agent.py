@@ -1,766 +1,281 @@
-"""N.I.A. Agent Module - Supervisor and Specialist Agents.
-
-This module implements the agent classes for the NIA supervisor architecture:
-- SupervisorAgent: Routes queries and handles general conversation
-- Placeholder agents for IRIS (Vision) and TARA (Logic)
-
-The supervisor uses the ModelManager to get the best available model
-(NVIDIA NIM, OpenAI, or Ollama) to decide whether to:
-1. Handle the query directly (general chat)
-2. Route to IRIS for vision/image tasks
-3. Route to TARA for logic/reasoning tasks
-"""
+# ----------------------------------------------------------------------
+# FILE: nia/agent.py
+# STATUS: SYSTEM HUB - Core Supervisor Implementation
+# ----------------------------------------------------------------------
 from __future__ import annotations
 
-import os
+import time
+import random
+from typing import TYPE_CHECKING, Any, Dict, List, Protocol, runtime_checkable
 
-from dotenv import load_dotenv
-
-# Import state definitions
-from .state import (
-    AgentState,
-    AGENT_IRIS,
-    AGENT_TARA,
-    AGENT_END,
-)
-
-# Centralized logging and config
 from core.logger import setup_logger
-from core.config import settings
 
-logger = setup_logger("NIA.AGENT")
+# --- CRITICAL IMPORTS ---
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from nia.gatekeeper import RoutingGatekeeper
+# ADAPTED: import settings as config to match user variable name but use correct source
+from core.config import settings as config
 
-# Load environment variables
-load_dotenv()
+# =============================================================================
+# TYPE_CHECKING Block (IDE-only, no runtime cost)
+# =============================================================================
 
-# Try to import LangChain core
-try:
-    from langchain_core.messages import AIMessage
-    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-    _HAS_LANGCHAIN = True
-except ImportError:
-    _HAS_LANGCHAIN = False
-    AIMessage = dict  # type: ignore
-    logger.warning("langchain-core not installed. Install with: pip install langchain-core")
-
-# Try to import ModelManager
-try:
-    from models.model_manager import ModelManager, get_smart_model
-    _HAS_MODEL_MANAGER = True
-except ImportError:
-    _HAS_MODEL_MANAGER = False
-    ModelManager = None  # type: ignore
-    get_smart_model = None  # type: ignore
-    logger.warning("models.model_manager not available")
-
-# Try to import PersonaProfile for dynamic system prompt
-try:
-    from persona.profile import get_system_prompt, PersonaProfile
-    _HAS_PERSONA = True
-except ImportError:
-    _HAS_PERSONA = False
-    get_system_prompt = None  # type: ignore
-    PersonaProfile = None  # type: ignore
-    logger.debug("persona.profile not available, using default prompts")
+if TYPE_CHECKING:
+    from iris.agent import IrisAgent
+    from typing import Optional
 
 
 # =============================================================================
-# System Prompts (Fallback - used if persona.profile not available)
+# Protocol for Agent Interface (Duck Typing Support)
 # =============================================================================
 
-SUPERVISOR_SYSTEM_PROMPT_FALLBACK = """You are NIA (Neural Intelligence Assistant), a unified AI with specialized internal capabilities.
-
-## CRITICAL ROUTING RULES - READ CAREFULLY
-
-You have TWO internal modules. You MUST route tasks to them instead of answering yourself:
-
-### TARA (Technical Agent) - ROUTE:TARA:
-TARA handles ALL of these tasks. You MUST route to TARA for:
-- System health, CPU, RAM, disk usage, system stats
-- Opening or closing applications (browser, notepad, spotify, etc.)
-- Media playback: playing songs, videos, YouTube, Spotify, streaming content
-- Clipboard operations (copy, paste)
-- Web searches, current information, real-time data (weather, prices, news, stocks)
-- Math calculations, equations, analysis
-- Any technical or factual queries requiring external data
-- **MEMORY OPERATIONS: "remember that", "save this", "note that", "don't forget"**
-
-### IRIS (Vision Agent) - ROUTE:IRIS:
-IRIS handles:
-- Image analysis, photo description
-- Visual recognition, OCR
-- Anything requiring seeing an image
-
-## ABSOLUTE CONSTRAINTS - YOU MUST FOLLOW THESE
-
-1. DO NOT answer technical questions yourself
-2. DO NOT simulate actions (like "Opening Notepad..." without actually routing)
-3. DO NOT make up prices, weather, or any real-time data
-4. DO NOT pretend to perform system operations
-5. **DO NOT say "I will remember that" - you have NO memory. Route to TARA!**
-6. ALWAYS route to TARA for: search, open, close, check, system, calculate, weather, price, stats
-
-=== 🧠 ACTIVE LISTENING (CRITICAL) ===
-You are a Long-Term Memory System. Your goal is to learn about the user.
-
-RULES FOR PREFERENCE EXTRACTION:
-1.  **SCAN FIRST:** Before answering, scan the user's input for any personal facts, preferences, or traits (e.g., "I love simple code", "My name is Raj", "I hate comments").
-2.  **ACTION PRIORITY:** If you find a preference, you MUST call `save_user_preference` **IMMEDIATELY**.
-    * ❌ DO NOT write the code yet.
-    * ❌ DO NOT say "I will save this."
-    * ✅ ROUTE:TARA: save_user_preference(key="...", value="...")
-3.  **THE LOOP:** Understand that calling a tool does NOT end the conversation.
-    * Step 1: You call `save_user_preference` via ROUTE:TARA.
-    * Step 2: The system executes it.
-    * Step 3: You will be called AGAIN to generate the final answer (the Python code).
-    * THEREFORE: Save the data FIRST. The code can wait 1 second.
-
-EXAMPLE:
-User: "Write a script, I hate comments."
-✅ Correct: ROUTE:TARA: save_user_preference(key="code_style", value="hates comments")
-❌ Wrong: Immediately outputting the script without saving the preference
-
-## HOW TO ROUTE (CLEAN HANDOFF)
-
-When routing, send CLEAN COMMANDS. Do NOT add conversational filler.
-Format: "ROUTE:TARA: [exact command]"
-
-**CORRECT:**
-User: "Remember that I love Python"
-→ "ROUTE:TARA: Save preference: user loves Python"
-
-User: "Open brave browser"
-→ "ROUTE:TARA: Open brave browser"
-
-User: "Write code in Rust, my favorite"
-→ "ROUTE:TARA: Save preference: favorite language is Rust" (then continue with the code)
-
-**WRONG:**
-→ "I'll remember that for you!" (NO! Route to TARA!)
-→ "Sure, let me go ahead and open that for you..." (Too verbose!)
-
-## GENERAL CONVERSATION
-
-For simple greetings, opinions, or non-technical chat, respond directly:
-- "Hello" -> Greet warmly
-- "Tell me a joke" -> Tell a joke
-- "Who are you?" -> Introduce yourself as NIA
-
-Remember: When in doubt, ROUTE TO TARA. Never guess or hallucinate data."""
+@runtime_checkable
+class AgentProtocol(Protocol):
+    """Protocol defining the expected interface for pluggable agents.
+    
+    Agents can be IrisAgent, TaraAgent, or any class implementing:
+    - process(state: Dict) -> Dict
+    - run(query: str) -> str
+    """
+    def process(self, state: Dict[str, Any]) -> Dict[str, Any]: ...
+    def run(self, query: str) -> str: ...
 
 
-# Keywords that MUST trigger TARA routing
-TARA_ROUTING_KEYWORDS = [
-    # System & Time
-    "system", "cpu", "ram", "memory", "disk", "health", "stats", "usage", "performance",
-    "time", "date", "day", "clock", "hour", "minute",
-    # Apps
-    "open", "close", "launch", "start", "run", "application", "app", "browser", "notepad",
-    "chrome", "brave", "firefox", "spotify", "discord", "code", "vscode",
-    # Media playback
-    "play", "watch", "stream", "listen", "youtube", "video", "song", "music", "audio",
-    "movie", "podcast", "radio", "pause", "stop", "resume", "skip", "next", "previous",
-    # Volume & Audio Control
-    "volume", "mute", "unmute", "sound", "louder", "quieter", "speaker",
-    # Power & Battery
-    "battery", "power", "charge", "lock", "shutdown", "restart", "reboot", "hibernate",
-    # Maintenance
-    "recycle", "bin", "trash", "empty",
-    # Ghost Protocol
-    "ghost", "conceal", "hide", "panic",
-    # Clipboard
-    "copy", "paste", "clipboard",
-    # Web/Search/URLs
-    "search", "google", "look up", "find", "weather", "price", "cost", "news", "stock",
-    "bitcoin", "crypto", "current", "today", "now", "latest",
-    "url", "link", "website", "webpage", "http", "www", "go to", "navigate",
-    # Math
-    "calculate", "solve", "math", "equation", "compute", "analyze", "sum", "multiply",
-    # Memory/Preferences (CRITICAL: Forces routing for save operations)
-    "remember", "save", "note", "forget", "preference", "prefer", "like", "hate", "love",
-    "store", "record", "i am a", "i'm a", "my name", "call me",
-]
-
-# Keywords that trigger IRIS routing
-IRIS_ROUTING_KEYWORDS = [
-    # Image analysis
-    "image", "photo", "picture", "visual", "camera",
-    # Screen analysis
-    "screen", "screenshot", "what do you see", "look at this", "analyze screen",
-    "read this error", "what's on my screen", "look at the screen",
-    # OCR/Text
-    "read text", "ocr", "read this", "what does this say",
-    # General vision
-    "see", "look", "describe this", "what's in this", "analyze this",
-]
-
-
-IRIS_PLACEHOLDER_RESPONSE = """I analyzed the image, but my vision capabilities are still being enhanced.
-
-Currently, I can help you with:
-- 🖼️ General image descriptions
-- 👁️ Object identification concepts
-- 📝 Understanding what you're looking for
-
-My full visual analysis features are coming soon! For now, could you describe what you're trying to understand about the image? I'll do my best to help."""
-
-
-TARA_PLACEHOLDER_RESPONSE = """I processed that request, but my advanced reasoning module is still being developed.
-
-I can currently help with:
-- 🧮 Basic calculations and math
-- 🧩 Logical thinking and problem-solving approaches
-- 💻 Code explanations and concepts
-- 📊 Structured analysis
-
-My full computational capabilities will be available soon! In the meantime, let me share what I can about your question."""
-
-
-# =============================================================================
-# Supervisor Agent
-# =============================================================================
+logger = setup_logger("NIA.Supervisor")
 
 class SupervisorAgent:
-    """The main supervisor agent that routes queries and handles general chat.
+    """NIA Supervisor Agent - Orchestrates TARA and IRIS via Protocol-based routing.
     
-    The supervisor uses the ModelManager to get the best available model
-    (NVIDIA NIM, OpenAI, or Ollama) to decide how to handle each user query:
-    - Direct response for general conversation
-    - Route to IRIS for vision tasks
-    - Route to TARA for logic tasks
+    Central coordinator that receives user input, classifies intent, and routes
+    to the appropriate specialist agent. Uses LLM-based intent classification
+    with validation gating to ensure clean routing decisions.
     
-    Example:
-        supervisor = SupervisorAgent()
-        state = supervisor.process(state)
+    Routing Targets:
+        - **TARA**: Desktop automation, browser control, file operations
+        - **IRIS**: Vision tasks (screen analysis, webcam capture)
+        - **CHAT**: General conversation, information queries
+    
+    Design Pattern:
+        - **Protocol-based DI**: Agents injected via AgentProtocol interface
+        - **Gated Routing**: RoutingGatekeeper validates LLM decisions
+        - **Exponential Backoff**: Retry logic with jitter for resilience
+    
+    Attributes:
+        tara_agent: Optional TaraAgent (TARA 2.0 uses graph node instead).
+        iris_agent: IrisAgent instance for vision tasks.
+        gatekeeper: RoutingGatekeeper for LLM response validation.
+        llm: ChatNVIDIA LLM instance for intent classification.
     """
     
-    # Sliding window limit to prevent context overflow
-    MAX_HISTORY = 10
     
     def __init__(
         self,
-        temperature: float = 0.7,
+        tara_agent: AgentProtocol | None = None,  # TARA 2.0: Now optional
+        iris_agent: AgentProtocol | None = None,  # Vision agent
         model_type: str = "smart",
+        temperature: float = 0.7,
     ) -> None:
-        """Initialize the supervisor agent.
+        """Initialize the SupervisorAgent with typed dependencies.
         
         Args:
-            temperature: Sampling temperature for responses.
-            model_type: Type of model to use ('smart', 'fast').
+            tara_agent: Optional TaraAgent. TARA 2.0 uses call_tara_2 node.
+                       Must implement AgentProtocol if provided.
+            iris_agent: IrisAgent instance for vision tasks.
+                       Must implement AgentProtocol if provided.
+            model_type: LLM model type ('smart' or 'fast').
+            temperature: LLM temperature setting (0.0-2.0).
         """
-        self.temperature = temperature
-        self.model_type = model_type
+        self.tara_agent: AgentProtocol | None = tara_agent
+        self.iris_agent: AgentProtocol | None = iris_agent
+        self.gatekeeper: RoutingGatekeeper = RoutingGatekeeper()
         
-        self._llm = None
-        self._prompt = None
-        self._model_manager = None
-        self._model_name = "unknown"
-        self._system_prompt = None
         
-        # Get system prompt from PersonaProfile or use fallback
-        if _HAS_PERSONA and get_system_prompt:
-            self._system_prompt = get_system_prompt()
-            logger.debug("Using PersonaProfile system prompt")
-        else:
-            self._system_prompt = SUPERVISOR_SYSTEM_PROMPT_FALLBACK
-            logger.debug("Using fallback system prompt")
+        self._verify_wiring()
         
-        if _HAS_LANGCHAIN:
-            self._init_llm()
-        else:
-            logger.warning("LangChain not available. Supervisor will use fallback mode.")
-    
-    def _init_llm(self) -> None:
-        """Initialize the LLM using ModelManager."""
+        # Initialize NVIDIA NIM LLM
         try:
-            if _HAS_MODEL_MANAGER:
-                # Use ModelManager to get the best available model
-                self._model_manager = ModelManager()
-                
-                if self.model_type == "fast":
-                    self._llm = self._model_manager.get_fast_model(self.temperature)
-                else:
-                    self._llm = self._model_manager.get_smart_model(self.temperature)
-                
-                # Get model name for logging
-                self._model_name = getattr(self._llm, "model", "unknown")
+            if model_type == "smart":
+                llm_model = config.LLM_MODEL_SMART
             else:
-                # Fallback to direct import if ModelManager not available
-                logger.warning("ModelManager not available, trying direct import")
-                try:
-                    from langchain_openai import ChatOpenAI
-                    api_key = os.environ.get("OPENAI_API_KEY")
-                    if api_key:
-                        self._llm = ChatOpenAI(
-                            model="gpt-4o",
-                            temperature=self.temperature,
-                            api_key=api_key,
-                        )
-                        self._model_name = "gpt-4o"
-                except ImportError:
-                    logger.warning("No LLM providers available")
+                llm_model = config.LLM_MODEL_FAST
             
-            # Create prompt template with dynamic system prompt
-            self._prompt = ChatPromptTemplate.from_messages([
-                ("system", self._system_prompt),
-                MessagesPlaceholder(variable_name="messages"),
-            ])
+            # Use NVIDIA API credentials
+            api_key_val = config.NVIDIA_API_KEY.get_secret_value() if config.NVIDIA_API_KEY else None
+            base_url_val = config.NVIDIA_BASE_URL
             
-            if self._llm:
-                logger.info("SupervisorAgent initialized with model: %s", self._model_name)
-            else:
-                logger.warning("SupervisorAgent running in fallback mode (no LLM)")
-                
-        except Exception as exc:
-            logger.exception("Failed to initialize LLM: %s", exc)
-            self._llm = None
-    
-    def process(self, state: AgentState) -> AgentState:
-        """Process the current state and decide on action.
-        
-        Args:
-            state: Current agent state with messages.
+            # Fail explicitly if no API key
+            if not api_key_val or not api_key_val.startswith("nvapi-"):
+                raise ValueError("NVIDIA_API_KEY is not configured or invalid (must start with 'nvapi-')")
             
-        Returns:
-            Updated state with supervisor's decision.
-        """
-        messages = state.get("messages", [])
-        
-        if not messages:
-            return {
-                **state,
-                "next": AGENT_END,
-                "final_response": "I didn't receive any input. How can I help you?",
-            }
-        
-        # =================================================================
-        # ⚡ SHORT-CIRCUIT TRAP: Send raw TOOL: command to bypass TARA's LLM
-        # This constructs regex-ready command that TARA executes immediately
-        # =================================================================
-        user_input_raw = ""
-        user_input_lower = ""
-        for msg in reversed(messages):
-            if _HAS_LANGCHAIN and hasattr(msg, "type") and msg.type == "human":
-                user_input_raw = msg.content
-                user_input_lower = msg.content.lower()
-                break
-            elif isinstance(msg, dict) and msg.get("role") == "user":
-                user_input_raw = msg.get("content", "")
-                user_input_lower = user_input_raw.lower()
-                break
-        
-        # ONLY explicit "Hard" commands trigger Short-Circuit
-        # Soft preferences ("I like", "prefer") are handled by LLM Active Listening
-        memory_triggers = [
-            "remember that", 
-            "save this", 
-            "note that", 
-            "don't forget",
-            "set my preference",
-            "set my setting",
-            "store this",
-        ]
-        
-        # 🛑 LOOP BREAKER: Check if we JUST came back from saving
-        last_msg = messages[-1] if messages else None
-        just_saved_preference = False
-        if _HAS_LANGCHAIN and hasattr(last_msg, "content"):
-            msg_content = str(last_msg.content)
-            if "Preference saved" in msg_content or "SAVED TO DATABASE" in msg_content:
-                just_saved_preference = True
-                logger.info("🛑 Loop Breaker: Action already completed. Skipping re-trigger.")
-        
-        # 🛑 GUARD: Do NOT short-circuit if it's a question (read request)
-        read_indicators = ["what", "show", "list", "tell me", "how many", "do you know"]
-        is_question = (
-            user_input_lower.endswith("?") or
-            any(user_input_lower.startswith(ind) for ind in read_indicators) or
-            "?" in user_input_lower
-        )
-        
-        if any(trigger in user_input_lower for trigger in memory_triggers) and not is_question and not just_saved_preference:
-            import json  # Import locally for bulletproof JSON serialization
-            
-            logger.info("⚡ Supervisor: Short-circuiting TARA (Clean Input Mode)")
-            
-            # =============================================================
-            # EXTRACT CLEAN INPUT (Strip Memory Context)
-            # The engine injects memory with "\n\nUser Input: " delimiter
-            # =============================================================
-            if "User Input:" in user_input_raw:
-                # Split and take the last part (the actual user message)
-                clean_text = user_input_raw.split("User Input:")[-1].strip()
-                logger.debug("Extracted clean input from augmented prompt")
-            else:
-                clean_text = user_input_raw.strip()
-            
-            # Create full payload with tool name AND args
-            payload = {
-                "tool": "save_user_preference",
-                "args": {
-                    "key": "user_fact",
-                    "value": clean_text  # Use clean text, not raw
-                }
-            }
-            
-            # Strict serialization: Compact mode removes all internal spaces
-            json_clean = json.dumps(payload, separators=(',', ':'))
-            
-            # Construct command with tight prefix (no space after colon)
-            command_text = f"JSON_CMD:{json_clean}"
-            
-            # Build as HumanMessage so TARA sees it as a task
-            if _HAS_LANGCHAIN:
-                from langchain_core.messages import HumanMessage
-                command_message = HumanMessage(content=command_text)
-            else:
-                command_message = {"role": "user", "content": command_text}
-            
-            return {
-                **state,
-                "messages": [command_message],
-                "next": AGENT_TARA,
-                "final_response": None,
-                "route_reason": "Memory operation (JSON Protocol)",
-            }
-        # =================================================================
-        # END SHORT-CIRCUIT TRAP
-        # =================================================================
-        
-        # Get supervisor response
-        response_text = self._get_response(messages)
-        
-        # Parse routing decision
-        next_agent, final_response, route_reason = self._parse_response(response_text)
-        
-        # Build AI message
-        if _HAS_LANGCHAIN:
-            ai_message = AIMessage(content=response_text)
-        else:
-            ai_message = {"role": "assistant", "content": response_text}
-        
-        return {
-            **state,
-            "messages": [ai_message],
-            "next": next_agent,
-            "final_response": final_response,
-            "route_reason": route_reason,
-        }
-    
-    def _prune_messages(self, messages: list) -> list:
-        """Apply sliding window to prevent context overflow.
-        
-        Keeps system message (if present) + last MAX_HISTORY messages.
-        Old messages are safely discarded since they're stored in ChromaDB.
-        
-        Args:
-            messages: Full message history.
-            
-        Returns:
-            Pruned message list within context limits.
-        """
-        if len(messages) <= self.MAX_HISTORY:
-            return messages
-        
-        # Separate system message from conversation
-        system_msg = None
-        conversation = []
-        
-        for msg in messages:
-            if _HAS_LANGCHAIN and hasattr(msg, "type"):
-                if msg.type == "system":
-                    system_msg = msg
-                else:
-                    conversation.append(msg)
-            elif isinstance(msg, dict) and msg.get("role") == "system":
-                system_msg = msg
-            else:
-                conversation.append(msg)
-        
-        # Keep last MAX_HISTORY messages
-        recent = conversation[-self.MAX_HISTORY:]
-        
-        # Rebuild with system message first
-        if system_msg:
-            pruned = [system_msg] + recent
-        else:
-            pruned = recent
-        
-        logger.debug("Pruned messages: %d -> %d", len(messages), len(pruned))
-        return pruned
-    
-    def _get_response(self, messages: list) -> str:
-        """Get response from LLM with automatic backup model fallback.
-        
-        If the primary model (405B) fails, automatically switches to 70B backup.
-        """
-        # Apply sliding window pruning to prevent context overflow
-        pruned_messages = self._prune_messages(messages)
-        
-        # =====================================================================
-        # 👂 ACTIVE LISTENING: Dynamic Input Injection
-        # If user input contains preference keywords, inject a "whisper" to force
-        # the LLM to save the preference BEFORE answering.
-        # =====================================================================
-        soft_triggers = ["i love", "i like", "i prefer", "i hate", "my favorite", "i am a", "my name is"]
-        user_input_lower = ""
-        
-        # Extract user input for soft trigger check
-        for msg in reversed(pruned_messages):
-            if _HAS_LANGCHAIN and hasattr(msg, "type") and msg.type == "human":
-                user_input_lower = msg.content.lower()
-                break
-            elif isinstance(msg, dict) and msg.get("role") == "user":
-                user_input_lower = msg.get("content", "").lower()
-                break
-        
-        # =====================================================================
-        # 🛑 LOOP BREAKER: Check if we JUST came back from saving
-        # Prevents infinite loop when preference keywords remain in history
-        # =====================================================================
-        just_saved_preference = False
-        if pruned_messages:
-            last_msg = pruned_messages[-1]
-            if _HAS_LANGCHAIN and hasattr(last_msg, "content"):
-                msg_content = str(last_msg.content)
-                if "Preference saved" in msg_content or "Preference Saved" in msg_content:
-                    just_saved_preference = True
-                    logger.info("🛑 Active Listening: Preference already saved. Skipping injection.")
-        
-        # Inject whisper instruction if preference detected AND not just saved
-        if any(trigger in user_input_lower for trigger in soft_triggers) and not just_saved_preference:
-            logger.info("👂 Active Listening: Detected preference. Injecting JSON instruction.")
-            
-            if _HAS_LANGCHAIN:
-                from langchain_core.messages import HumanMessage
-                # Use HumanMessage to maintain chat structure
-                # Instruct to use JSON_CMD format which router already handles
-                injection = HumanMessage(content="""
-[SYSTEM INTERVENTION]
-The user just expressed a personal preference. 
-You MUST save this immediately using the JSON Short-Circuit Protocol.
-OUTPUT EXACTLY THIS FORMAT:
-JSON_CMD:{"tool":"save_user_preference","args":{"key":"preference_key","value":"preference_value"}}
-
-Replace "preference_key" with a descriptive key (e.g., "code_style", "language_preference").
-Replace "preference_value" with what the user expressed.
-Do not answer the user's question yet. Save the preference data FIRST.
-""")
-                # Append to messages for this inference only
-                pruned_messages = list(pruned_messages) + [injection]
-        
-        response = None
-        
-        # ATTEMPT 1: Primary Model
-        if self._llm and self._prompt:
-            try:
-                chain = self._prompt | self._llm
-                result = chain.invoke({"messages": pruned_messages})
-                response = result.content
-            except Exception as exc:
-                logger.warning("⚠️ Primary Brain Failed: %s. Engaging Backup (70B)...", exc)
-                
-                # ATTEMPT 2: Backup Model (70B)
-                try:
-                    backup_llm = self._get_backup_llm()
-                    if backup_llm:
-                        backup_chain = self._prompt | backup_llm
-                        result = backup_chain.invoke({"messages": pruned_messages})
-                        response = result.content
-                        logger.info("Backup model succeeded")
-                    else:
-                        response = self._fallback_response(pruned_messages)
-                except Exception as backup_exc:
-                    logger.exception("Backup model also failed: %s", backup_exc)
-                    response = self._fallback_response(pruned_messages)
-        else:
-            response = self._fallback_response(pruned_messages)
-        
-        # APPLY THE ROUTING SAFETY NET
-        # Extract last user message for keyword checking
-        user_input = ""
-        for msg in reversed(messages):
-            if _HAS_LANGCHAIN and hasattr(msg, "content"):
-                if hasattr(msg, "type") and msg.type == "human":
-                    user_input = msg.content
-                    break
-            elif isinstance(msg, dict) and msg.get("role") == "user":
-                user_input = msg.get("content", "")
-                break
-        
-        # Apply safety net to force routing if needed
-        response = self._enforce_routing(user_input, response)
-        
-        return response
-    
-    def _get_backup_llm(self):
-        """Get backup LLM (70B) for when primary fails."""
-        try:
-            # Try NVIDIA 70B first
-            from langchain_nvidia_ai_endpoints import ChatNVIDIA
-            backup = ChatNVIDIA(
-                model=settings.LLM_MODEL,
-                temperature=self.temperature,
-                max_tokens=1024,
-                api_key=settings.NVIDIA_API_KEY.get_secret_value(),
+            self.llm = ChatNVIDIA(
+                model=llm_model,
+                api_key=api_key_val,
+                base_url=base_url_val,
+                temperature=temperature,
+                max_tokens=2048,
             )
-            logger.info(f"Initialized backup LLM: {settings.LLM_MODEL}")
-            return backup
+            logger.info(f"🧠 SupervisorAgent LLM initialized: {llm_model} (NVIDIA NIM)")
         except Exception as e:
-            logger.debug("NVIDIA backup failed: %s", e)
+            logger.error(f"Failed to initialize LLM: {e}")
+            raise RuntimeError(f"SupervisorAgent cannot start without LLM: {e}") from e
         
-        # Try OpenAI as second backup
+        # System Prompt
         try:
-            from langchain_openai import ChatOpenAI
-            if settings.has_openai_key:
-                backup = ChatOpenAI(
-                    model="gpt-4o-mini",
-                    temperature=self.temperature,
-                    api_key=settings.OPENAI_API_KEY.get_secret_value(),
-                )
-                logger.info("Initialized backup LLM: gpt-4o-mini")
-                return backup
-        except Exception as e:
-            logger.debug(f"OpenAI backup failed: {e}")
-        
-        return None
+            with open("nia/config/supervisor_prompt.txt", "r", encoding="utf-8") as f:
+                prompt_text = f.read()
+        except FileNotFoundError:
+            prompt_text = "You are NIA. Route commands to TARA or IRIS."
+            
+        self.system_prompt = prompt_text + "\n\n### CRITICAL: ROUTE SILENTLY. Example: 'ROUTE:TARA: kill notepad'"
     
-    def _enforce_routing(self, user_input: str, llm_response: str) -> str:
-        """Safety net: Force routing to TARA for action keywords.
+    def _verify_wiring(self) -> None:
+        """Verify that critical dependencies are properly wired.
         
-        If the user asked for an action but the LLM forgot to route,
-        this method appends the routing instruction.
+        Note: With TARA 2.0, tara_agent is optional (handled by graph node).
+        """
+        if self.tara_agent is None:
+            logger.info("ℹ️ TARA 2.0 mode: Tools handled by call_tara_2 graph node")
+        else:
+            logger.info("ℹ️ Legacy TARA mode: Using TaraAgent instance")
+        
+        if self.iris_agent is None:
+            # IRIS is optional - warn but don't fail
+            logger.warning("⚠️ SupervisorAgent has no IRIS agent. Vision routing disabled.")
+    
+    def _decompose_command(self, command: str) -> List[str]:
+        """Decompose a compound command into individual sub-commands.
+        
+        Handles patterns like:
+        - "kill notepad and brave" -> ["kill notepad", "kill brave"]
+        - "open chrome, then open notepad" -> ["open chrome", "open notepad"]
+        - "1. do X 2. do Y" -> ["do X", "do Y"]
         
         Args:
-            user_input: The user's original message.
-            llm_response: The LLM's response.
+            command: The raw command string.
             
         Returns:
-            The response, possibly with ROUTE:TARA appended.
-        """
-        # Strong trigger keywords that demand an action
-        strong_triggers = [
-            # Media
-            "play", "watch", "stream", "listen",
-            # Apps
-            "open", "launch", "close", "kill", "start",
-            # Web/Search
-            "search", "weather", "price", "news", "google",
-            # System
-            "system", "cpu", "ram", "disk", "check",
-            # Time
-            "time", "date",
-            # Clipboard
-            "copy", "paste",
-        ]
-        
-        lower_input = user_input.lower()
-        
-        # Check if user asked for action but LLM didn't route
-        if any(trigger in lower_input for trigger in strong_triggers):
-            if "ROUTE:TARA" not in llm_response and "ROUTE:IRIS" not in llm_response:
-                logger.info("Safety Net: Forcing routing to TARA based on keywords")
-                # Append routing instruction with the user's original request
-                return f"{llm_response}\nROUTE:TARA: {user_input}"
-        
-        return llm_response
-    
-    def _fallback_response(self, messages: list) -> str:
-        """Fallback response when LLM is unavailable - uses keyword routing."""
-        # Extract user message
-        user_input = ""
-        for msg in reversed(messages):
-            if _HAS_LANGCHAIN and hasattr(msg, "content"):
-                if hasattr(msg, "type") and msg.type == "human":
-                    user_input = msg.content
-                    break
-            elif isinstance(msg, dict) and msg.get("role") == "user":
-                user_input = msg.get("content", "")
-                break
-        
-        # Keyword-based routing using the defined lists
-        lower_input = user_input.lower()
-        
-        # Check for IRIS keywords first (vision)
-        if any(word in lower_input for word in IRIS_ROUTING_KEYWORDS):
-            return f"Let me analyze that.\nROUTE:IRIS: {user_input}"
-        
-        # Check for TARA keywords (technical/search/system)
-        if any(word in lower_input for word in TARA_ROUTING_KEYWORDS):
-            return f"I'll handle that.\nROUTE:TARA: {user_input}"
-        
-        # Default: general conversation
-        return f"Hello! I'm NIA, your Neural Intelligence Assistant. I received: '{user_input}'. I'm in fallback mode - please ensure your API key is configured."
-    
-    def _parse_response(self, response: str) -> tuple:
-        """Parse the supervisor's response for routing instructions.
-        
-        Searches for ROUTE:IRIS: or ROUTE:TARA: anywhere in the response,
-        not just at the beginning. This allows the LLM to include a brief
-        acknowledgment before the routing instruction.
-        
-        Returns:
-            Tuple of (next_agent, final_response, route_reason)
+            List of individual commands to execute.
         """
         import re
         
-        # Look for ROUTE:IRIS: anywhere in response
-        iris_match = re.search(r'ROUTE:IRIS:\s*(.+?)(?:\n|$)', response, re.IGNORECASE | re.DOTALL)
-        if iris_match:
-            task = iris_match.group(1).strip()
-            # Get text before the ROUTE as the user-facing message
-            user_msg = response[:iris_match.start()].strip()
-            return AGENT_IRIS, user_msg if user_msg else None, f"Vision task: {task}"
+        # Already a single command? Return as-is
+        if not any(delim in command.lower() for delim in [' and ', ' then ', ', ', '\n', '1.', '2.']):
+            return [command.strip()]
         
-        # Look for ROUTE:TARA: anywhere in response
-        tara_match = re.search(r'ROUTE:TARA:\s*(.+?)(?:\n|$)', response, re.IGNORECASE | re.DOTALL)
-        if tara_match:
-            task = tara_match.group(1).strip()
-            # Get text before the ROUTE as the user-facing message
-            user_msg = response[:tara_match.start()].strip()
-            return AGENT_TARA, user_msg if user_msg else None, f"Technical task: {task}"
+        sub_commands = []
         
-        # No routing - direct response from supervisor
-        return AGENT_END, response, "Direct response"
-
-# =============================================================================
-# Placeholder Agents (TaraAgent only - IrisAgent removed, use iris.agent)
-# =============================================================================
-
-class TaraAgent:
-    """TARA - Tactical Analysis & Reasoning Agent (Placeholder).
-    
-    This is a placeholder for when the real tara.agent import fails.
-    The real TaraAgent lives in tara/agent.py.
-    """
-    
-    name = AGENT_TARA
-    description = "Logic specialist for reasoning and calculations"
-    
-    def process(self, state: AgentState) -> AgentState:
-        """Process logic request (placeholder implementation)."""
-        logger.info("TARA placeholder agent invoked")
+        # Pattern 1: "kill X and Y" -> expand verb to each target
+        # Look for pattern: <verb> <target1> and <target2>
+        and_match = re.match(r'^(\w+)\s+(.+?)\s+and\s+(.+)$', command, re.IGNORECASE)
+        if and_match:
+            verb = and_match.group(1)
+            target1 = and_match.group(2).strip()
+            target2 = and_match.group(3).strip()
+            return [f"{verb} {target1}", f"{verb} {target2}"]
         
-        if _HAS_LANGCHAIN:
-            ai_message = AIMessage(content=TARA_PLACEHOLDER_RESPONSE)
-        else:
-            ai_message = {"role": "assistant", "content": TARA_PLACEHOLDER_RESPONSE}
+        # Pattern 2: Numbered list "1. do X 2. do Y"
+        numbered = re.findall(r'\d+\.\s*(.+?)(?=\d+\.|$)', command)
+        if numbered:
+            return [cmd.strip() for cmd in numbered if cmd.strip()]
         
-        return {
-            **state,
-            "messages": [ai_message],
-            "next": AGENT_END,
-            "final_response": TARA_PLACEHOLDER_RESPONSE,
-        }
+        # Pattern 3: Comma or "then" separated
+        if ', then ' in command.lower():
+            parts = re.split(r',\s*then\s*', command, flags=re.IGNORECASE)
+            return [p.strip() for p in parts if p.strip()]
+        
+        if ', ' in command:
+            parts = command.split(', ')
+            return [p.strip() for p in parts if p.strip()]
+        
+        # Pattern 4: Newline separated
+        if '\n' in command:
+            parts = command.split('\n')
+            return [p.strip() for p in parts if p.strip()]
+        
+        # Fallback: return as single command
+        return [command.strip()]
 
+    def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Main Execution Logic.
+        """
+        # 1. Build Context (Stateless)
+        current_messages: List[BaseMessage] = [SystemMessage(content=self.system_prompt)]
+        
+        if "messages" in state and isinstance(state["messages"], list):
+            current_messages.extend(state["messages"])
+            
+        # 2. Gatekeeper Loop
+        retry_buffer: List[BaseMessage] = []
 
-# =============================================================================
-# Exports
-# =============================================================================
-
-__all__ = [
-    "SupervisorAgent",
-    "TaraAgent",
-    "SUPERVISOR_SYSTEM_PROMPT_FALLBACK",
-]
-
+        for attempt in range(config.MAX_RETRIES + 1):
+            full_context = current_messages + retry_buffer
+            
+            # Brain Think
+            try:
+                response = self.llm.invoke(full_context)
+                content = response.content
+            except Exception as e:
+                logger.error(f"LLM Invocation Failed: {e}")
+                content = "I'm having trouble connecting to my brain."
+            
+            # Gatekeeper Check
+            validation = self.gatekeeper.validate(content)
+            
+            if validation["valid"]:
+                target = validation["target"]
+                command = validation["command"]
+                
+                # --- TARA ROUTE ---
+                if target == "TARA":
+                    # Legacy tara_agent path has been removed
+                    logger.info(f"🛠️ TARA 2.0: Returning TARA route for: {command}")
+                    return {
+                        "messages": [HumanMessage(content=command)],
+                        "next": "tara",
+                        "user_input": command,
+                    }
+                    
+                # --- IRIS ROUTE ---
+                elif target == "IRIS":
+                    logger.info(f"👁️ Routing to IRIS: {command}")
+                    try:
+                        if hasattr(self.iris_agent, 'run'):
+                            tool_result = self.iris_agent.run(command)
+                        else:
+                            tool_result = self.iris_agent.process({"messages": [HumanMessage(content=command)]})
+                            if isinstance(tool_result, dict):
+                                msgs = tool_result.get("messages", [])
+                                tool_result = msgs[-1].content if msgs else str(tool_result)
+                    except Exception as e:
+                        tool_result = f"Error executing IRIS command: {e}"
+                    
+                    if tool_result is None: tool_result = "✅ Visual check completed."
+                    
+                    # Contract: Return Dictionary
+                    return {"messages": [AIMessage(content=str(tool_result))]}
+                
+                # --- CHAT ---
+                else:
+                    return {"messages": [AIMessage(content=content)]}
+            
+            else:
+                # --- RETRY WITH BACKOFF ---
+                logger.warning(f"🔄 Retry {attempt+1}/{config.MAX_RETRIES}: {validation['error']}")
+                retry_buffer.append(AIMessage(content=content))
+                retry_buffer.append(HumanMessage(content=f"SYSTEM ERROR: {validation['error']}"))
+                
+                if attempt == config.MAX_RETRIES:
+                    logger.error(f"❌ Gatekeeper failed after {config.MAX_RETRIES + 1} attempts. Last error: {validation['error']}")
+                    return {"messages": [AIMessage(content="ERROR: Unable to process your request. The routing validation failed repeatedly.")]}
+                
+                # Exponential backoff: 0.5s, 1s, 2s... with ±25% jitter
+                base_delay = 0.5 * (2 ** attempt)
+                jitter = base_delay * 0.25 * (2 * random.random() - 1)  # ±25%
+                delay = min(base_delay + jitter, 5.0)  # Cap at 5 seconds
+                logger.info(f"💤 Backoff: Sleeping {delay:.2f}s before retry...")
+                time.sleep(delay)
+                
+        # 3. Fallback (should not reach here due to above exit, but kept for safety)
+        return {"messages": [AIMessage(content="I am having trouble processing your request.")]}

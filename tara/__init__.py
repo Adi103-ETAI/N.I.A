@@ -1,26 +1,44 @@
-"""T.A.R.A. - Technical Agent for Reasoning & Analysis.
+"""T.A.R.A. 2.0 - Technical Agent for Reasoning & Analysis.
 
-A specialist agent for NIA that handles:
-- System monitoring (CPU, RAM, disk)
-- Desktop automation (apps, clipboard)
-- Web search (DuckDuckGo)
+A LangGraph-based specialist agent for NIA that handles:
+- Desktop automation (apps, windows, clipboard)  
+- UI interaction (buttons, menus, typing)
+- Browser control (navigation, forms)
+- File operations (read, write, search)
+
+Architecture:
+    TARA 2.0 is now a compiled LangGraph SubGraph accessed via:
+    - `from tara.graph import run_tara, tara_app`
+    - `from tara.tools import get_tara_tools`
 
 Usage:
-    from tara import TaraAgent
+    # Via NIA (recommended):
+    NIA routes to TARA automatically via call_tara_2 node
     
-    agent = TaraAgent()
-    result = agent.run("Check system health")
+    # Direct usage:
+    from tara.graph import run_tara
+    result = run_tara("Open Notepad")
 """
 from __future__ import annotations
 
-# Import agent (tools are discovered dynamically via ToolRegistry)
+# TARA 2.0: Export graph components
 try:
-    from .agent import TaraAgent
-    _HAS_AGENT = True
+    from tara.graph import run_tara, tara_app, TaraState
+    _HAS_GRAPH = True
 except ImportError:
-    TaraAgent = None  # type: ignore
-    _HAS_AGENT = False
+    run_tara = None  # type: ignore
+    tara_app = None  # type: ignore
+    TaraState = None  # type: ignore
+    _HAS_GRAPH = False
+
+# TARA 2.0: Export tool interface
+try:
+    from tara.tools import get_tara_tools
+    _HAS_TOOLS = True
+except ImportError:
+    get_tara_tools = None  # type: ignore
+    _HAS_TOOLS = False
 
 
-__version__ = "2.3.0"
-__all__ = ["TaraAgent"]
+__version__ = "2.5.0"
+__all__ = ["run_tara", "tara_app", "TaraState", "get_tara_tools"]

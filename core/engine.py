@@ -6,26 +6,77 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from datetime import datetime
-from typing import Optional, Tuple
+from pathlib import Path
+from typing import TYPE_CHECKING, Optional, Tuple
 
-# Centralized Logging
+# Centralized Logging (lightweight - loads quickly)
 from core.logger import setup_logger
 
-# 4-Layer Memory System
-from core.memory import get_memory_manager
+# =============================================================================
+# TYPE_CHECKING Block: IDE-only imports (no runtime cost)
+# =============================================================================
+if TYPE_CHECKING:
+    # 🌊 RIPPLE SAFE: These imports are for type hints only, not loaded at runtime
+    from core.memory import MemoryManager
 
-# Import banner
+# =============================================================================
+# Lazy Import Markers (actual imports happen in _init_nia)
+# =============================================================================
+# The following were previously top-level imports that blocked startup:
+# - from core.memory import get_memory_manager  (ChromaDB, SQLite, NetworkX)
+# Now deferred to: _init_nia()
+
+# Import banner (lightweight - just a string constant)
 try:
     from interface.banner import MINI_BANNER
 except ImportError:
     MINI_BANNER = "N.I.A. - Neural Intelligence Assistant"
 
-# Import Terminal UI
+# Import Terminal UI (lazy-ish - only UI components)
 try:
     from interface.chat import TerminalUI
 except ImportError:
     TerminalUI = None
+
+
+# =============================================================================
+# Config Loader (Dynamic from External Files)
+# =============================================================================
+
+def _load_engine_config() -> dict:
+    """Load engine configuration from external files.
+    
+    Returns:
+        Dictionary with command vocabularies and help text.
+    """
+    config_dir = Path(__file__).parent / "config"
+    config = {}
+    
+    # Load command vocabularies
+    commands_path = config_dir / "commands.json"
+    if commands_path.exists():
+        with open(commands_path, "r", encoding="utf-8") as f:
+            config["commands"] = json.load(f)
+    else:
+        config["commands"] = {}
+    
+    # Load help text
+    help_path = config_dir / "help.txt"
+    if help_path.exists():
+        with open(help_path, "r", encoding="utf-8") as f:
+            config["help_text"] = f.read()
+    else:
+        config["help_text"] = "Type 'exit' to quit."
+    
+    return config
+
+
+# Load at module level (cached)
+_ENGINE_CONFIG = _load_engine_config()
+_COMMANDS = _ENGINE_CONFIG.get("commands", {})
+_HELP_TEXT = _ENGINE_CONFIG.get("help_text", "")
 
 
 # =============================================================================
@@ -63,6 +114,9 @@ class NIAAssistant:
     ) -> None:
         """Initialize the NIAAssistant.
         
+        NOTE: This constructor is LIGHTWEIGHT for instant startup.
+        Heavy components (NIA brain, Memory) are loaded in start() -> _init_nia().
+        
         Args:
             voice_mode: Enable voice input/output via NOLA.
             wake_word_enabled: Require wake word before accepting commands.
@@ -70,26 +124,29 @@ class NIAAssistant:
             thread_id: Unique identifier for conversation thread persistence.
             debug: Enable verbose debug logging.
         """
+        # 🌊 RIPPLE SAFE: Only lightweight assignments here - NO heavy imports
         self.voice_mode: bool = voice_mode
         self.wake_word_enabled: bool = wake_word_enabled
         self.wake_words: list[str] = wake_words or ["jarvis", "nia", "hey nia"]
         self.thread_id: str = thread_id
         self.debug: bool = debug
         
-        # Centralized logger
+        # Centralized logger (lightweight - already imported at module level)
         self.logger = setup_logger("BRAIN")
         
-        # Components (lazy initialization)
+        # Components (lazy initialization in start() -> _init_*)
         self._nia_process: Optional[callable] = None
         self._nola: Optional[object] = None
         self.sentry_thread: Optional[object] = None
         self._running: bool = False
         
-        # 4-Layer Memory System
-        self.memory = None
+        # 4-Layer Memory System (initialized in _init_nia, typed for IDE)
+        self.memory: Optional['MemoryManager'] = None
     
     def _init_nia(self) -> bool:
         """Initialize the NIA brain (LangGraph reasoning engine).
+        
+        NOTE: This is where ALL heavy imports happen (lazy loading).
         
         Returns:
             True if NIA brain initialized successfully, False otherwise.
@@ -99,6 +156,7 @@ class NIAAssistant:
             self.logger.debug("Step 1: Starting NIA import...")
             t0 = time.perf_counter()
             
+            # 🌊 LAZY LOAD: NIA brain (LangGraph, LangChain, NVIDIA API)
             from nia import process_input
             
             t1 = time.perf_counter()
@@ -111,8 +169,9 @@ class NIAAssistant:
             
             self.logger.info("🧠 NIA brain initialized (total: %.2fs)", t2-t0)
             
-            # Initialize Memory System
+            # 🌊 LAZY LOAD: 4-Layer Memory System (ChromaDB, SQLite, NetworkX)
             try:
+                from core.memory import get_memory_manager
                 self.memory = get_memory_manager()
                 self.logger.info("💾 Memory connected: %s", self.memory.get_stats())
                 
@@ -317,11 +376,7 @@ class NIAAssistant:
         if not text:
             return ""
         
-        # Handle wake-up-only signal (single space from Vosk)
-        if text.strip() == "":
-            print("🎤 Wake Word Detected. Listening...")
-            self.speak("Yes, Director?")
-            return "Listening..."
+        # The wake-up-only signal handling is now done exclusively in NOLA before calling process()
         
         # Handle wake words in commands
         text_lower = text.lower().strip()
@@ -379,8 +434,8 @@ class NIAAssistant:
                 try:
                     self.memory.store_episode(text, role="user")
                     self.memory.store_episode(response, role="assistant")
-                except Exception:
-                    pass  # Don't fail on memory storage errors
+                except Exception as e:
+                    self.logger.debug(f"Memory storage failed: {e}")
             
             return response
         except ConnectionError as exc:
@@ -568,9 +623,11 @@ class NIAAssistant:
         # =================================================================
         
         # 🎤 MIC OFF: "turn off mic", "disable microphone", "kill the mic"
-        mic_words = ["mic", "microphone"]
-        off_words = ["off", "mute", "stop", "kill", "disable", "pause", "silence"]
-        on_words = ["on", "unmute", "start", "enable", "resume", "activate"]
+        # Load mic control words from config
+        mic_cfg = _COMMANDS.get("mic_control", {})
+        mic_words = mic_cfg.get("mic_words", ["mic", "microphone"])
+        off_words = mic_cfg.get("off_words", ["off", "mute", "stop"])
+        on_words = mic_cfg.get("on_words", ["on", "unmute", "start"])
         
         has_mic = any(w in cmd for w in mic_words)
         has_off = any(w in cmd for w in off_words)
@@ -609,32 +666,29 @@ class NIAAssistant:
             return True
         
         # =================================================================
-        # VOCABULARY DEFINITIONS (Synonyms for each intent)
+        # VOCABULARY DEFINITIONS (Loaded from config)
         # =================================================================
         
         # 👁️ IRIS (Sentry/Vision Control)
-        IRIS_ON = ["sentry on", "activate sentry", "enable sentry", "guard mode",
-                   "watch screen", "eyes on", "start sentry", "start watching"]
-        IRIS_OFF = ["sentry off", "disable sentry", "stop sentry", "standby",
-                    "eyes off", "stop watching", "sentry standby"]
+        iris_cfg = _COMMANDS.get("iris_control", {})
+        IRIS_ON = iris_cfg.get("on", [])
+        IRIS_OFF = iris_cfg.get("off", [])
         
         # 🔊 TARA (Speaker Mute - Zero Latency Reflex)
-        # Note: "mic" is excluded to prevent speaker commands on mic phrases
-        SPEAKER_MUTE = ["mute speakers", "mute system", "mute audio", "kill sound", 
-                        "silence speakers", "speakers off", "sound off", "mute volume"]
-        SPEAKER_UNMUTE = ["unmute speakers", "unmute system", "sound on", "restore audio", 
-                          "speakers on", "audio on", "turn on speakers", "enable sound",
-                          "unmute volume", "unmute audio"]
+        speaker_cfg = _COMMANDS.get("speaker_control", {})
+        SPEAKER_MUTE = speaker_cfg.get("mute", [])
+        SPEAKER_UNMUTE = speaker_cfg.get("unmute", [])
         
         # 🔇 TTS (Stop Speaking)
-        TTS_STOP = ["stop talking", "shh", "quiet", "shut up", "be quiet", "hush"]
+        tts_cfg = _COMMANDS.get("tts_control", {})
+        TTS_STOP = tts_cfg.get("stop", [])
         
         # ⚙️ SYSTEM (Maintenance)
-        SYS_STATUS = ["status", "report", "system check", "diagnostics", "health",
-                      "stats", "specs", "performance", "usage", "sys stats", "system stats"]
-        SYS_CLEAR = ["clear", "cls", "clean screen"]
-        SYS_EXIT = ["exit", "quit", "bye", "goodbye", "terminate", "close"]
-        SYS_HELP = ["help", "commands", "what can you do"]
+        sys_cfg = _COMMANDS.get("system_control", {})
+        SYS_STATUS = sys_cfg.get("status", [])
+        SYS_CLEAR = sys_cfg.get("clear", [])
+        SYS_EXIT = sys_cfg.get("exit", [])
+        SYS_HELP = sys_cfg.get("help", [])
         
         # =================================================================
         # HELPER: Check if any phrase matches the command
@@ -673,7 +727,7 @@ class NIAAssistant:
         # UNMUTE first (to avoid "unmute" matching "mute")
         if matches(SPEAKER_UNMUTE) and "mic" not in cmd and "microphone" not in cmd:
             try:
-                from tara.units.system_control import mute_volume
+                from tara.tools.system_ops import mute_volume
                 result = mute_volume(mute=False)
                 print(result)  # Tool returns "🔊 System Unmuted"
             except Exception as e:
@@ -683,7 +737,7 @@ class NIAAssistant:
         # MUTE SPEAKERS (exclude "mic" to prevent false matches)
         if matches(SPEAKER_MUTE) and "mic" not in cmd and "microphone" not in cmd:
             try:
-                from tara.units.system_control import mute_volume
+                from tara.tools.system_ops import mute_volume
                 result = mute_volume(mute=True)
                 print(result)  # Tool returns "🔇 System Muted"
             except Exception as e:
@@ -724,7 +778,8 @@ class NIAAssistant:
         
         # CLEAR SCREEN
         if matches(SYS_CLEAR):
-            os.system('cls' if os.name == 'nt' else 'clear')
+            # 🌊 MODERNIZED: subprocess.run instead of os.system (cross-platform)
+            subprocess.run(['cls' if os.name == 'nt' else 'clear'], shell=True, check=False)
             print(MINI_BANNER)
             return True
         
@@ -790,29 +845,8 @@ class NIAAssistant:
         return False
     
     def _print_help(self) -> None:
-        """Print help information."""
-        help_text = """
-╭────────────────────────────────────────────────────────────╮
-│                      NIA Commands                          │
-├────────────────────────────────────────────────────────────┤
-│  General:                                                  │
-│    help           - Show this help                         │
-│    status         - Show system status                     │
-│    clear          - Clear the screen                       │
-│    exit/quit      - Exit the assistant                     │
-│                                                            │
-│  Voice:                                                    │
-│    voice on       - Enable voice mode                      │
-│    voice off      - Mute microphone                        │
-│    sentry on/off  - Toggle vision monitoring               │
-│                                                            │
-│  Memory:                                                   │
-│    prefs          - View all saved user preferences        │
-│    history        - Show conversation history              │
-│    clear history  - Clear conversation history             │
-╰────────────────────────────────────────────────────────────╯
-"""
-        print(help_text)
+        """Print help information from external file."""
+        print(f"\n{_HELP_TEXT}\n")
     
     def _draw_bar(self, percent: float) -> str:
         """Returns a strict 17-character progress bar string."""

@@ -30,15 +30,15 @@ Components:
     VoskSTT: Offline speech recognition
     get_nola_manager: Singleton accessor for NOLAManager
 
-Version: 2.3.0 (Edge TTS + Vosk Stack)
+Version: 2.5.0 (Edge TTS + Vosk Stack)
 """
 from __future__ import annotations
 
 import sys
 import importlib.util
-import logging
+from core.logger import setup_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_logger("NOLA")
 
 # =============================================================================
 # Dependency Verification
@@ -101,7 +101,7 @@ from .io import (
 )
 
 # Package metadata
-__version__ = "2.3.0"
+__version__ = "2.5.0"
 __author__ = "NIA Team"
 __all__ = [
     # Core

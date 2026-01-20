@@ -15,8 +15,9 @@ Usage:
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -135,6 +136,11 @@ class Settings(BaseSettings):
         description="Ollama server URL for local models",
     )
     
+    NVIDIA_BASE_URL: str = Field(
+        default="https://integrate.api.nvidia.com/v1",
+        description="NVIDIA NIM API endpoint URL",
+    )
+    
     # =========================================================================
     # LLM Model Selection
     # =========================================================================
@@ -145,12 +151,12 @@ class Settings(BaseSettings):
     )
     
     LLM_MODEL_SMART: str = Field(
-        default="meta/llama-3.1-405b-instruct",
+        default="meta/llama-3.1-70b-instruct",  # Changed from 405b for speed
         description="High-quality LLM for complex reasoning",
     )
     
     LLM_MODEL_FAST: str = Field(
-        default="meta/llama-3.1-8b-instruct",
+        default="meta/llama-3.1-70b-instruct",
         description="Fast LLM for simple tasks",
     )
     
@@ -164,6 +170,38 @@ class Settings(BaseSettings):
         ge=0.0,
         le=2.0,
         description="LLM temperature for response generation",
+    )
+    
+    # =========================================================================
+    # Conversation Management
+    # =========================================================================
+    
+    MAX_HISTORY: int = Field(
+        default=50,
+        ge=10,
+        le=200,
+        description="Maximum conversation messages before pruning",
+    )
+    
+    PRUNE_COUNT: int = Field(
+        default=15,
+        ge=5,
+        le=50,
+        description="Number of messages to summarize when pruning",
+    )
+    
+    MAX_RETRIES: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum retries for LLM routing validation",
+    )
+    
+    MAX_ITERATIONS: int = Field(
+        default=10,
+        ge=3,
+        le=30,
+        description="Maximum reasoning iterations for TARA tool loop",
     )
     
     # =========================================================================
@@ -197,8 +235,127 @@ class Settings(BaseSettings):
     # =========================================================================
     
     VERSION: str = Field(
-        default="2.3.1",
+        default="2.5.0",
         description="N.I.A. version string",
+    )
+    
+    FORCE_LOCAL_EMBEDDINGS: bool = Field(
+        default=True,
+        description="Force local embeddings (ignore OpenAI key). Set to False to use OpenAI.",
+    )
+    
+    # =========================================================================
+    # Desktop Automation Settings (Phase 2)
+    # =========================================================================
+    
+    UIA_DEFAULT_TIMEOUT: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=30.0,
+        description="Default timeout (seconds) for UI element waits",
+    )
+    
+    UIA_POLL_INTERVAL: float = Field(
+        default=0.5,
+        ge=0.1,
+        le=2.0,
+        description="Polling interval (seconds) for element wait retries",
+    )
+    
+    PYAUTOGUI_PAUSE: float = Field(
+        default=0.5,
+        ge=0.1,
+        le=2.0,
+        description="Pause between pyautogui actions (stability delay)",
+    )
+    
+    PYAUTOGUI_FAILSAFE: bool = Field(
+        default=True,
+        description="Enable pyautogui failsafe (move mouse to corner to abort)",
+    )
+    
+    SCROLL_STEPS: int = Field(
+        default=200,
+        ge=50,
+        le=1000,
+        description="Default scroll distance in pixels",
+    )
+    
+    LAUNCH_MAX_RETRIES: int = Field(
+        default=20,
+        ge=5,
+        le=60,
+        description="Max retries when waiting for app window to appear",
+    )
+    
+    LAUNCH_POLL_INTERVAL: float = Field(
+        default=0.5,
+        ge=0.1,
+        le=2.0,
+        description="Polling interval (seconds) for launch window verification",
+    )
+    
+    # =========================================================================
+    # TARA 2.0 Configuration
+    # =========================================================================
+    
+    # File System Paths
+    SCREENSHOT_DIR: Path = Field(
+        default=Path("data/screenshots"),
+        description="Directory for screenshot captures",
+    )
+    
+    BROWSER_DOWNLOAD_DIR: Path = Field(
+        default=Path("data/downloads"),
+        description="Directory for browser downloads",
+    )
+    
+    # Browser (Playwright)
+    BROWSER_HEADLESS: bool = Field(
+        default=False,
+        description="Run Playwright browser in headless mode",
+    )
+    
+    BROWSER_DEFAULT_TIMEOUT: int = Field(
+        default=30000,
+        ge=5000,
+        le=120000,
+        description="Default browser operation timeout (milliseconds)",
+    )
+    
+    BROWSER_VIEWPORT_WIDTH: int = Field(
+        default=1280,
+        description="Browser viewport width in pixels",
+    )
+    
+    BROWSER_VIEWPORT_HEIGHT: int = Field(
+        default=800,
+        description="Browser viewport height in pixels",
+    )
+    
+    BROWSER_EXECUTABLE_PATH: Optional[str] = Field(
+        default=r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+        description="Custom browser executable path (e.g., Brave, Edge). Set to None for default Chromium.",
+    )
+    
+    # Safety Limits
+    MAX_FILE_READ_CHARS: int = Field(
+        default=5000,
+        ge=1000,
+        le=50000,
+        description="Maximum characters to read from files (token budget)",
+    )
+    
+    SAFE_DELETE_CONFIRM: bool = Field(
+        default=True,
+        description="Require confirm=True for delete operations",
+    )
+    
+    MAX_SEARCH_RESULTS: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Maximum file search results to return",
     )
     
     # =========================================================================
@@ -227,7 +384,11 @@ class Settings(BaseSettings):
             return [str(w).lower() for w in v]
         return ["nia", "jarvis", "hey nia"]
     
-    @field_validator("LOG_DIR", "MODEL_DIR", "DATA_DIR", "SOUNDS_DIR", mode="before")
+    @field_validator(
+        "LOG_DIR", "MODEL_DIR", "DATA_DIR", "SOUNDS_DIR",
+        "SCREENSHOT_DIR", "BROWSER_DOWNLOAD_DIR",
+        mode="before"
+    )
     @classmethod
     def ensure_path(cls, v):
         """Convert string to Path."""
@@ -258,7 +419,14 @@ class Settings(BaseSettings):
     
     def ensure_directories(self) -> None:
         """Create all required directories if they don't exist."""
-        for dir_path in [self.LOG_DIR, self.MODEL_DIR, self.DATA_DIR, self.SOUNDS_DIR]:
+        for dir_path in [
+            self.LOG_DIR,
+            self.MODEL_DIR,
+            self.DATA_DIR,
+            self.SOUNDS_DIR,
+            self.SCREENSHOT_DIR,
+            self.BROWSER_DOWNLOAD_DIR,
+        ]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
 
@@ -285,10 +453,35 @@ def _create_settings() -> Settings:
         
         return FallbackSettings()
 
-settings = _create_settings()
+
+@lru_cache()
+def get_settings() -> Settings:
+    """Get cached settings singleton.
+    
+    Uses lru_cache for efficient caching across the application.
+    """
+    return _create_settings()
+
+
+# Create module-level settings for backward compatibility
+settings = get_settings()
 
 # Ensure directories exist on import
 settings.ensure_directories()
+
+
+# =============================================================================
+# Embedding Function Factory
+# =============================================================================
+
+def get_embedding_function() -> Any:
+    """Get the embedding function for Vector DB.
+    
+    FORCE LOCAL to match the existing database and save costs.
+    Returns None which triggers ChromaDB's default SentenceTransformer (Local/Free).
+    """
+    # Return None = ChromaDB uses default local embeddings (all-MiniLM-L6-v2)
+    return None
 
 
 # =============================================================================
@@ -298,4 +491,6 @@ settings.ensure_directories()
 __all__ = [
     "Settings",
     "settings",
+    "get_settings",
+    "get_embedding_function",
 ]
