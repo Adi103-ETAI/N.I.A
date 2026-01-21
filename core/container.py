@@ -1,12 +1,23 @@
 """N.I.A. Service Container - Centralized Dependency Injection.
 
-Phase 3A: Heart Transplant - Replacing implicit singletons with explicit DI.
+VERSION: 2.5.2
+
+Part of the CRO (Chief Resource Officer) layer in N.I.A. architecture.
+Replaces implicit singletons with explicit dependency injection.
 
 The ServiceContainer provides:
 1. **Explicit Dependencies** - All services are created in known order
 2. **Testability** - Easy to inject mocks for unit testing
 3. **Type Safety** - Dataclass with typed fields for IDE support
 4. **Backward Compatibility** - Legacy get_*() functions still work
+
+Architecture (v2.5.2):
+    ServiceContainer manages:
+    - MemoryManager (4-Layer Hybrid Memory)
+    - WindowRegistry (App tracking)
+    - AsyncBrowserManager (Playwright)
+    - NOLAManager (Voice I/O)
+    - Settings (Configuration)
 
 Usage:
     # Modern (recommended)

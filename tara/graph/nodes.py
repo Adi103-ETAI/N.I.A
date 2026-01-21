@@ -1,17 +1,28 @@
 """
 TARA 2.0 Graph Nodes.
 
-Implements the reasoning and tool execution nodes for the TARA SubGraph.
-These nodes form the core thinking loop: Reason → Execute → Update Context.
+v2.5.2 "Velocity" - Key Features:
+    - Dynamic Provider Access: Uses `_get_llm()` function to fetch LLM on each
+      call, enabling hot-swap provider switching without restart.
+    - SafeLLM Integration: All LLM calls are wrapped with circuit breaker for
+      automatic retry and fallback on 429/503 errors.
+    - Unified Async Bridge: Tool executor uses `ainvoke()` polymorphically,
+      handling both sync and async tools via ThreadPoolExecutor.
+
+Data Flow:
+    Supervisor -> TARA Reasoner -> SafeLLM -> ModelManager -> Active Provider
+                      |                           ^
+                      v                           |__ Auto-fallback on 429
+                 Tool Executor -> 50+ Tools
 
 Architecture:
     ┌─────────────┐
-    │  reasoner   │ ← Generates tool calls using dynamic context
+    │  reasoner   │ ← Generates tool calls using dynamic context + SafeLLM
     └──────┬──────┘
            │
            ▼
     ┌─────────────────┐
-    │  tool_executor  │ ← Executes tools and updates state
+    │  tool_executor  │ ← Unified Async Bridge (sync-to-async safe)
     └────────┬────────┘
              │
              ▼
@@ -68,7 +79,6 @@ try:
         AIMessage,
         ToolMessage,
     )
-    from langchain_nvidia_ai_endpoints import ChatNVIDIA
 except ImportError as e:
     # FAIL FAST: Do not masquerade with dummy classes
     raise RuntimeError(
@@ -78,10 +88,13 @@ except ImportError as e:
 ╠══════════════════════════════════════════════════════════════════╣
 ║  Required package not installed: {str(e).split("'")[1] if "'" in str(e) else 'langchain'}           
 ║                                                                  ║
-║  Fix: pip install langchain-core langchain-nvidia-ai-endpoints   ║
+║  Fix: pip install langchain-core                                 ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
     ) from e
+
+# v3.0: ModelManager for dynamic provider switching
+from models.model_manager import get_smart_model
 
 # LangGraph tool node - REQUIRED for tool execution
 try:
@@ -272,17 +285,16 @@ def _parse_llama_tool_calls(content: str) -> List[Dict[str, Any]]:
 
 
 # =============================================================================
-# LLM Initialization
+# LLM Initialization (v3.0: via ModelManager)
 # =============================================================================
 
 def _get_llm():
-    """Get configured LLM instance with NVIDIA settings."""
-    return ChatNVIDIA(
-        model=settings.LLM_MODEL,
-        nvidia_api_key=settings.NVIDIA_API_KEY.get_secret_value(),
-        base_url=settings.NVIDIA_BASE_URL,
-        temperature=settings.LLM_TEMPERATURE,
-    )
+    """Get configured LLM instance via ModelManager.
+    
+    v3.0: Uses ModelManager for dynamic provider switching.
+    The temperature is set by the ModelManager based on settings.
+    """
+    return get_smart_model(temperature=settings.LLM_TEMPERATURE)
 
 
 # =============================================================================
@@ -344,9 +356,10 @@ def reasoner(state: TaraState) -> TaraStateUpdate:
         
         # =====================================================================
         # FALLBACK: Parse Llama 3.1 <|python_tag|> format if bind_tools failed
+        # (Only applicable when using NVIDIA Llama models)
         # =====================================================================
         if not has_tool_calls and response.content and "<|python_tag|>" in response.content:
-            logger.warning("[REASONER] ChatNVIDIA didn't parse tool calls, using fallback parser")
+            logger.warning("[REASONER] LLM didn't parse tool calls, using fallback parser")
             
             parsed_calls = _parse_llama_tool_calls(response.content)
             

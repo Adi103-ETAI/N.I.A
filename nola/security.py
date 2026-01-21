@@ -1,7 +1,20 @@
 """N.O.L.A. Security Module - Input Sanitization & Command Filtering.
 
-This module provides security-focused input processing for voice commands,
+VERSION: 2.5.2
+
+Part of the CSO (Chief Security Officer) layer in N.I.A. architecture.
+Provides security-focused input processing for voice commands,
 implementing pattern-based detection of potentially dangerous operations.
+
+Security Architecture (v2.5.2):
+    - InputSanitizer: Regex-based command filtering (SAFE/WARNING/BLOCKED)
+    - RoutingGatekeeper (nia/gatekeeper.py): LLM output validation
+    - SafeLLM (models/safe_llm.py): Circuit breaker for API resilience
+
+Data Flow:
+    Voice Input -> NOLA -> InputSanitizer -> Supervisor -> SafeLLM -> Provider
+                             ^
+                             |__ Blocks dangerous patterns (del *, rm -rf, etc.)
 
 Classes:
     SecurityLevel: Enum for input classification (SAFE, WARNING, BLOCKED)

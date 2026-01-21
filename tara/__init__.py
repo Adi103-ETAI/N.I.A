@@ -40,5 +40,5 @@ except ImportError:
     _HAS_TOOLS = False
 
 
-__version__ = "2.5.0"
+__version__ = "2.5.2"
 __all__ = ["run_tara", "tara_app", "TaraState", "get_tara_tools"]

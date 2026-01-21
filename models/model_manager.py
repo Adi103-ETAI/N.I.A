@@ -3,6 +3,19 @@
 This module provides a clean, decoupled interface for working with multiple
 LLM providers (NVIDIA NIM, OpenAI, Ollama, Groq) through a unified API.
 
+v2.5.2 "Velocity" - Key Features:
+    - Hot-Swap Provider Switching: Change active provider at runtime via
+      `set_active_provider()`. All agents automatically use the new provider.
+    - SafeLLM Circuit Breaker: All models are wrapped with automatic retry
+      and fallback logic. If Provider A fails (429), switches to Provider B.
+    - Dynamic Access Pattern: Agents use `@property` to fetch models on each
+      access, enabling seamless hot-swap without restart.
+
+Data Flow:
+    User -> Supervisor -> SafeLLM -> ModelManager -> [NVIDIA|OpenAI|Groq|Ollama]
+                            ^
+                            |__ Circuit Breaker: Auto-fallback on 429/503
+
 Architecture:
     ┌─────────────────────────────────────────────────────────────────┐
     │                       ModelManager                              │
@@ -14,7 +27,7 @@ Architecture:
     │         │                │                     │                │
     │         ▼                ▼                     ▼                │
     │  ┌───────────────────────────────────────────────────────────┐  │
-    │  │                  LangChain Chat Models                    │  │
+    │  │               SafeLLM Wrapped Chat Models                 │  │
     │  │  ChatNVIDIA  │  ChatOpenAI  │  ChatOllama  │  ChatGroq    │  │
     │  └───────────────────────────────────────────────────────────┘  │
     └─────────────────────────────────────────────────────────────────┘
@@ -24,16 +37,19 @@ Usage:
     
     manager = ModelManager()
     
-    # Use presets
+    # Use presets (all wrapped with SafeLLM)
     smart = manager.get_smart_model()   # Best quality
     fast = manager.get_fast_model()     # Fastest response
     vision = manager.get_vision_model() # Image understanding
+    
+    # Hot-swap provider at runtime
+    manager.set_active_provider("openai")  # All agents now use OpenAI
     
     # Or get specific provider/model
     model = manager.get_chat_model("nvidia", "meta/llama-3.1-70b-instruct")
     response = model.invoke("Hello!")
 
-Version: 2.0.0
+Version: 2.5.2
 """
 from __future__ import annotations
 
@@ -48,12 +64,25 @@ from typing import Any, Dict, List, Optional, Union
 
 from dotenv import load_dotenv
 from core.logger import setup_logger
+from core.config import settings
+
+# v2.5.2: SafeLLM import (deferred to avoid circular import)
+# SafeLLM is imported lazily in _wrap_with_safety()
 
 # Load environment variables
 load_dotenv()
 
 # Configure module logger
 logger = setup_logger("Models")
+
+# Default fallback provider (NVIDIA supremacy)
+DEFAULT_PROVIDER = "nvidia"
+
+# Valid providers for runtime switching
+VALID_PROVIDERS = frozenset({"nvidia", "openai", "groq", "ollama"})
+
+# v2.5.2: Enable/disable SafeLLM wrapping (for testing/debugging)
+ENABLE_SAFE_LLM = True
 
 
 # =============================================================================
@@ -519,6 +548,10 @@ class ModelManager:
         self._temperature = kwargs.get("temperature", self.config.default_temperature)
         self._persona_prompt = kwargs.get("persona_prompt", "")
         
+        # v3.0: Active provider for runtime switching (defaults to settings or "nvidia")
+        self.active_provider: str = getattr(settings, "ACTIVE_LLM_PROVIDER", DEFAULT_PROVIDER).lower()
+        self._default_provider: str = DEFAULT_PROVIDER
+        
         # Cached models
         self._smart_model = None
         self._fast_model = None
@@ -528,9 +561,85 @@ class ModelManager:
         # Logger - use module level logger
         self.logger = logger  # Reference module-level setup_logger("Models")
         self.logger.info(
-            "ModelManager initialized (providers: %s)",
+            "ModelManager initialized (active_provider: %s, available: %s)",
+            self.active_provider,
             self.factory.get_available_providers()
         )
+    
+    # =========================================================================
+    # v3.0: Dynamic Provider Switching
+    # =========================================================================
+    
+    def set_active_provider(self, provider: str) -> None:
+        """Hot-swap the active LLM provider at runtime.
+        
+        This allows switching between providers (nvidia, openai, groq, ollama)
+        without restarting the application. Cached models are cleared to force
+        rebuild on next access.
+        
+        Args:
+            provider: Provider name ('nvidia', 'openai', 'groq', 'ollama').
+            
+        Raises:
+            ValueError: If provider is invalid or missing API key.
+            
+        Example:
+            manager.set_active_provider("openai")  # Switch to OpenAI
+            manager.set_active_provider("nvidia")  # Switch back to NVIDIA
+        """
+        provider = provider.lower().strip()
+        
+        # Validate provider name
+        if provider not in VALID_PROVIDERS:
+            raise ValueError(
+                f"Unsupported provider: '{provider}'. "
+                f"Valid options: {', '.join(sorted(VALID_PROVIDERS))}"
+            )
+        
+        # Check API key exists (for cloud providers, not ollama)
+        if provider != "ollama" and not self.config.has_api_key(provider):
+            raise ValueError(
+                f"Missing API key for provider '{provider}'. "
+                f"Set the corresponding environment variable (e.g., OPENAI_API_KEY)."
+            )
+        
+        # Check if provider package is installed
+        if not self.factory.is_provider_available(provider):
+            raise ValueError(
+                f"Provider '{provider}' is not installed. "
+                f"Install with: pip install langchain-{provider}-ai-endpoints"
+            )
+        
+        # Clear cached models (force rebuild on next access)
+        self._clear_model_cache()
+        
+        # Switch provider
+        old_provider = self.active_provider
+        self.active_provider = provider
+        self.logger.info(
+            "Switched active provider: %s -> %s",
+            old_provider,
+            provider
+        )
+    
+    def get_active_provider(self) -> str:
+        """Get the current active provider name.
+        
+        Returns:
+            Active provider string (e.g., 'nvidia', 'openai').
+        """
+        return self.active_provider
+    
+    def _clear_model_cache(self) -> None:
+        """Clear all cached model instances.
+        
+        Called when switching providers to ensure fresh model creation.
+        """
+        self._smart_model = None
+        self._fast_model = None
+        self._vision_model = None
+        self._current_model = None
+        self.logger.debug("Model cache cleared")
     
     # =========================================================================
     # Preset Models
@@ -616,6 +725,9 @@ class ModelManager:
     ) -> Any:
         """Get the first available model from preferred list.
         
+        v3.0: Prioritizes models from self.active_provider, then falls back
+        to other providers in the preferred order.
+        
         Args:
             preferred_specs: Ordered list of model spec keys.
             temperature: Sampling temperature.
@@ -626,9 +738,21 @@ class ModelManager:
         Raises:
             RuntimeError: If no models are available.
         """
+        # v3.0: Reorder specs to prioritize active provider
+        active = self.active_provider
+        prioritized = [s for s in preferred_specs if s.startswith(f"{active}/")]
+        others = [s for s in preferred_specs if not s.startswith(f"{active}/")]
+        reordered_specs = prioritized + others
+        
+        self.logger.debug(
+            "Model selection order (active=%s): %s",
+            active,
+            reordered_specs
+        )
+        
         errors = []
         
-        for spec_key in preferred_specs:
+        for spec_key in reordered_specs:
             if spec_key not in MODEL_CATALOG:
                 continue
             
@@ -648,7 +772,9 @@ class ModelManager:
             try:
                 model = self.factory.get_model_from_spec(spec_key, temperature)
                 self.logger.info("Using model: %s", spec.display_name)
-                return model
+                
+                # v2.5.2: Wrap with SafeLLM circuit breaker
+                return self._wrap_with_safety(model)
             except Exception as exc:
                 errors.append(f"{spec_key}: {exc}")
                 continue
@@ -659,6 +785,44 @@ class ModelManager:
             f"No models available. Tried:\n{error_summary}\n\n"
             f"Install providers with: pip install langchain-nvidia-ai-endpoints langchain-openai"
         )
+    
+    def _wrap_with_safety(self, model: Any) -> Any:
+        """Wrap a model with SafeLLM circuit breaker.
+        
+        v2.5.2: All models are wrapped for automatic 429 handling
+        and provider fallback.
+        
+        Args:
+            model: Raw LangChain chat model.
+            
+        Returns:
+            SafeLLM wrapper (or raw model if disabled).
+        """
+        if not ENABLE_SAFE_LLM:
+            return model
+        
+        try:
+            from models.safe_llm import SafeLLM
+            
+            # Determine fallback based on current provider
+            # If we're on NVIDIA, fallback to OpenAI; otherwise fallback to NVIDIA
+            if self.active_provider == "nvidia":
+                fallback = "openai" if self.config.has_api_key("openai") else "nvidia"
+            else:
+                fallback = "nvidia"
+            
+            wrapped = SafeLLM(
+                primary_model=model,
+                manager=self,
+                fallback_provider=fallback,
+                max_retries=2,
+            )
+            self.logger.debug(f"Model wrapped with SafeLLM (fallback={fallback})")
+            return wrapped
+            
+        except ImportError as e:
+            self.logger.warning(f"SafeLLM not available, using raw model: {e}")
+            return model
     
     # =========================================================================
     # High-Level API

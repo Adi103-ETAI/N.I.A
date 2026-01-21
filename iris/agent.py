@@ -1,7 +1,23 @@
 """IRIS Agent - Intelligent Recognition & Image System.
 
-Vision specialist agent using NVIDIA Llama 3.2 Vision for image analysis.
-Autonomously captures screen or webcam based on user intent, then analyzes.
+v2.5.2 "Velocity" - Vision Specialist Agent
+
+Uses NVIDIA Llama 3.2 Vision (or active provider's vision model) for image 
+analysis. Autonomously captures screen or webcam based on user intent.
+
+Dynamic Provider Access:
+    The vision LLM is fetched via `@property` on each access, NOT stored at init.
+    This enables hot-swap provider switching via ModelManager.set_active_provider()
+    without restarting. All calls are wrapped with SafeLLM circuit breaker.
+
+Data Flow:
+    Supervisor -> ROUTE:IRIS -> IrisAgent.process()
+                                    |
+                                    v
+                             Screen/Webcam Capture
+                                    |
+                                    v
+                             SafeLLM -> Vision LLM -> Analysis Result
 
 Usage:
     from iris.agent import IrisAgent
@@ -13,6 +29,8 @@ Usage:
     
     # LangGraph state dict input
     result = agent.process({"messages": [HumanMessage(content="Look at screen")]})
+
+Version: 2.5.2
 """
 from __future__ import annotations
 
@@ -25,14 +43,8 @@ from core.config import settings
 
 logger = setup_logger("IRIS")
 
-# Import vision model
-try:
-    from langchain_nvidia_ai_endpoints import ChatNVIDIA
-    _HAS_NVIDIA = True
-except ImportError:
-    _HAS_NVIDIA = False
-    ChatNVIDIA = None  # type: ignore
-    logger.warning("langchain-nvidia-ai-endpoints not installed")
+# v2.5.2: Import vision model from ModelManager (enables dynamic provider switching)
+from models.model_manager import get_vision_model
 
 # Import LangChain messages
 try:
@@ -133,29 +145,29 @@ class IrisAgent:
         self._initialize()
     
     def _initialize(self) -> bool:
-        """Initialize the vision LLM."""
-        if not _HAS_NVIDIA:
-            logger.error("NVIDIA AI endpoints not available")
-            return False
+        """Verify LLM access at startup (fail-fast check).
         
-        if not settings.has_nvidia_key:
-            logger.error("NVIDIA_API_KEY not set or invalid")
-            return False
-        
+        v2.5.2: LLM is now fetched dynamically via the llm property.
+        This just verifies we can access the ModelManager at startup.
+        """
         try:
-            self._llm = ChatNVIDIA(
-                model=settings.LLM_MODEL_VISION,
-                temperature=self.temperature,
-                max_tokens=1024,
-                api_key=settings.NVIDIA_API_KEY.get_secret_value(),
-                timeout=5,  # Fast fail on startup - prevents 60s hang
-            )
+            _ = self.llm  # Access property to verify connectivity
             self._initialized = True
-            logger.info(f"IRIS agent initialized with {settings.LLM_MODEL_VISION}")
+            logger.info("IRIS agent ready (dynamic LLM via ModelManager)")
             return True
         except Exception as exc:
             logger.exception("Failed to initialize IRIS: %s", exc)
             return False
+    
+    @property
+    def llm(self):
+        """Get vision LLM dynamically from ModelManager.
+        
+        v2.5.2: Fetched on each access to support hot-swap provider switching.
+        When ModelManager.set_active_provider() is called, subsequent accesses
+        will automatically use the new provider's vision model.
+        """
+        return get_vision_model(temperature=self.temperature)
 
     
     # =========================================================================
@@ -324,8 +336,8 @@ class IrisAgent:
                 {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_image}"}}
             ])
             
-            # Invoke vision model
-            response_obj = self._llm.invoke([message])
+            # Invoke vision model (dynamic LLM access)
+            response_obj = self.llm.invoke([message])
             response = response_obj.content
             
         except Exception as exc:

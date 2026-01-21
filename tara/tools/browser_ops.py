@@ -1,9 +1,21 @@
 """
 MODULE: Web Browser Automation (Async Playwright-based)
+VERSION: 2.5.2
 STRICT SCOPE: Navigation, Tabs, URL handling, Page interaction.
 CONSTRAINTS: Uses Async Playwright for non-blocking browser control.
 
 TARA 2.0 Atomic Tool Module - ASYNC VERSION.
+
+Verification Logic (Trust But Verify):
+    - browser_open_url(): Uses `wait_until="domcontentloaded"` with 30s timeout.
+      Returns page title + interactive elements list as proof of success.
+    - browser_click(): Uses Playwright's implicit wait with timeout.
+      Returns specific error on PlaywrightTimeout ("Element not found").
+    - browser_type(): Same wait pattern with clear error messages.
+
+Error Handling:
+    - PlaywrightTimeout errors caught and converted to LLM-readable strings.
+    - All returns use emoji prefixes (✅/❌/⏱️) for easy parsing.
 
 Architecture:
     AsyncBrowserManager (Singleton) maintains Playwright session across tool calls.

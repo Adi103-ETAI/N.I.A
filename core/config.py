@@ -116,6 +116,11 @@ class Settings(BaseSettings):
     # AI Provider Settings
     # =========================================================================
     
+    ACTIVE_LLM_PROVIDER: str = Field(
+        default="nvidia",
+        description="Active LLM provider for runtime switching (nvidia, openai, groq, ollama)",
+    )
+    
     NVIDIA_API_KEY: SecretStr = Field(
         default=SecretStr(""),
         description="NVIDIA NIM API key (required)",
@@ -124,6 +129,11 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[SecretStr] = Field(
         default=None,
         description="OpenAI API key (optional fallback)",
+    )
+    
+    GROQ_API_KEY: Optional[SecretStr] = Field(
+        default=None,
+        description="Groq API key (optional, for fast inference)",
     )
     
     HUGGINGFACE_API_KEY: Optional[SecretStr] = Field(
@@ -235,7 +245,7 @@ class Settings(BaseSettings):
     # =========================================================================
     
     VERSION: str = Field(
-        default="2.5.0",
+        default="2.5.2",
         description="N.I.A. version string",
     )
     

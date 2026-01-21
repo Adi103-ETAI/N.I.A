@@ -1,6 +1,8 @@
 # ----------------------------------------------------------------------
 # FILE: nia/agent.py
+# VERSION: 2.5.2
 # STATUS: SYSTEM HUB - Core Supervisor Implementation
+# FEATURES: Dynamic Provider Access, Protocol-based Routing, SafeLLM Integration
 # ----------------------------------------------------------------------
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ from core.logger import setup_logger
 
 # --- CRITICAL IMPORTS ---
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from models.model_manager import get_smart_model
 from nia.gatekeeper import RoutingGatekeeper
 # ADAPTED: import settings as config to match user variable name but use correct source
 from core.config import settings as config
@@ -47,25 +49,32 @@ logger = setup_logger("NIA.Supervisor")
 class SupervisorAgent:
     """NIA Supervisor Agent - Orchestrates TARA and IRIS via Protocol-based routing.
     
-    Central coordinator that receives user input, classifies intent, and routes
-    to the appropriate specialist agent. Uses LLM-based intent classification
-    with validation gating to ensure clean routing decisions.
+    v2.5.2: Dynamic Provider Access
+        The LLM is fetched via `@property` on each access, NOT stored at init.
+        This enables hot-swap provider switching via ModelManager.set_active_provider()
+        without restarting the application.
+    
+    Data Flow:
+        User Input -> SupervisorAgent -> SafeLLM -> ModelManager -> Active Provider
+                                            ^
+                                            |__ Auto-fallback on 429/503 errors
     
     Routing Targets:
         - **TARA**: Desktop automation, browser control, file operations
         - **IRIS**: Vision tasks (screen analysis, webcam capture)
         - **CHAT**: General conversation, information queries
     
-    Design Pattern:
+    Design Patterns:
         - **Protocol-based DI**: Agents injected via AgentProtocol interface
         - **Gated Routing**: RoutingGatekeeper validates LLM decisions
-        - **Exponential Backoff**: Retry logic with jitter for resilience
+        - **Dynamic LLM Access**: Uses @property for hot-swap support
+        - **SafeLLM Wrapped**: All LLM calls protected by circuit breaker
     
     Attributes:
         tara_agent: Optional TaraAgent (TARA 2.0 uses graph node instead).
         iris_agent: IrisAgent instance for vision tasks.
         gatekeeper: RoutingGatekeeper for LLM response validation.
-        llm: ChatNVIDIA LLM instance for intent classification.
+        llm: Property - fetches model dynamically from ModelManager.
     """
     
     
@@ -90,34 +99,17 @@ class SupervisorAgent:
         self.iris_agent: AgentProtocol | None = iris_agent
         self.gatekeeper: RoutingGatekeeper = RoutingGatekeeper()
         
+        # v2.5.2: Store temperature for dynamic LLM access
+        self._temperature = temperature
         
         self._verify_wiring()
         
-        # Initialize NVIDIA NIM LLM
+        # Verify LLM access works at startup (fail-fast)
         try:
-            if model_type == "smart":
-                llm_model = config.LLM_MODEL_SMART
-            else:
-                llm_model = config.LLM_MODEL_FAST
-            
-            # Use NVIDIA API credentials
-            api_key_val = config.NVIDIA_API_KEY.get_secret_value() if config.NVIDIA_API_KEY else None
-            base_url_val = config.NVIDIA_BASE_URL
-            
-            # Fail explicitly if no API key
-            if not api_key_val or not api_key_val.startswith("nvapi-"):
-                raise ValueError("NVIDIA_API_KEY is not configured or invalid (must start with 'nvapi-')")
-            
-            self.llm = ChatNVIDIA(
-                model=llm_model,
-                api_key=api_key_val,
-                base_url=base_url_val,
-                temperature=temperature,
-                max_tokens=2048,
-            )
-            logger.info(f"🧠 SupervisorAgent LLM initialized: {llm_model} (NVIDIA NIM)")
+            _ = self.llm  # Access property to verify connectivity
+            logger.info(f"🧠 SupervisorAgent ready (dynamic LLM via ModelManager)")
         except Exception as e:
-            logger.error(f"Failed to initialize LLM: {e}")
+            logger.error(f"Failed to access LLM: {e}")
             raise RuntimeError(f"SupervisorAgent cannot start without LLM: {e}") from e
         
         # System Prompt
@@ -128,6 +120,16 @@ class SupervisorAgent:
             prompt_text = "You are NIA. Route commands to TARA or IRIS."
             
         self.system_prompt = prompt_text + "\n\n### CRITICAL: ROUTE SILENTLY. Example: 'ROUTE:TARA: kill notepad'"
+    
+    @property
+    def llm(self):
+        """Get LLM dynamically from ModelManager.
+        
+        v2.5.2: Fetched on each access to support hot-swap provider switching.
+        When ModelManager.set_active_provider() is called, subsequent accesses
+        will automatically use the new provider.
+        """
+        return get_smart_model(temperature=self._temperature)
     
     def _verify_wiring(self) -> None:
         """Verify that critical dependencies are properly wired.

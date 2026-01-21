@@ -1,9 +1,21 @@
 """
 MODULE: File System Operations (3-Tier Security Model)
+VERSION: 2.5.2
 STRICT SCOPE: Read, Write, List, Delete, Create Dir.
 CONSTRAINTS: Atomic actions only. Explicit guards on destructive operations.
 
 TARA 2.0 Atomic Tool Module.
+
+Verification Logic (Trust But Verify):
+    - All paths validated via `_validate_path()` before any operation.
+    - `must_exist=True` parameter enforces pre-existence checks.
+    - Path traversal attacks blocked (no `../` escapes).
+
+Safety Guards:
+    - delete_file(): Requires `confirm=True` parameter (safety lock).
+    - delete_file(): Blocks wildcard patterns (no `*` or `?` allowed).
+    - delete_file(): Uses send2trash when available (recoverable).
+    - write_file(): Prevents accidental overwrite unless `overwrite=True`.
 
 Security Architecture:
     TIER 1: Safe (Eyes) - list_dir, read_file, file_exists, write_file, append_file

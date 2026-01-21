@@ -1,10 +1,20 @@
 """
 MODULE: Process Management
+VERSION: 2.5.2
 STRICT SCOPE: Start, Kill, List Processes.
 CONSTRAINTS: No Window manipulation. No generic 'app_control'.
 RETURNS: PIDs and Process Objects only.
 
 TARA 2.0 Atomic Tool Module.
+
+Verification Logic (Trust But Verify):
+    - launch_app(): Uses PID tracking + window polling to verify launch success.
+      Takes pre/post window snapshot, waits for visible HWND, kills zombie PIDs.
+    - kill_app(): Verifies process termination via tasklist before returning.
+
+Error Handling:
+    - All tools return emoji-prefixed strings (✅/❌/⚠️) for LLM parsing.
+    - Failures are returned as descriptive error strings, NOT exceptions.
 
 Exports:
     - launch_app(app_name: str) -> str

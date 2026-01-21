@@ -1,6 +1,27 @@
 """N.I.A. Core Engine - Central Nervous System.
 
-Contains the NIAAssistant class that orchestrates all components.
+v2.5.2 "Velocity" - The Orchestrator
+    Contains the NIAAssistant class that coordinates all components:
+    - NOLA (Voice I/O) with wake word detection
+    - NIA Supervisor (LLM-based routing) with SafeLLM protection
+    - TARA (Tool Execution) via LangGraph SubGraph
+    - IRIS (Vision) for screen/webcam analysis
+    - Memory (4-Layer Hybrid) for context injection
+
+Data Flow:
+    User -> NOLA/Terminal -> Reflex Layer -> NIAAssistant
+                                    |
+                                    v
+    Supervisor <-> SafeLLM <-> ModelManager <-> [NVIDIA|OpenAI|Groq|Ollama]
+        |
+        +-> ROUTE:TARA -> Tool Execution
+        +-> ROUTE:IRIS -> Vision Analysis  
+        +-> ROUTE:CHAT -> Direct Response
+        |
+        v
+    Memory Storage -> Response -> NOLA/Terminal -> User
+
+Version: 2.5.2
 """
 from __future__ import annotations
 

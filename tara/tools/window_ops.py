@@ -1,9 +1,20 @@
 """
 MODULE: Window State Management
+VERSION: 2.5.2
 STRICT SCOPE: Focus, Minimize, Maximize, Snap, Close Window.
 CONSTRAINTS: Uses WindowRegistry. Input is Alias or Handle.
 
 TARA 2.0 Atomic Tool Module.
+
+Verification Logic (Trust But Verify):
+    - All operations use `_resolve_hwnd()` to validate alias -> HWND mapping.
+    - focus_window(): Multi-step fallback for Windows 10/11 focus restrictions
+      (IsIconic check -> SetForegroundWindow -> Alt-key trick -> BringWindowToTop).
+    - Window state is verified before operations (IsIconic, IsZoomed checks).
+
+Error Handling:
+    - Returns descriptive error strings with available aliases on lookup failure.
+    - Win32 exceptions caught and converted to LLM-readable messages.
 
 Exports:
     - focus_window(alias: str) -> str

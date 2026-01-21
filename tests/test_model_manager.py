@@ -191,9 +191,87 @@ class TestProviderEnum:
         assert Provider.OLLAMA.value == "ollama"
 
 
+class TestDynamicProviderSwitching:
+    """Test v3.0 Dynamic Provider Switching feature."""
+    
+    def test_active_provider_default(self):
+        """Test that active_provider defaults to nvidia."""
+        from models.model_manager import ModelManager
+        
+        mm = ModelManager()
+        assert mm.active_provider == "nvidia"
+    
+    def test_get_active_provider_method(self):
+        """Test get_active_provider returns current provider."""
+        from models.model_manager import ModelManager
+        
+        mm = ModelManager()
+        assert mm.get_active_provider() == mm.active_provider
+    
+    def test_set_active_provider_invalid_provider(self):
+        """Test that invalid provider raises ValueError."""
+        from models.model_manager import ModelManager
+        
+        mm = ModelManager()
+        with pytest.raises(ValueError) as excinfo:
+            mm.set_active_provider("invalid_provider")
+        assert "Unsupported provider" in str(excinfo.value)
+    
+    def test_set_active_provider_missing_api_key(self):
+        """Test that missing API key raises ValueError for cloud providers."""
+        from models.model_manager import ModelManager, ModelConfig
+        
+        # Create config with no API keys
+        config = ModelConfig(
+            nvidia_api_key=None,
+            openai_api_key=None,
+            groq_api_key=None,
+        )
+        mm = ModelManager(config=config)
+        
+        # Trying to switch to openai without key should fail
+        with pytest.raises(ValueError) as excinfo:
+            mm.set_active_provider("openai")
+        assert "Missing API key" in str(excinfo.value)
+    
+    def test_clear_model_cache_method(self):
+        """Test that _clear_model_cache clears all cached models."""
+        from models.model_manager import ModelManager
+        
+        mm = ModelManager()
+        # Pre-populate cache with mock values
+        mm._smart_model = "mock_smart"
+        mm._fast_model = "mock_fast"
+        mm._vision_model = "mock_vision"
+        mm._current_model = "mock_current"
+        
+        mm._clear_model_cache()
+        
+        assert mm._smart_model is None
+        assert mm._fast_model is None
+        assert mm._vision_model is None
+        assert mm._current_model is None
+    
+    def test_valid_providers_constant(self):
+        """Test VALID_PROVIDERS contains expected values."""
+        from models.model_manager import VALID_PROVIDERS
+        
+        assert "nvidia" in VALID_PROVIDERS
+        assert "openai" in VALID_PROVIDERS
+        assert "groq" in VALID_PROVIDERS
+        assert "ollama" in VALID_PROVIDERS
+    
+    def test_default_provider_constant(self):
+        """Test DEFAULT_PROVIDER is nvidia."""
+        from models.model_manager import DEFAULT_PROVIDER
+        
+        assert DEFAULT_PROVIDER == "nvidia"
+
+
 # =============================================================================
 # Run tests
 # =============================================================================
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
