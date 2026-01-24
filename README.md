@@ -305,6 +305,6 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 **Built with ❤️ by SentArc Labs**
 
-*"N.I.A. v2.6.0 — Velocity. Multi-Provider. Production Ready."*
+*"N.I.A. v2.6.0 — Velocity."*
 
 </div>
