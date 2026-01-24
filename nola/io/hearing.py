@@ -28,8 +28,21 @@ logger = setup_logger("NOLA.HEARING")
 # Configuration Constants
 # =============================================================================
 
+def _load_voice_config() -> dict:
+    config_path = Path(__file__).parent.parent.parent / "config" / "nola" / "voice.json"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load voice.json: {e}")
+        return {}
+
+_VOICE_CONFIG = _load_voice_config()
+_HEARING_CONFIG = _VOICE_CONFIG.get("hearing", {})
+
 NOLA_DIR = Path(__file__).parent.parent  # nola/io_pkg -> nola/
-VOSK_MODEL_PATH = NOLA_DIR / "vosk_model"
+_model_name = _HEARING_CONFIG.get("model_dir_name", "vosk_model")
+VOSK_MODEL_PATH = NOLA_DIR / _model_name
 
 
 # =============================================================================

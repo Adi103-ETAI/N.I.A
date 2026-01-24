@@ -75,11 +75,22 @@ load_dotenv()
 # Configure module logger
 logger = setup_logger("Models")
 
+def _load_general_config() -> dict:
+    config_path = Path(__file__).parent.parent / "config" / "nia" / "general.json"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load general.json: {e}")
+        return {}
+
+_GENERAL_CONFIG = _load_general_config()
+
 # Default fallback provider (NVIDIA supremacy)
-DEFAULT_PROVIDER = "nvidia"
+DEFAULT_PROVIDER = _GENERAL_CONFIG.get("DEFAULT_PROVIDER", "nvidia")
 
 # Valid providers for runtime switching
-VALID_PROVIDERS = frozenset({"nvidia", "openai", "groq", "ollama"})
+VALID_PROVIDERS = frozenset(_GENERAL_CONFIG.get("VALID_PROVIDERS", ["nvidia", "openai", "groq", "ollama"]))
 
 # v2.5.2: Enable/disable SafeLLM wrapping (for testing/debugging)
 ENABLE_SAFE_LLM = True
@@ -131,10 +142,10 @@ def _load_catalog() -> Dict[str, ModelSpec]:
         FileNotFoundError: If catalog.json is missing.
         json.JSONDecodeError: If catalog.json has invalid JSON.
     """
-    catalog_path = Path(__file__).parent / "catalog.json"
+    catalog_path = Path(__file__).parent.parent / "config" / "nia" / "models.json"
     
     if not catalog_path.exists():
-        logger.warning("catalog.json not found, using empty catalog")
+        logger.warning("models.json not found, using empty catalog")
         return {}
     
     with open(catalog_path, "r", encoding="utf-8") as f:
@@ -145,7 +156,7 @@ def _load_catalog() -> Dict[str, ModelSpec]:
     for key, spec_dict in raw_catalog.items():
         catalog[key] = _spec_from_dict(spec_dict)
     
-    logger.debug("Loaded %d models from catalog.json", len(catalog))
+    logger.debug("Loaded %d models from models.json", len(catalog))
     return catalog
 
 

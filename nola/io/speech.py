@@ -47,9 +47,23 @@ PIPER_BIN = NOLA_DIR / "piper_bin" / ("piper.exe" if sys.platform == "win32" els
 PIPER_MODEL = NOLA_DIR / "piper_bin" / "en_GB-alan-low.onnx"
 PIPER_MODEL_ALT = NOLA_DIR / "models" / "en_GB-alan-low.onnx"
 
+import json
+
+def _load_voice_config() -> dict:
+    config_path = Path(__file__).parent.parent.parent / "config" / "nola" / "voice.json"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load voice.json: {e}")
+        return {}
+
+_VOICE_CONFIG = _load_voice_config()
+_SPEECH_CONFIG = _VOICE_CONFIG.get("speech", {})
+
 # Audio timing constants
-PLAYBACK_POLL_INTERVAL = 0.1  # Seconds between playback status checks
-PIPER_TIMEOUT_SEC = 30        # Max seconds to wait for Piper TTS
+PLAYBACK_POLL_INTERVAL = _SPEECH_CONFIG.get("playback_poll_interval", 0.1)
+PIPER_TIMEOUT_SEC = _SPEECH_CONFIG.get("piper_timeout_sec", 30)
 
 
 # =============================================================================

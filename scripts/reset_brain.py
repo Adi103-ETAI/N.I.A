@@ -16,10 +16,16 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+import sys
 from pathlib import Path
 
-# Paths
+# =============================================================================
+# Path Setup (Enable imports from project root when run as script)
+# =============================================================================
 PROJECT_ROOT = Path(__file__).parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 STATE_DB = PROJECT_ROOT / "data" / "state.db"
 MEMORY_DB = PROJECT_ROOT / "data" / "memory.db"  # DO NOT TOUCH
 

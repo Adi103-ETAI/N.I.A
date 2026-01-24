@@ -72,7 +72,7 @@ def _load_engine_config() -> dict:
     Returns:
         Dictionary with command vocabularies and help text.
     """
-    config_dir = Path(__file__).parent / "config"
+    config_dir = Path(__file__).parent.parent / "config" / "tara"
     config = {}
     
     # Load command vocabularies
@@ -163,6 +163,9 @@ class NIAAssistant:
         
         # 4-Layer Memory System (initialized in _init_nia, typed for IDE)
         self.memory: Optional['MemoryManager'] = None
+        
+        # Plugin Hot-Reload Watcher (v3.0)
+        self._plugin_observer: Optional[object] = None
     
     def _init_nia(self) -> bool:
         """Initialize the NIA brain (LangGraph reasoning engine).
@@ -202,6 +205,15 @@ class NIAAssistant:
             except Exception as mem_exc:
                 self.logger.warning("Memory init failed (continuing without): %s", mem_exc)
                 self.memory = None
+            
+            # 🔌 PLUGIN SYSTEM: Start hot-reload watcher (v3.0)
+            try:
+                from tara.plugin_system.watcher import start_plugin_watcher
+                self._plugin_observer = start_plugin_watcher()
+            except ImportError as plugin_exc:
+                self.logger.debug("Plugin watcher not available: %s", plugin_exc)
+            except Exception as plugin_exc:
+                self.logger.warning("Plugin watcher failed (continuing without): %s", plugin_exc)
             
             return True
         except ImportError as exc:
@@ -375,6 +387,15 @@ class NIAAssistant:
             self.logger.info("🔇 Stopping NOLA...")
             self._nola.stop()
             self._nola = None
+        
+        # Stop Plugin Watcher (v3.0)
+        if self._plugin_observer:
+            try:
+                from tara.plugin_system.watcher import stop_plugin_watcher
+                stop_plugin_watcher(self._plugin_observer)
+                self._plugin_observer = None
+            except Exception as e:
+                self.logger.debug(f"Plugin watcher stop error: {e}")
         
         self.logger.info("👋 NIA shutdown complete")
     

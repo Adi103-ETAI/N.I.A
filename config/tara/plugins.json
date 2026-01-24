@@ -1,0 +1,5 @@
+{
+    "DEFAULT_PLUGINS_DIR": "plugins",
+    "LOAD_TIMEOUT_WARNING": 5.0,
+    "DEBOUNCE_DELAY": 0.5
+}

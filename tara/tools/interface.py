@@ -26,6 +26,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import pkgutil
+import threading
 from typing import Callable, Dict, List, Optional, Set
 
 from langchain_core.tools import StructuredTool
@@ -182,13 +183,16 @@ def _discover_module_tools(module_name: str) -> List[StructuredTool]:
 # =============================================================================
 
 _cached_tools: Optional[List[StructuredTool]] = None
+_cache_lock = threading.Lock()  # Thread-safe cache access for hot-reload
 
 
 def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
     """
     Get all TARA tools as LangChain StructuredTools.
     
-    Auto-discovers and loads all public functions from tara/tools/*.py modules.
+    Auto-discovers and loads all public functions from tara/tools/*.py modules,
+    plus any plugins from the plugins/ directory (v3.0).
+    
     Results are cached for performance; use refresh=True to reload.
     
     Args:
@@ -209,6 +213,10 @@ def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
     logger.info("Discovering TARA tools...")
     
     all_tools: List[StructuredTool] = []
+    
+    # =========================================================================
+    # Phase 1: Core Tools (tara/tools/*.py)
+    # =========================================================================
     
     # Get the tara.tools package path
     try:
@@ -232,11 +240,39 @@ def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
         module_tools = _discover_module_tools(module_name)
         all_tools.extend(module_tools)
     
+    core_count = len(all_tools)
+    
+    # =========================================================================
+    # Phase 2: Plugin Tools (plugins/*.py) - v3.0
+    # =========================================================================
+    
+    plugin_count = 0
+    try:
+        from tara.plugin_system.loader import get_plugin_loader
+        
+        plugin_loader = get_plugin_loader()
+        
+        if refresh:
+            plugin_loader.clear_cache()
+        
+        plugin_tools = plugin_loader.discover_tools()
+        all_tools.extend(plugin_tools)
+        plugin_count = len(plugin_tools)
+        
+        if plugin_count > 0:
+            logger.info(f"Loaded {plugin_count} plugin tools")
+            
+    except ImportError as e:
+        logger.debug(f"Plugin system not available: {e}")
+    except Exception as e:
+        logger.warning(f"Plugin discovery failed (non-fatal): {e}")
+    
     # Cache results
     _cached_tools = all_tools
     
-    logger.info(f"TARA toolset ready: {len(all_tools)} tools discovered")
+    logger.info(f"TARA toolset ready: {len(all_tools)} tools ({core_count} core + {plugin_count} plugins)")
     return all_tools
+
 
 
 def get_tool_by_name(name: str) -> Optional[StructuredTool]:
@@ -308,8 +344,44 @@ def get_tools_by_category() -> Dict[str, List[str]]:
 def clear_cache() -> None:
     """Clear the cached tools list to force re-discovery."""
     global _cached_tools
-    _cached_tools = None
+    with _cache_lock:
+        _cached_tools = None
     logger.info("Tool cache cleared")
+
+
+def remove_plugin_tools(tool_names: List[str]) -> int:
+    """Remove specific tools from the cache by name.
+    
+    Called by PluginLoader when a plugin is unloaded. This allows
+    granular removal without a full cache rebuild.
+    
+    Args:
+        tool_names: List of tool names to remove.
+        
+    Returns:
+        Number of tools actually removed.
+        
+    Thread Safety:
+        Uses internal lock for safe concurrent access.
+    """
+    global _cached_tools
+    removed_count = 0
+    
+    with _cache_lock:
+        if _cached_tools is None:
+            return 0
+        
+        original_count = len(_cached_tools)
+        _cached_tools = [
+            tool for tool in _cached_tools
+            if tool.name not in tool_names
+        ]
+        removed_count = original_count - len(_cached_tools)
+    
+    if removed_count > 0:
+        logger.info(f"Removed {removed_count} tool(s) from cache")
+    
+    return removed_count
 
 
 # =============================================================================
@@ -322,4 +394,5 @@ __all__ = [
     "list_tool_names",
     "get_tools_by_category",
     "clear_cache",
+    "remove_plugin_tools",
 ]

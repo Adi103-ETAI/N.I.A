@@ -44,35 +44,37 @@ settings = get_settings()
 # Constants
 # =============================================================================
 
+import json
+from pathlib import Path
+
+def _load_config() -> dict:
+    """Load UIA configuration from JSON."""
+    config_path = Path(__file__).parent.parent.parent / "config" / "tara" / "uia.json"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load uia.json: {e}")
+        return {}
+
+_UIA_CONFIG = _load_config()
+
 # Element types we care about (filter out layout noise)
-ACTIONABLE_TYPES = {
-    "ButtonControl",
-    "EditControl", 
-    "TextControl",
-    "DocumentControl",
-    "MenuItemControl",
-    "ListControl",
-    "ListItemControl",
-    "TabItemControl",
-    "HyperlinkControl",
-    "CheckBoxControl",
-    "RadioButtonControl",
-    "ComboBoxControl",
-    "TreeItemControl",
-}
+ACTIONABLE_TYPES = set(_UIA_CONFIG.get("ACTIONABLE_TYPES", [
+    "ButtonControl", "EditControl", "TextControl", "DocumentControl",
+    "MenuItemControl", "ListControl", "ListItemControl", "TabItemControl",
+    "HyperlinkControl", "CheckBoxControl", "RadioButtonControl",
+    "ComboBoxControl", "TreeItemControl",
+]))
 
 # Types to skip (layout/container clutter)
-SKIP_TYPES = {
-    "PaneControl",
-    "GroupControl",
-    "WindowControl",
-    "ScrollBarControl",
-    "ThumbControl",
-    "SeparatorControl",
-}
+SKIP_TYPES = set(_UIA_CONFIG.get("SKIP_TYPES", [
+    "PaneControl", "GroupControl", "WindowControl", "ScrollBarControl",
+    "ThumbControl", "SeparatorControl",
+]))
 
 # Maximum elements to return (token budget)
-MAX_ELEMENTS = 100
+MAX_ELEMENTS = _UIA_CONFIG.get("MAX_ELEMENTS", 100)
 
 
 # =============================================================================

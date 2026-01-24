@@ -39,12 +39,12 @@ from pathlib import Path
 
 def _load_vision_config() -> dict:
     """Load vision configuration from JSON file."""
-    config_path = Path(__file__).parent.parent.parent / "core" / "config" / "vision.json"
+    config_path = Path(__file__).parent.parent.parent / "config" / "iris" / "triggers.json"
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.warning(f"Failed to load vision.json: {e}. Using defaults.")
+        logger.warning(f"Failed to load triggers.json: {e}. Using defaults.")
         return {
             "triggers": {
                 "screen": ["screen", "screenshot", "window"],
@@ -69,6 +69,102 @@ def get_vision_keywords() -> list:
 )
 
 # Logger already initialized at top of file via setup_logger("NIA.Nodes")
+
+
+# =============================================================================
+# Routing Config Loader (Lazy Loading Pattern)
+# =============================================================================
+
+_ROUTING_CONFIG: Optional[dict] = None
+
+
+def _load_routing_config() -> dict:
+    """Load routing configuration from JSON file.
+    
+    Uses lazy loading pattern - only loads on first access.
+    
+    Returns:
+        Dict with tara_keywords, iris_keywords, and general_fallback.
+    """
+    config_path = Path(__file__).parent.parent.parent / "config" / "nia" / "routing.json"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to load routing.json: {e}. Using defaults.")
+        # Fallback defaults (same as original hardcoded values)
+        return {
+            "tara_keywords": {
+                "categories": {
+                    "app_control": ["open", "launch", "run", "start", "execute", "close", "kill", "terminate", "exit", "quit", "stop"],
+                    "interaction": ["click", "type", "press", "select"],
+                    "navigation": ["search", "browse", "google", "navigate"],
+                    "verification": ["check", "verify", "test"]
+                }
+            },
+            "iris_keywords": {
+                "categories": {
+                    "perception": ["look", "see", "watch", "describe"],
+                    "screen": ["screen", "screenshot", "monitor"],
+                    "phrase": ["what is on"]
+                }
+            },
+            "general_fallback": {"default_route": "general"}
+        }
+
+
+def get_routing_keywords() -> tuple:
+    """Get TARA and IRIS routing keywords from config.
+    
+    Returns:
+        Tuple of (tara_keywords: list, iris_keywords: list)
+    """
+    global _ROUTING_CONFIG
+    if _ROUTING_CONFIG is None:
+        _ROUTING_CONFIG = _load_routing_config()
+    
+    # Flatten TARA categories into single list
+    tara_config = _ROUTING_CONFIG.get("tara_keywords", {})
+    tara_keywords = []
+    for keywords in tara_config.get("categories", {}).values():
+        tara_keywords.extend(keywords)
+    
+    # Flatten IRIS categories into single list
+    iris_config = _ROUTING_CONFIG.get("iris_keywords", {})
+    iris_keywords = []
+    for keywords in iris_config.get("categories", {}).values():
+        iris_keywords.extend(keywords)
+    
+    return (tara_keywords, iris_keywords)
+
+
+
+# =============================================================================
+# Prompts Config Loader (Lazy Loading Pattern)
+# =============================================================================
+
+_PROMPTS_CONFIG: Optional[dict] = None
+
+def _load_prompts_config() -> dict:
+    """Load prompts configuration from JSON file."""
+    config_path = Path(__file__).parent.parent.parent / "config" / "nia" / "prompts.json"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to load prompts.json: {e}. Using defaults.")
+        return {
+            "identity": "You are N.I.A., a helpful AI assistant.",
+            "supervisor": "You are the Supervisor. Route questions to workers."
+        }
+
+def get_prompts() -> dict:
+    """Get all system prompts."""
+    global _PROMPTS_CONFIG
+    if _PROMPTS_CONFIG is None:
+        _PROMPTS_CONFIG = _load_prompts_config()
+    return _PROMPTS_CONFIG
+
 
 # =============================================================================
 # Summarization Helper
@@ -172,6 +268,11 @@ def supervisor_node(state: AgentState, supervisor, summarize_llm=None) -> AgentS
     """
     logger.debug("Executing supervisor node")
     
+    # Inject dynamic system prompt (Root Fix)
+    prompts = get_prompts()
+    if hasattr(supervisor, 'system_prompt'):
+        supervisor.system_prompt = prompts.get("supervisor", supervisor.system_prompt)
+    
     # 1. Manage Memory (Summarize if needed)
     current_messages = state.get("messages", [])
     clean_messages = summarize_oldest(current_messages, summarize_llm)
@@ -197,15 +298,6 @@ def iris_node(state: AgentState, iris) -> AgentState:
     logger.debug("Executing IRIS node")
     return iris.process(state)
 
-
-# =============================================================================
-# DEPRECATED: Legacy TARA Node (Commented for reference during transition)
-# =============================================================================
-# The tara_node function has been replaced by call_tara_2 which uses the
-# new TARA 2.0 LangGraph-based sub-agent.
-# def tara_node(state: AgentState, tara) -> AgentState:
-#     """Legacy TARA node - DEPRECATED. Use call_tara_2 instead."""
-#     return tara.process(state)
 
 
 # =============================================================================
@@ -241,6 +333,22 @@ def general_assistant(state: AgentState) -> AgentState:
         
         # Get messages
         messages = state.get("messages", [])
+        
+        # === IDENTITY INJECTION (ROOT FIX) ===
+        # Prepend System Prompt if not present
+        prompts = get_prompts()
+        system_prompt_text = prompts.get("identity", "You are N.I.A.")
+        
+        if _HAS_LANGCHAIN_MESSAGES:
+            # Check if first message is SystemMessage
+            has_system = messages and isinstance(messages[0], SystemMessage)
+            if not has_system:
+                messages = [SystemMessage(content=system_prompt_text)] + messages
+        else:
+            # Dict fallback
+            has_system = messages and isinstance(messages[0], dict) and messages[0].get("role") == "system"
+            if not has_system:
+                messages = [{"role": "system", "content": system_prompt_text}] + messages
         
         # Invoke LLM
         response = llm.invoke(messages)
@@ -464,22 +572,8 @@ def route_from_supervisor(state: AgentState) -> str:
     user_text_lower = user_text.lower().strip()
     logger.info(f"🔍 ROUTER LOCKED ON: '{user_text_lower}'")
 
-    # --- KEYWORD MATCHING ---
-    
-    # 1. TARA (Automation)
-    tara_keywords = [
-        "open", "launch", "run", "start", "execute",
-        "click", "type", "press", "select", 
-        "search", "browse", "google", "navigate",
-        "close", "kill", "terminate", "exit", "quit", "stop",
-        "check", "verify", "test"
-    ]
-    
-    # 2. IRIS (Vision)
-    iris_keywords = [
-        "look", "see", "watch", "describe", 
-        "screen", "screenshot", "what is on", "monitor"
-    ]
+    # --- KEYWORD MATCHING (loaded from config) ---
+    tara_keywords, iris_keywords = get_routing_keywords()
 
     if any(kw in user_text_lower for kw in tara_keywords):
         logger.info(f"🛠️ Routing to TARA (Trigger: '{user_text_lower}')")

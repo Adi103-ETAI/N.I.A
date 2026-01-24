@@ -3,11 +3,20 @@
 Verifies that dynamic provider switching propagates to all agents.
 This confirms the "stale reference" bug is fixed.
 
-Run: python tests/verify_hot_swap.py
+Run: python scripts/verify_hot_swap.py
 """
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+# =============================================================================
+# Path Setup (Enable imports from project root when run as script)
+# =============================================================================
+PROJECT_ROOT = Path(__file__).parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from unittest.mock import patch, MagicMock
 
 # =============================================================================

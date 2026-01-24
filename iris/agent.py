@@ -81,16 +81,16 @@ def _load_iris_config() -> dict:
     config_dir = Path(__file__).parent / "config"
     config = {}
     
-    vision_config_path = Path(__file__).parent.parent / "core" / "config" / "vision.json"
+    vision_config_path = Path(__file__).parent.parent / "config" / "iris" / "triggers.json"
     try:
         with open(vision_config_path, "r", encoding="utf-8") as f:
             vision_cfg = json.load(f)
             triggers = vision_cfg.get("triggers", {})
             config["screen_keywords"] = triggers.get("screen", [])
             config["webcam_keywords"] = triggers.get("camera", [])
-            logger.debug("Loaded keywords from centralized vision.json")
+            logger.debug("Loaded keywords from centralized triggers.json")
     except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
-        logger.warning(f"Failed to load vision.json: {e}. Using defaults.")
+        logger.warning(f"Failed to load triggers.json: {e}. Using defaults.")
         config["screen_keywords"] = ["screen", "window", "monitor", "display"]
         config["webcam_keywords"] = ["camera", "webcam", "photo", "picture"]
     
@@ -150,6 +150,19 @@ class IrisAgent:
         v2.5.2: LLM is now fetched dynamically via the llm property.
         This just verifies we can access the ModelManager at startup.
         """
+        # Ensure env is loaded
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass
+
+        # === ROOT FIX: Explicitly check for API Key ===
+        if not os.getenv("NVIDIA_API_KEY"):
+            logger.warning("❌ IRIS Setup Error: NVIDIA_API_KEY missing in .env")
+            self._initialized = False
+            return False
+
         try:
             _ = self.llm  # Access property to verify connectivity
             self._initialized = True
@@ -157,6 +170,7 @@ class IrisAgent:
             return True
         except Exception as exc:
             logger.exception("Failed to initialize IRIS: %s", exc)
+            self._initialized = False
             return False
     
     @property
@@ -283,7 +297,11 @@ class IrisAgent:
         user_input = self._extract_user_input(input_data)
         
         if not self._initialized or not self._llm:
-            response = "❌ IRIS is not initialized. Check NVIDIA_API_KEY."
+            # === ROOT FIX: Specific Error Message ===
+            if not os.getenv("NVIDIA_API_KEY"):
+                response = "❌ IRIS Setup Error: NVIDIA_API_KEY not found in environment. Please check your .env file."
+            else:
+                response = "❌ IRIS is not initialized. Check logs for ModelManager errors."
             return self._format_response(response, input_data, is_langgraph)
         
         path = image_path

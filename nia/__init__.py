@@ -17,44 +17,36 @@ Architecture:
     │          └───────────┴───────────┘                              │
     │                      │                                          │
     │                      ▼                                          │
-    │               [Response] → [Voice Output via NOLA]             │
+    │               [Response] → [Voice Output via NOLA]              │
     └─────────────────────────────────────────────────────────────────┘
 
 Components:
     - SupervisorAgent: Routes queries and handles general conversation
-    - IrisAgent: Vision specialist (placeholder - coming soon)
-    - TaraAgent: Logic/reasoning specialist (placeholder - coming soon)
+    - IrisAgent: Vision specialist
+    - TaraAgent: Tool execution specialist
 
 Quick Start:
     from nia import process_input
     
     response = process_input("Hello, who are you?")
     print(response)  # "Hello! I'm N.I.A., your Neural Intelligence Assistant..."
-    
-    response = process_input("What's in this image?")
-    print(response)  # Routes to IRIS (placeholder response)
-    
-    response = process_input("Solve 2x + 5 = 15")
-    print(response)  # Routes to TARA (placeholder response)
 
-Integration with NOLA:
-    from nia import process_input
-    from nola import NOLAManager
-    
-    nola = NOLAManager()
-    nola.start()
-    
-    while True:
-        result = nola.get_input(timeout=0.5)
-        if result:
-            response = process_input(result.text)
-            nola.speak(response)
+Version: 2.5.2
 
-Version: 1.0.0
+LAZY LOADING:
+    This module uses Python's __getattr__ pattern to defer heavy imports
+    (LangGraph, LangChain, ModelManager, TARA tools) until first access.
+    This reduces boot time from ~80s to <5s.
 """
 from __future__ import annotations
 
-# State definitions
+from typing import TYPE_CHECKING
+
+# =============================================================================
+# Lightweight Imports (loaded immediately - no heavy dependencies)
+# =============================================================================
+
+# State definitions are lightweight (just TypedDict and string constants)
 from .state import (
     AgentState,
     AgentName,
@@ -66,42 +58,46 @@ from .state import (
     extract_response,
 )
 
-# Agent implementations (IrisAgent now lives in iris.agent)
-from .agent import (
-    SupervisorAgent,
-    # TaraAgent removed - TARA 2.0 uses tara.graph
-)
 
-# Graph and execution
-from .graph import (
-    NIAGraph,
-    get_graph,
-    process_input,
-    aprocess_input,
-    get_conversation_history,
-    clear_conversation,
-)
+# =============================================================================
+# TYPE_CHECKING Block: IDE-only imports (no runtime cost)
+# =============================================================================
 
-# Package metadata
+if TYPE_CHECKING:
+    # These imports are for static analysis ONLY - not loaded at runtime
+    from .agent import SupervisorAgent as _SupervisorAgent
+    from .graph import (
+        NIAGraph as _NIAGraph,
+        get_graph as _get_graph,
+        process_input as _process_input,
+        aprocess_input as _aprocess_input,
+        get_conversation_history as _get_conversation_history,
+        clear_conversation as _clear_conversation,
+    )
+
+
+# =============================================================================
+# Package Metadata
+# =============================================================================
+
 __version__ = "2.5.2"
 __author__ = "NIA Team"
 
 __all__ = [
-    # Main interface
+    # Main interface (lazy-loaded)
     "process_input",
     "aprocess_input",
     "get_conversation_history",
     "clear_conversation",
     
-    # Graph
+    # Graph (lazy-loaded)
     "NIAGraph",
     "get_graph",
     
-    # Agents
+    # Agents (lazy-loaded)
     "SupervisorAgent",
-    # TaraAgent removed - use tara.graph.run_tara instead
     
-    # State
+    # State (already imported - lightweight)
     "AgentState",
     "AgentName",
     "AGENT_SUPERVISOR",
@@ -110,11 +106,76 @@ __all__ = [
     "AGENT_END",
     "create_initial_state",
     "extract_response",
+    
+    # Convenience functions
+    "check_dependencies",
+    "print_status",
 ]
 
 
 # =============================================================================
-# Convenience Functions
+# Lazy Import Cache & __getattr__ (Python 3.7+ Module-Level Lazy Loading)
+# =============================================================================
+
+_lazy_cache: dict = {}
+
+# Names that trigger graph submodule loading
+_GRAPH_NAMES = frozenset({
+    "NIAGraph",
+    "get_graph", 
+    "process_input",
+    "aprocess_input",
+    "get_conversation_history",
+    "clear_conversation",
+})
+
+
+def __getattr__(name: str):
+    """Lazy-load heavy modules on first access.
+    
+    This is a Python 3.7+ feature that enables module-level lazy loading.
+    When you access `nia.process_input`, this function is called if
+    `process_input` is not already defined in the module namespace.
+    
+    Args:
+        name: Attribute name being accessed.
+        
+    Returns:
+        The requested attribute (loaded on first access).
+        
+    Raises:
+        AttributeError: If the attribute doesn't exist.
+    """
+    # Return from cache if already loaded
+    if name in _lazy_cache:
+        return _lazy_cache[name]
+    
+    # --- SupervisorAgent ---
+    if name == "SupervisorAgent":
+        from .agent import SupervisorAgent
+        _lazy_cache["SupervisorAgent"] = SupervisorAgent
+        return SupervisorAgent
+    
+    # --- Graph module exports (all loaded together) ---
+    if name in _GRAPH_NAMES:
+        from . import graph as _graph_module
+        
+        # Cache all graph exports at once (they're bundled anyway)
+        _lazy_cache["NIAGraph"] = _graph_module.NIAGraph
+        _lazy_cache["get_graph"] = _graph_module.get_graph
+        _lazy_cache["process_input"] = _graph_module.process_input
+        _lazy_cache["aprocess_input"] = _graph_module.aprocess_input
+        _lazy_cache["get_conversation_history"] = _graph_module.get_conversation_history
+        _lazy_cache["clear_conversation"] = _graph_module.clear_conversation
+        
+        return _lazy_cache[name]
+    
+    # --- Attribute not found ---
+    raise AttributeError(f"module 'nia' has no attribute '{name}'")
+
+
+# =============================================================================
+# Convenience Functions (Lightweight - defined here, not lazy)
 # =============================================================================
 
 def check_dependencies() -> dict:
@@ -123,25 +184,30 @@ def check_dependencies() -> dict:
     Returns:
         Dict mapping dependency names to availability status.
     """
+    import os
     deps = {}
     
+    # Check for packages (existence, not functionality)
     try:
-        deps["langchain-openai"] = True
+        import langchain_core
+        deps["langchain"] = True
     except ImportError:
-        deps["langchain-openai"] = False
+        deps["langchain"] = False
     
     try:
+        import langgraph
         deps["langgraph"] = True
     except ImportError:
         deps["langgraph"] = False
     
     try:
+        from dotenv import load_dotenv
         deps["python-dotenv"] = True
     except ImportError:
         deps["python-dotenv"] = False
     
-    # Check for API key
-    import os
+    # Check for API keys
+    deps["NVIDIA_API_KEY"] = bool(os.environ.get("NVIDIA_API_KEY"))
     deps["OPENAI_API_KEY"] = bool(os.environ.get("OPENAI_API_KEY"))
     
     return deps
@@ -166,9 +232,10 @@ def print_status() -> None:
     else:
         missing = [k for k, v in deps.items() if not v]
         print(f"  ⚠️  Missing: {', '.join(missing)}")
-        if "OPENAI_API_KEY" in missing:
-            print("     Set OPENAI_API_KEY in .env file")
-        pkg_missing = [k for k in missing if k != "OPENAI_API_KEY"]
+        api_keys = [k for k in missing if "API_KEY" in k]
+        if api_keys:
+            print(f"     Set {', '.join(api_keys)} in .env file")
+        pkg_missing = [k for k in missing if "API_KEY" not in k]
         if pkg_missing:
             print(f"     Install packages: pip install {' '.join(pkg_missing)}")
     
@@ -176,7 +243,7 @@ def print_status() -> None:
 
 
 # =============================================================================
-# Demo
+# Demo (Uses lazy-loaded process_input)
 # =============================================================================
 
 def demo():
@@ -194,6 +261,7 @@ def demo():
                 print("Goodbye!")
                 break
             
+            # This triggers lazy loading of the graph module
             response = process_input(user_input)
             print(f"\nNIA: {response}\n")
             

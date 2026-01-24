@@ -1,12 +1,12 @@
-# ═══════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # N.I.A. v2.5.2 "Velocity" - Requirements
-# ═══════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # 
 # This file lists all external dependencies required to run N.I.A.
 # Install with: pip install -r requirements.txt
 #
 # After install, also run: playwright install chromium
-# ═══════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 # --- CORE: The Brain (LangChain + LangGraph) ---
 langgraph>=0.0.10           # Agent orchestration graph
@@ -36,7 +36,7 @@ comtypes>=1.2.0             # Required for Pycaw
 mss>=9.0.0                  # Fast Screen Capture
 Pillow>=10.0.0              # Image Processing
 opencv-python>=4.8.0        # Webcam capture (cv2)
-winsdk>=1.0.0               # Windows OCR for Sentry
+winsdk>=1.0.0b1               # Windows OCR for Sentry
 
 # --- TARA: The Tools ---
 # Browser Automation
@@ -70,3 +70,6 @@ requests>=2.28.0            # HTTP requests
 # --- Dev/Test (Optional) ---
 pytest>=7.0                 # Testing framework
 pytest-asyncio>=0.21.0      # Async test support
+
+# --- Plugin Hot-Reload (v3.0) ---
+watchdog>=3.0.0             # File system event monitoring

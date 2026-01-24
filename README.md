@@ -8,7 +8,7 @@
 ║    ██╔██╗ ██║   ██║   ███████║     ─────────────────────────────          ║
 ║    ██║╚██╗██║   ██║   ██╔══██║     CLASSIFICATION: DIRECTOR_LEVEL_ACCESS  ║
 ║    ██║ ╚████║██╗██║██╗██║  ██║     DEVELOPER: SentArc Labs                ║
-║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 2.5.2 (Velocity)              ║
+║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 2.6.0 (Velocity)              ║
 ║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 ```
@@ -29,12 +29,13 @@
 
 **N.I.A.** (Neural Intelligence Assistant) is a privacy-first, modular AI assistant designed for power users. It combines offline voice recognition, vision-based analysis, and automated desktop control into a unified system.
 
-**v2.5.2 "Velocity" Release Highlights:**
+**v2.6.0 "Velocity" Release Highlights:**
+- 🎭 **Centralized Identity Engine** — Single source of truth for prompts (`config/nia/prompts.json`)
+- 👁️ **Vision Hardening** — Robust initialization and explicit API key validation for IRIS
 - 🔥 **Multi-Provider LLM Hot-Swap** — Switch between NVIDIA, OpenAI, Groq, Ollama at runtime
 - ⚡ **Self-Healing Circuit Breaker** — Auto-fallback on rate limits (429/503 errors)
 - 🏛️ **ServiceContainer DI** — Clean dependency injection
 - 🔄 **Unified Async Bridge** — Stable browser automation
-- 📝 **Protocol-based Routing** — Clean agent injection
 - ✅ **Production Ready** — All critical issues resolved
 
 ---
@@ -50,7 +51,7 @@ N.I.A. uses a **LangGraph-based Supervisor Pattern** with four specialized units
 | 👁️  | **IRIS** | Vision & Screen Analysis   | Llama 3.2 Vision + mss               |
 | 🛠️  | **TARA** | Tool Execution (v2.0)      | Unified Async Bridge + 50 Tools      |
 
-### System Architecture (v2.5.2)
+### System Architecture (v2.6.0)
 
 ```
                     ┌──────────────────┐
@@ -68,6 +69,7 @@ N.I.A. uses a **LangGraph-based Supervisor Pattern** with four specialized units
      │  ┌─────────────────────────────────────────┐  │
      │  │         Protocol-based Routing          │  │
      │  │     + RoutingGatekeeper Validation      │  │
+     │  │     + Identity Injection System         │  │
      │  └───────────────────┬─────────────────────┘  │
      │                      │                        │
      │  ┌───────────────────▼─────────────────────┐  │
@@ -111,7 +113,17 @@ N.I.A. uses a **LangGraph-based Supervisor Pattern** with four specialized units
 
 ---
 
-## ⚡ What's New in v2.5.2
+## ⚡ What's New in v2.6.0
+
+### 🎭 Centralized Identity Engine
+- Prompts are now loaded from `config/nia/prompts.json` rather than hardcoded.
+- Ensures consistent persona across all interaction points (Chat, Supervisor).
+- Supports instant personality updates without code changes.
+
+### 👁️ Vision Hardening (IRIS)
+- **Robust Initialization**: Explicitly validates `NVIDIA_API_KEY` on startup.
+- **Fail-Safe**: If vision services are unavailable, IRIS gracefully degrades instead of crashing the graph.
+- **Clear Feedback**: Returns specialized error messages helping users fix env config.
 
 ### 🔥 Multi-Provider LLM Support (Hot-Swap)
 ```python
@@ -252,60 +264,6 @@ python main.py --version
 
 ---
 
-## 📁 Directory Structure
-
-```
-N.I.A/
-├── main.py                     # Entry point (v2.5.2)
-├── requirements.txt            # Dependencies
-├── .env                        # API keys & config
-│
-├── core/                       # 🧠 Core services
-│   ├── engine.py               # NIAAssistant orchestrator
-│   ├── config.py               # Pydantic settings
-│   ├── container.py            # ServiceContainer (DI)
-│   ├── memory.py               # 4-Layer Memory
-│   └── logger.py               # Centralized logging
-│
-├── models/                     # 🏭 LLM Factory
-│   ├── model_manager.py        # Multi-Provider + Hot-Swap
-│   └── safe_llm.py             # Circuit Breaker wrapper
-│
-├── nia/                        # 🧠 Brain module
-│   ├── agent.py                # SupervisorAgent (Protocol-based)
-│   ├── gatekeeper.py           # Routing validation
-│   └── graph/                  # LangGraph
-│       ├── builder.py          # Graph construction
-│       └── nodes.py            # Node definitions
-│
-├── tara/                       # 🛠️ Tool Execution
-│   ├── graph/                  # TARA 2.0 SubGraph
-│   │   ├── nodes.py            # Unified Async Bridge
-│   │   ├── state.py            # TaraState TypedDict
-│   │   └── workflow.py         # Graph builder
-│   └── tools/                  # 50+ Tools
-│       ├── browser_ops.py      # Playwright browser
-│       ├── app_launcher.py     # Application control
-│       ├── file_ops.py         # File operations
-│       ├── window_ops.py       # Window management
-│       └── interface.py        # Tool discovery
-│
-├── nola/                       # 🎤 Voice I/O
-│   ├── manager.py              # NOLAManager
-│   ├── security.py             # InputSanitizer
-│   └── io/
-│       ├── speech.py           # Edge TTS
-│       └── hearing.py          # Vosk STT
-│
-├── iris/                       # 👁️ Vision
-│   ├── agent.py                # IrisAgent
-│   └── tools.py                # Screen/Webcam capture
-│
-└── tests/                      # Unit tests
-```
-
----
-
 ## 🔧 Tech Stack
 
 | Component | Technology |
@@ -320,28 +278,14 @@ N.I.A/
 
 ---
 
-## 🛡️ Security
-
-- **Offline Voice**: Vosk runs 100% locally
-- **Local Vision**: Llama Vision on-device option
-- **Hardware Mute**: Physical mic release
-- **Input Sanitization**: InputSanitizer blocks dangerous patterns
-- **Safety Locks**: delete_file requires `confirm=True`
-- **Ghost Protocol**: Emergency privacy mode
-- **No Telemetry**: Zero data collection
-
----
-
 ## 🗺️ Roadmap
 
-### v2.5.2 (Current - Velocity)
+### v2.6.0 (Current - Velocity)
+- ✅ Centralized Identity Engine & Prompts
+- ✅ Vision Initialization Hardening
 - ✅ Multi-Provider LLM (NVIDIA, OpenAI, Groq, Ollama)
 - ✅ SafeLLM Circuit Breaker with auto-fallback
 - ✅ Dynamic provider hot-swap via ModelManager
-- ✅ ServiceContainer Dependency Injection
-- ✅ Unified Async Bridge for browser tools
-- ✅ Protocol-based agent routing
-- ✅ Strict type safety (TypedDict, Protocols)
 
 ### v3.0 (Future)
 - 🚀 **Native Async Graph** — Full async-first LangGraph
@@ -361,6 +305,6 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 **Built with ❤️ by SentArc Labs**
 
-*"N.I.A. v2.5.2 — Velocity. Multi-Provider. Production Ready."*
+*"N.I.A. v2.6.0 — Velocity. Multi-Provider. Production Ready."*
 
 </div>

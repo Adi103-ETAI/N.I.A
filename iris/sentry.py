@@ -63,9 +63,22 @@ except ImportError:
 # Configuration
 # =============================================================================
 
+import json
+from pathlib import Path
+
+def _load_config() -> dict:
+    config_path = Path(__file__).parent.parent / "config" / "iris" / "sentry.json"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load sentry.json: {e}")
+        return {}
+
+_SENTRY_CONFIG = _load_config()
+
 # Keywords that trigger alerts (case-insensitive)
-# Note: DANGER monitoring removed to prevent visual feedback loops
-TRIGGERS = {
+TRIGGERS = _SENTRY_CONFIG.get("TRIGGERS", {
     "SECURITY": [
         "password", "credential", "unauthorized", "breach",
         "2fa", "verification code", "otp", "authentication",
@@ -74,15 +87,15 @@ TRIGGERS = {
         "new message", "notification", "incoming call",
         "unread", "missed call",
     ],
-}
+})
 
 # Anti-loop filter - ignore our own output
-IGNORE_PATTERNS = [
+IGNORE_PATTERNS = _SENTRY_CONFIG.get("IGNORE_PATTERNS", [
     "sentry", "routing to iris", "nia:",
-]
+])
 
 # Scan interval in seconds
-SCAN_INTERVAL = 8
+SCAN_INTERVAL = _SENTRY_CONFIG.get("SCAN_INTERVAL", 8)
 
 # Screen capture region (None = full screen)
 CAPTURE_REGION = None
