@@ -171,7 +171,7 @@ class PluginLoader:
         # Thread lock for safe concurrent access (hot-reload)
         self._lock = threading.Lock()
         
-        logger.info(f"PluginLoader initialized (dir: {self._plugins_dir})")
+        logger.debug(f"PluginLoader initialized (dir: {self._plugins_dir})")
     
     def _get_default_plugins_dir(self) -> Path:
         """Get default plugins directory path."""

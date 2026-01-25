@@ -313,8 +313,8 @@ async def _scan_page_elements(page, max_elements: int = 15) -> str:
                 selector = f"input[name='{name}']" if name else f"input[type='{input_type}']"
                 desc = placeholder or aria or name or input_type
                 elements.append(f"[INPUT] selector='{selector}' ({desc})")
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"⚠️ Input scan skipped: {e}")
         
         # Scan textareas
         textareas = await page.locator("textarea:visible").all()
@@ -324,8 +324,8 @@ async def _scan_page_elements(page, max_elements: int = 15) -> str:
                 placeholder = await ta.get_attribute("placeholder") or ""
                 selector = f"textarea[name='{name}']" if name != "textarea" else "textarea"
                 elements.append(f"[TEXTAREA] selector='{selector}' ({placeholder or name})")
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"⚠️ Textarea scan skipped: {e}")
         
         # Scan buttons
         buttons = await page.locator("button:visible, input[type='submit']:visible").all()
@@ -338,8 +338,8 @@ async def _scan_page_elements(page, max_elements: int = 15) -> str:
                     elements.append(f"[BUTTON] selector=\"{selector}\" ({text})")
                 elif aria:
                     elements.append(f"[BUTTON] aria-label='{aria}'")
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"⚠️ Button scan skipped: {e}")
         
         # Scan links
         links = await page.locator("a:visible").all()
@@ -348,15 +348,16 @@ async def _scan_page_elements(page, max_elements: int = 15) -> str:
                 text = (await link.inner_text())[:25].strip()
                 if text and len(text) > 2:
                     elements.append(f"[LINK] text='{text}'")
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"⚠️ Link scan skipped: {e}")
         
     except Exception as e:
-        logger.debug(f"Element scan partial failure: {e}")
+        logger.error(f"Element scan partial failure: {e}")
     
     if elements:
         return "🔍 Interactive Elements:\n" + "\n".join(elements[:max_elements])
     else:
+        logger.warning(f"No interactive elements found on {page.url}")
         return "⚠️ No interactive elements found. Try browser_get_content() for page text."
 
 

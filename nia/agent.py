@@ -71,7 +71,7 @@ class SupervisorAgent:
         - **SafeLLM Wrapped**: All LLM calls protected by circuit breaker
     
     Attributes:
-        tara_agent: Optional TaraAgent (TARA 2.0 uses graph node instead).
+        iris_agent: IrisAgent instance for vision tasks.
         iris_agent: IrisAgent instance for vision tasks.
         gatekeeper: RoutingGatekeeper for LLM response validation.
         llm: Property - fetches model dynamically from ModelManager.
@@ -80,7 +80,6 @@ class SupervisorAgent:
     
     def __init__(
         self,
-        tara_agent: AgentProtocol | None = None,  # TARA 2.0: Now optional
         iris_agent: AgentProtocol | None = None,  # Vision agent
         model_type: str = "smart",
         temperature: float = 0.7,
@@ -88,21 +87,21 @@ class SupervisorAgent:
         """Initialize the SupervisorAgent with typed dependencies.
         
         Args:
-            tara_agent: Optional TaraAgent. TARA 2.0 uses call_tara_2 node.
-                       Must implement AgentProtocol if provided.
             iris_agent: IrisAgent instance for vision tasks.
                        Must implement AgentProtocol if provided.
             model_type: LLM model type ('smart' or 'fast').
             temperature: LLM temperature setting (0.0-2.0).
         """
-        self.tara_agent: AgentProtocol | None = tara_agent
         self.iris_agent: AgentProtocol | None = iris_agent
         self.gatekeeper: RoutingGatekeeper = RoutingGatekeeper()
         
         # v2.5.2: Store temperature for dynamic LLM access
         self._temperature = temperature
         
-        self._verify_wiring()
+        # v2.5.2: Store temperature for dynamic LLM access
+        self._temperature = temperature
+        
+
         
         # Verify LLM access works at startup (fail-fast)
         try:
@@ -114,7 +113,7 @@ class SupervisorAgent:
         
         # System Prompt
         try:
-            with open("nia/config/supervisor_prompt.txt", "r", encoding="utf-8") as f:
+            with open(config.SUPERVISOR_PROMPT_FILE, "r", encoding="utf-8") as f:
                 prompt_text = f.read()
         except FileNotFoundError:
             prompt_text = "You are NIA. Route commands to TARA or IRIS."
@@ -131,19 +130,7 @@ class SupervisorAgent:
         """
         return get_smart_model(temperature=self._temperature)
     
-    def _verify_wiring(self) -> None:
-        """Verify that critical dependencies are properly wired.
-        
-        Note: With TARA 2.0, tara_agent is optional (handled by graph node).
-        """
-        if self.tara_agent is None:
-            logger.info("ℹ️ TARA 2.0 mode: Tools handled by call_tara_2 graph node")
-        else:
-            logger.info("ℹ️ Legacy TARA mode: Using TaraAgent instance")
-        
-        if self.iris_agent is None:
-            # IRIS is optional - warn but don't fail
-            logger.warning("⚠️ SupervisorAgent has no IRIS agent. Vision routing disabled.")
+
     
     def _decompose_command(self, command: str) -> List[str]:
         """Decompose a compound command into individual sub-commands.
@@ -242,21 +229,12 @@ class SupervisorAgent:
                 # --- IRIS ROUTE ---
                 elif target == "IRIS":
                     logger.info(f"👁️ Routing to IRIS: {command}")
-                    try:
-                        if hasattr(self.iris_agent, 'run'):
-                            tool_result = self.iris_agent.run(command)
-                        else:
-                            tool_result = self.iris_agent.process({"messages": [HumanMessage(content=command)]})
-                            if isinstance(tool_result, dict):
-                                msgs = tool_result.get("messages", [])
-                                tool_result = msgs[-1].content if msgs else str(tool_result)
-                    except Exception as e:
-                        tool_result = f"Error executing IRIS command: {e}"
-                    
-                    if tool_result is None: tool_result = "✅ Visual check completed."
-                    
-                    # Contract: Return Dictionary
-                    return {"messages": [AIMessage(content=str(tool_result))]}
+                    # v2.5.3 Fix: Do not execute inline. Delegate to Graph Node.
+                    return {
+                        "messages": [HumanMessage(content=command)],
+                        "next": "iris",
+                        "user_input": command,
+                    }
                 
                 # --- CHAT ---
                 else:
@@ -280,4 +258,79 @@ class SupervisorAgent:
                 time.sleep(delay)
                 
         # 3. Fallback (should not reach here due to above exit, but kept for safety)
+        # 3. Fallback (should not reach here due to above exit, but kept for safety)
+        return {"messages": [AIMessage(content="I am having trouble processing your request.")]}
+
+    async def aprocess(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Async Main Execution Logic (Native Async).
+        """
+        # 1. Build Context (Stateless)
+        current_messages: List[BaseMessage] = [SystemMessage(content=self.system_prompt)]
+        
+        if "messages" in state and isinstance(state["messages"], list):
+            current_messages.extend(state["messages"])
+            
+        # 2. Gatekeeper Loop
+        retry_buffer: List[BaseMessage] = []
+
+        for attempt in range(config.MAX_RETRIES + 1):
+            full_context = current_messages + retry_buffer
+            
+            # Brain Think
+            try:
+                # 🌊 ASYNC CHANGE: Use ainvoke
+                response = await self.llm.ainvoke(full_context)
+                content = response.content
+            except Exception as e:
+                logger.error(f"LLM Async Invocation Failed: {e}")
+                content = "I'm having trouble connecting to my brain."
+            
+            # Gatekeeper Check (Gatekeeper is purely logic/regex, so it's fast enough to keep sync)
+            validation = self.gatekeeper.validate(content)
+            
+            if validation["valid"]:
+                target = validation["target"]
+                command = validation["command"]
+                
+                # --- TARA ROUTE ---
+                if target == "TARA":
+                    logger.info(f"🛠️ TARA 2.0: Returning TARA route for: {command}")
+                    return {
+                        "messages": [HumanMessage(content=command)],
+                        "next": "tara",
+                        "user_input": command,
+                    }
+                    
+                # --- IRIS ROUTE ---
+                elif target == "IRIS":
+                    logger.info(f"👁️ Routing to IRIS: {command}")
+                    # v2.5.3 Fix: Do not execute inline. Delegate to Graph Node.
+                    return {
+                        "messages": [HumanMessage(content=command)],
+                        "next": "iris",
+                        "user_input": command,
+                    }
+                
+                # --- CHAT ---
+                else:
+                    return {"messages": [AIMessage(content=content)]}
+            
+            else:
+                # --- RETRY WITH BACKOFF ---
+                logger.warning(f"🔄 Retry {attempt+1}/{config.MAX_RETRIES}: {validation['error']}")
+                retry_buffer.append(AIMessage(content=content))
+                retry_buffer.append(HumanMessage(content=f"SYSTEM ERROR: {validation['error']}"))
+                
+                if attempt == config.MAX_RETRIES:
+                    logger.error(f"❌ Gatekeeper failed after {config.MAX_RETRIES + 1} attempts.")
+                    return {"messages": [AIMessage(content="ERROR: Unable to process your request.")]}
+                
+                # Async sleep
+                import asyncio
+                base_delay = 0.5 * (2 ** attempt)
+                jitter = base_delay * 0.25 * (2 * random.random() - 1)
+                delay = min(base_delay + jitter, 5.0)
+                await asyncio.sleep(delay)
+                
         return {"messages": [AIMessage(content="I am having trouble processing your request.")]}

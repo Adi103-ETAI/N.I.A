@@ -134,7 +134,6 @@ class NIAGraph:
         logger.info("🛠️ TARA 2.0 will be initialized via call_tara_2 node")
         
         self.supervisor = SupervisorAgent(
-            tara_agent=None,  # TARA 2.0 doesn't need legacy agent
             iris_agent=self.iris,
             model_type=model_type,
             temperature=temperature,
@@ -182,11 +181,21 @@ class NIAGraph:
         graph = StateGraph(AgentState)
         
         # Add nodes
-        graph.add_node(AGENT_SUPERVISOR, lambda s: supervisor_node(
-            s, self.supervisor, 
-            getattr(self.supervisor, '_llm', None)
-        ))
-        graph.add_node(AGENT_IRIS, lambda s: iris_node(s, self.iris))
+        # Define async wrappers to bind arguments
+        # CRITICAL FIX: explicit async def prevents "result is coroutine" errors
+        async def run_supervisor(state):
+            return await supervisor_node(
+                state, 
+                self.supervisor, 
+                getattr(self.supervisor, '_llm', None)
+            )
+
+        async def run_iris(state):
+            return await iris_node(state, self.iris)
+
+        # Add nodes with async wrappers
+        graph.add_node(AGENT_SUPERVISOR, run_supervisor)
+        graph.add_node(AGENT_IRIS, run_iris)
         
         # TARA 2.0 Node (hardcoded - no legacy fallback)
         graph.add_node(AGENT_TARA, call_tara_2)
@@ -286,14 +295,33 @@ class NIAGraph:
         user_input: str,
         thread_id: str = "default",
     ) -> str:
-        """Async version of run.
+        """Async version of run (Native).
         
-        Note:
-            Currently wraps synchronous execution. LangGraph's ainvoke
-            requires careful state handling for complex agent graphs.
+        Uses LangGraph's ainvoke for non-blocking execution.
         """
-        # Sync-to-async wrapper (stable implementation)
-        return self.run(user_input, thread_id)
+        # Create initial state
+        initial_state = create_initial_state(user_input)
+        
+        # Build config with thread ID for checkpointing
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
+        
+        if self._compiled:
+            try:
+                # 🌊 ASYNC NATIVE CALL
+                final_state = await self._compiled.ainvoke(initial_state, config)
+                return extract_response(final_state)
+            except Exception as exc:
+                logger.exception("Graph execution failed: %s", exc)
+                return f"I encountered an error: {str(exc)}"
+        else:
+            # Fallback for no LangGraph (unlikely in Phase 2)
+            # Use to_thread for the sync fallback
+            import asyncio
+            return await asyncio.to_thread(self._fallback_run, initial_state)
     
     def get_thread_history(self, thread_id: str) -> List:
         """Get conversation history for a thread."""
@@ -315,14 +343,18 @@ class NIAGraph:
             return False
         
         try:
-            cursor = self._conn.cursor()
-            cursor.execute(
-                "DELETE FROM checkpoints WHERE thread_id = ?",
-                (thread_id,)
-            )
-            self._conn.commit()
-            logger.info("Cleared thread: %s", thread_id)
-            return True
+            try:
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "DELETE FROM checkpoints WHERE thread_id = ?",
+                    (thread_id,)
+                )
+                self._conn.commit()
+                logger.info("Cleared thread: %s", thread_id)
+                return True
+            except sqlite3.OperationalError as e:
+                logger.warning("⚠️ Failed to clear checkpoints (Schema mismatch or Lock): %s", e)
+                return False
         except Exception as exc:
             logger.error("Failed to clear thread: %s", exc)
             return False

@@ -192,6 +192,48 @@ class SafeLLM:
         # All retries exhausted
         logger.error(f"❌ All {self._max_retries + 1} attempts failed. Last error: {last_exception}")
         raise last_exception
+
+    async def ainvoke(self, input: Any, **kwargs: Any) -> Any:
+        """Async version of invoke with circuit breaker protection (Fixes 'The Imposter')."""
+        import asyncio
+        last_exception = None
+        
+        for attempt in range(self._max_retries + 1):
+            try:
+                return await self._primary_model.ainvoke(input, **kwargs)
+                
+            except Exception as exc:
+                last_exception = exc
+                
+                # Check if this is a recoverable error
+                is_rate_limit = _is_rate_limit_error(exc)
+                is_unavailable = _is_service_unavailable(exc)
+                
+                if is_rate_limit or is_unavailable:
+                    error_type = "Rate limit (429)" if is_rate_limit else "Service unavailable"
+                    logger.warning(
+                        f"🔄 [ASYNC] [{error_type}] Primary provider failed (attempt {attempt + 1}/{self._max_retries + 1}): {exc}"
+                    )
+                    
+                    # Try fallback if we have a manager and haven't already failed over
+                    if self._manager and not self._circuit_open:
+                        fallback_result = await self._engage_circuit_breaker_async(input, **kwargs)
+                        if fallback_result is not None:
+                            return fallback_result
+                    
+                    # Exponential backoff before retry
+                    if attempt < self._max_retries:
+                        delay = min(2 ** attempt, 8)  # Cap at 8 seconds
+                        logger.info(f"💤 [ASYNC] Backing off {delay}s before retry...")
+                        await asyncio.sleep(delay)
+                else:
+                    # Non-recoverable error - don't retry
+                    logger.error(f"❌ [ASYNC] LLM invocation failed (non-recoverable): {exc}")
+                    raise
+        
+        # All retries exhausted
+        logger.error(f"❌ [ASYNC] All {self._max_retries + 1} attempts failed. Last error: {last_exception}")
+        raise last_exception
     
     def _engage_circuit_breaker(self, input: Any, **kwargs: Any) -> Optional[Any]:
         """Engage the circuit breaker - switch provider and retry.
@@ -228,6 +270,34 @@ class SafeLLM:
             
         except Exception as fallback_exc:
             logger.error(f"❌ Fallback provider also failed: {fallback_exc}")
+        
+        return None
+
+    async def _engage_circuit_breaker_async(self, input: Any, **kwargs: Any) -> Optional[Any]:
+        """Async version of circuit breaker engagement."""
+        # Track the original provider for the notice
+        self._original_provider = self._manager.get_active_provider() if self._manager else "unknown"
+        
+        logger.warning(f"⚡ [ASYNC] CIRCUIT BREAKER: Switching from '{self._original_provider}' to fallback '{self._fallback_provider}'")
+        
+        try:
+            # Switch the global provider state
+            self._manager.set_active_provider(self._fallback_provider)
+            self._circuit_open = True  # Mark that we've failed over
+            
+            # Get a fresh model from the new provider
+            fallback_model = self._get_fallback_model()
+            
+            if fallback_model:
+                logger.info(f"🔄 [ASYNC] Retrying with fallback provider '{self._fallback_provider}'...")
+                # await the fallback model's ainvoke
+                response = await fallback_model.ainvoke(input, **kwargs)
+                
+                # v2.5.2: Inject notice into response so agent knows about the switch
+                return self._inject_fallback_notice(response)
+            
+        except Exception as fallback_exc:
+            logger.error(f"❌ [ASYNC] Fallback provider also failed: {fallback_exc}")
         
         return None
     

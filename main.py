@@ -16,7 +16,8 @@ import argparse
 import logging
 import os
 import sys
-import time
+import sys
+import asyncio
 
 # Suppress pygame welcome message before any imports
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
@@ -94,8 +95,8 @@ def print_mic_off() -> None:
 # Main Entry Point
 # =============================================================================
 
-def main() -> int:
-    """Main entry point."""
+async def main() -> int:
+    """Main entry point (Async)."""
     parser = argparse.ArgumentParser(
         description="N.I.A. - Neural Intelligence Assistant",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -125,10 +126,10 @@ def main() -> int:
         return 0
     
     # Log startup configuration
-    logger.info("N.I.A. v2.6.0 starting...")
-    logger.info(f"Mode: {'Voice' if args.voice else 'Text'} | Debug: {args.debug} | Thread: {args.thread_id}")
+    logger.debug("N.I.A. v2.6.0 starting (Async Native)...")
+    logger.debug(f"Mode: {'Voice' if args.voice else 'Text'} | Debug: {args.debug} | Thread: {args.thread_id}")
     if args.voice:
-        logger.info(f"Wake words: {args.wake_words} | Wake required: {not args.no_wake}")
+        logger.debug(f"Wake words: {args.wake_words} | Wake required: {not args.no_wake}")
     
     # Import and run engine
     from core.engine import NIAAssistant
@@ -144,9 +145,13 @@ def main() -> int:
     )
     
     try:
-        logger.debug("Entering main loop")
-        assistant.run()
-        logger.info("N.I.A. shutdown complete")
+        logger.debug("Entering async main loop")
+        # Run the async engine
+        await assistant.run()
+        logger.debug("N.I.A. shutdown complete")
+        return 0
+    except asyncio.CancelledError:
+        logger.info("Async task cancelled")
         return 0
     except KeyboardInterrupt:
         logger.info("Interrupted by user (Ctrl+C)")
@@ -172,4 +177,9 @@ __all__ = [
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print(f"Fatal error: {e}")

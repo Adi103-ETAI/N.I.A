@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -101,6 +102,7 @@ class MemoryManager:
             skills_file: NetworkX graph path (default: data/skills.gml).
             db_path: SQLite path (default: data/memory.db).
         """
+        self.root_dir = Path(__file__).parent.parent
         self._vectors_dir = Path(vectors_dir) if vectors_dir else VECTORS_DIR
         self._skills_file = Path(skills_file) if skills_file else SKILLS_FILE
         self._db_path = Path(db_path) if db_path else MEMORY_DB
@@ -114,7 +116,7 @@ class MemoryManager:
         self._init_procedural()
         self._init_sql()
         
-        logger.info("MemoryManager initialized (4-Layer Hybrid)")
+        logger.debug(f"MemoryManager initialized (Root: {self.root_dir})")
     
     # =========================================================================
     # Layer 1: Episodic Memory (ChromaDB)
@@ -160,42 +162,50 @@ class MemoryManager:
             logger.error("❌ ChromaDB Init Failed: %s", exc)
             self._episodes = None
     
-    def store_episode(
+    async def store_episode(
         self,
         text: str,
         role: str = "user",
         metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """Store a conversation episode."""
+        """Store a conversation episode (Async)."""
         if not self._episodes:
             return False
         
         try:
-            episode_id = f"{role}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
-            meta = metadata or {}
-            meta.update({"role": role, "timestamp": datetime.now().isoformat()})
-            
-            self._episodes.add(
-                documents=[text],
-                metadatas=[meta],
-                ids=[episode_id],
-            )
-            return True
+            return await asyncio.to_thread(self._store_episode_sync, text, role, metadata)
         except Exception as exc:
             logger.error("store_episode failed: %s", exc)
             return False
+
+    def _store_episode_sync(self, text, role, metadata):
+        """Internal sync implementation of store_episode."""
+        episode_id = f"{role}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        meta = metadata or {}
+        meta.update({"role": role, "timestamp": datetime.now().isoformat()})
+        
+        self._episodes.add(
+            documents=[text],
+            metadatas=[meta],
+            ids=[episode_id],
+        )
+        return True
     
-    def recall_episodes(self, query: str, n: int = 5) -> List[str]:
-        """Recall relevant past episodes via semantic search."""
+    async def recall_episodes(self, query: str, n: int = 5) -> List[str]:
+        """Recall relevant past episodes via semantic search (Async)."""
         if not self._episodes:
             return []
         
         try:
-            results = self._episodes.query(query_texts=[query], n_results=n)
-            return results.get("documents", [[]])[0]
+            return await asyncio.to_thread(self._recall_episodes_sync, query, n)
         except Exception as exc:
             logger.error("recall_episodes failed: %s", exc)
             return []
+
+    def _recall_episodes_sync(self, query, n):
+        """Internal sync implementation of recall_episodes."""
+        results = self._episodes.query(query_texts=[query], n_results=n)
+        return results.get("documents", [[]])[0]
     
     # =========================================================================
     # Layer 2: Procedural Memory (NetworkX)
@@ -421,15 +431,21 @@ class MemoryManager:
     # Context Assembler
     # =========================================================================
     
-    def get_full_context(self, query: str) -> Dict[str, Any]:
-        """Assemble full context from all memory layers.
+    async def get_full_context(self, query: str) -> Dict[str, Any]:
+        """Assemble full context from all memory layers (Async).
         
         Returns:
             Dict with preferences, relevant_episodes, relevant_skills, is_blocked.
         """
+        # Prefetch parallelizable data?
+        # For now, just await recall_episodes since it's the heaviest.
+        # SQLite calls are fast enough to keep sync or can be wrapped later.
+        
+        episodes = await self.recall_episodes(query, n=5)
+        
         context = {
             "preferences": self.get_all_preferences(),
-            "relevant_episodes": self.recall_episodes(query, n=5),
+            "relevant_episodes": episodes,
             "relevant_skills": [],
             "is_blocked": self.is_blocked(query),
         }

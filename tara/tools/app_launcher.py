@@ -1,11 +1,11 @@
 """
 MODULE: Process Management
-VERSION: 2.5.2
+VERSION: 2.5.3
 STRICT SCOPE: Start, Kill, List Processes.
 CONSTRAINTS: No Window manipulation. No generic 'app_control'.
 RETURNS: PIDs and Process Objects only.
 
-TARA 2.0 Atomic Tool Module.
+TARA 2.0 Atomic Tool Module - ASYNC UPDATE.
 
 Verification Logic (Trust But Verify):
     - launch_app(): Uses PID tracking + window polling to verify launch success.
@@ -23,6 +23,7 @@ Exports:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -64,16 +65,32 @@ except ImportError:
 
 def _load_app_config() -> dict:
     """Load app configuration from external JSON file."""
-    config_path = Path(__file__).parent.parent / "units" / "config" / "apps.json"
+    # Fix: Point to correctly located config file in root config/
+    config_path = Path(__file__).parent.parent.parent / "config" / "apps.json"
     
     if not config_path.exists():
-        return {
+        # Auto-create default if missing
+        default_config = {
             "system_apps": ["notepad", "calc", "cmd", "explorer"],
             "custom_aliases": {}
         }
+        try:
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(default_config, f, indent=2)
+            logger.info(f"Created default apps.json at {config_path}")
+        except Exception as e:
+            logger.warning(f"Could not create apps.json: {e}")
+            return default_config
+            
+        return default_config
     
-    with open(config_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load apps.json: {e}")
+        return {"system_apps": [], "custom_aliases": {}}
 
 
 _APP_CONFIG = _load_app_config()
@@ -133,7 +150,7 @@ def _get_window_title(hwnd: int) -> str:
 # Atomic Tool: launch_app
 # =============================================================================
 
-def launch_app(app_name: str) -> str:
+async def launch_app(app_name: str) -> str:
     """
     Launch an application by name with verification.
     
@@ -146,7 +163,7 @@ def launch_app(app_name: str) -> str:
         Success message with alias, or error message.
         
     Example:
-        >>> launch_app("notepad")
+        >>> await launch_app("notepad")
         "✅ Launched: notepad [alias: notepad_1]"
     """
     if not app_name:
@@ -171,10 +188,13 @@ def launch_app(app_name: str) -> str:
     pre_launch_windows: Set[Tuple[str, int]] = set()
     if _HAS_PYGETWINDOW:
         try:
-            pre_launch_windows = {
-                (w.title, w._hWnd) for w in gw.getAllWindows()
-                if app_lower in w.title.lower()
-            }
+            # Run blocking call in thread
+            pre_launch_windows = await asyncio.to_thread(
+                lambda: {
+                    (w.title, w._hWnd) for w in gw.getAllWindows()
+                    if app_lower in w.title.lower()
+                }
+            )
         except Exception:
             pass
     
@@ -189,12 +209,17 @@ def launch_app(app_name: str) -> str:
         if app_lower in SYSTEM_APPS or app_lower.endswith(".exe"):
             try:
                 exe_name = f"{app_lower}.exe" if not app_lower.endswith(".exe") else app_lower
-                proc = subprocess.Popen(
-                    [exe_name],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    shell=False
-                )
+                
+                def _run_popen():
+                    return subprocess.Popen(
+                        [exe_name],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        shell=False
+                    )
+                
+                proc = await asyncio.to_thread(_run_popen)
+                
                 launched_pid = proc.pid
                 launched = True
                 launch_method = "direct"
@@ -204,7 +229,8 @@ def launch_app(app_name: str) -> str:
         
         # Fallback: Shell execution
         if not launched:
-            subprocess.Popen(
+            await asyncio.to_thread(
+                subprocess.Popen,
                 f'start "" "{launch_cmd}"',
                 shell=True,
                 stdout=subprocess.DEVNULL,
@@ -216,7 +242,8 @@ def launch_app(app_name: str) -> str:
     except Exception as e1:
         logger.warning(f"Subprocess failed: {e1}, trying os.startfile...")
         try:
-            os.startfile(launch_cmd)
+            # os.startfile is blocking on Windows
+            await asyncio.to_thread(os.startfile, launch_cmd)
             launched = True
             launch_method = "startfile"
         except FileNotFoundError:
@@ -238,11 +265,12 @@ def launch_app(app_name: str) -> str:
     for attempt in range(1, max_retries + 1):
         # Method 1: PID-based verification
         if launched_pid and _HAS_WIN32:
-            hwnds = _get_hwnds_from_pid(launched_pid)
+            hwnds = await asyncio.to_thread(_get_hwnds_from_pid, launched_pid)
             for hwnd in hwnds:
-                if _is_window_visible(hwnd):
+                is_visible = await asyncio.to_thread(_is_window_visible, hwnd)
+                if is_visible:
                     visible_hwnd = hwnd
-                    window_title = _get_window_title(hwnd)
+                    window_title = await asyncio.to_thread(_get_window_title, hwnd)
                     logger.debug(f"✅ PID {launched_pid} -> HWND {hwnd} (attempt {attempt})")
                     break
             if visible_hwnd:
@@ -251,24 +279,30 @@ def launch_app(app_name: str) -> str:
         # Method 2: New window detection
         if not visible_hwnd and _HAS_PYGETWINDOW:
             try:
-                current_windows = [
-                    w for w in gw.getAllWindows()
-                    if app_lower in w.title.lower() and w.title.strip()
-                ]
-                for win in current_windows:
-                    win_key = (win.title, win._hWnd)
-                    if win_key not in pre_launch_windows and win.visible:
-                        visible_hwnd = win._hWnd
-                        window_title = win.title
-                        logger.debug(f"✅ NEW window detected: '{win.title}'")
-                        break
+                def _scan_new_windows():
+                    current = [
+                        w for w in gw.getAllWindows()
+                        if app_lower in w.title.lower() and w.title.strip()
+                    ]
+                    for win in current:
+                        win_key = (win.title, win._hWnd)
+                        if win_key not in pre_launch_windows and win.visible:
+                            return win._hWnd, win.title
+                    return None, None
+                
+                h, t = await asyncio.to_thread(_scan_new_windows)
+                if h:
+                    visible_hwnd = h
+                    window_title = t
+                    logger.debug(f"✅ NEW window detected: '{t}'")
+                    break
             except Exception as e:
                 logger.debug(f"Window check error: {e}")
         
         if visible_hwnd:
             break
         
-        time.sleep(poll_interval)
+        await asyncio.sleep(poll_interval)
     
     # Final result
     if visible_hwnd:
@@ -284,10 +318,10 @@ def launch_app(app_name: str) -> str:
         # Kill zombie process if we have PID
         if launched_pid:
             try:
-                subprocess.run(
-                    ["taskkill", "/F", "/PID", str(launched_pid)],
-                    capture_output=True,
-                    timeout=5
+                await asyncio.create_subprocess_exec(
+                    "taskkill", "/F", "/PID", str(launched_pid),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
                 )
                 logger.warning(f"💀 Killed zombie PID {launched_pid}")
             except Exception:
@@ -300,7 +334,7 @@ def launch_app(app_name: str) -> str:
 # Atomic Tool: kill_app
 # =============================================================================
 
-def kill_app(app_name: str) -> str:
+async def kill_app(app_name: str) -> str:
     """
     Kill an application by name.
     
@@ -311,10 +345,6 @@ def kill_app(app_name: str) -> str:
         
     Returns:
         Success or failure message.
-        
-    Example:
-        >>> kill_app("notepad")
-        "💀 Killed: notepad"
     """
     if not app_name:
         return "❌ Error: app_name is required"
@@ -327,12 +357,13 @@ def kill_app(app_name: str) -> str:
         info = registry.get(app_lower)
         if info and info.pid:
             try:
-                result = subprocess.run(
-                    ["taskkill", "/F", "/PID", str(info.pid)],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
+                proc = await asyncio.create_subprocess_exec(
+                    "taskkill", "/F", "/PID", str(info.pid),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
                 )
+                await proc.communicate()
+                
                 registry.deregister(app_lower)
                 return f"💀 Killed: {app_lower} (PID {info.pid})"
             except Exception as e:
@@ -346,35 +377,40 @@ def kill_app(app_name: str) -> str:
     
     # Check if process is running
     try:
-        check = subprocess.run(
-            ["tasklist", "/FI", f"IMAGENAME eq {exe_name}"],
-            capture_output=True,
-            text=True,
-            timeout=5
+        proc = await asyncio.create_subprocess_exec(
+            "tasklist", "/FI", f"IMAGENAME eq {exe_name}",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
         )
-        if exe_name.lower() not in check.stdout.lower():
+        stdout, _ = await proc.communicate()
+        output = stdout.decode('utf-8', errors='ignore')
+        
+        if exe_name.lower() not in output.lower():
             return f"⚠️ {clean_name} is not running"
     except Exception:
         pass
     
     # Kill the process
     try:
-        result = subprocess.run(
-            ["taskkill", "/F", "/IM", exe_name, "/T"],
-            capture_output=True,
-            text=True,
-            timeout=10
+        proc = await asyncio.create_subprocess_exec(
+            "taskkill", "/F", "/IM", exe_name, "/T",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
         )
+        await proc.communicate()
         
         # Verify it's dead
-        time.sleep(0.5)
-        verify = subprocess.run(
-            ["tasklist", "/FI", f"IMAGENAME eq {exe_name}"],
-            capture_output=True,
-            text=True,
-            timeout=5
+        await asyncio.sleep(0.5)
+        
+        proc_verify = await asyncio.create_subprocess_exec(
+            "tasklist", "/FI", f"IMAGENAME eq {exe_name}",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
         )
-        if exe_name.lower() not in verify.stdout.lower():
+        stdout, _ = await proc_verify.communicate()
+        verify_output = stdout.decode('utf-8', errors='ignore')
+        
+        if exe_name.lower() not in verify_output.lower():
             # Deregister any aliases for this app
             for alias in list(registry.list_aliases()):
                 info = registry.get(alias)
@@ -385,8 +421,6 @@ def kill_app(app_name: str) -> str:
         else:
             return f"❌ {clean_name} refused to die (try running as admin)"
             
-    except subprocess.TimeoutExpired:
-        return f"❌ Kill command timed out for {clean_name}"
     except Exception as e:
         return f"❌ Failed to kill {clean_name}: {e}"
 
@@ -395,7 +429,7 @@ def kill_app(app_name: str) -> str:
 # Atomic Tool: list_processes
 # =============================================================================
 
-def list_processes(filter_name: Optional[str] = None) -> str:
+async def list_processes(filter_name: Optional[str] = None) -> str:
     """
     List running processes, optionally filtered by name.
     
@@ -408,14 +442,15 @@ def list_processes(filter_name: Optional[str] = None) -> str:
         Formatted list of processes.
     """
     try:
-        result = subprocess.run(
-            ["tasklist", "/FO", "CSV", "/NH"],
-            capture_output=True,
-            text=True,
-            timeout=10
+        proc = await asyncio.create_subprocess_exec(
+            "tasklist", "/FO", "CSV", "/NH",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
         )
+        stdout, _ = await proc.communicate()
+        output = stdout.decode('utf-8', errors='ignore')
         
-        lines = result.stdout.strip().split("\n")
+        lines = output.strip().split("\n")
         processes = []
         
         for line in lines[:50]:  # Limit output

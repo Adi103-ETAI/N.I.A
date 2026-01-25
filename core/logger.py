@@ -46,7 +46,7 @@ _loggers: dict[str, logging.Logger] = {}
 # Setup Function
 # =============================================================================
 
-def setup_logger(name: str, console_level: int = logging.INFO, file_level: int = logging.DEBUG) -> logging.Logger:
+def setup_logger(name: str, console_level: int = logging.WARNING, file_level: int = logging.DEBUG) -> logging.Logger:
     """Create or retrieve a configured logger.
     
     Args:
@@ -116,6 +116,21 @@ def get_logger(name: str) -> logging.Logger:
     return setup_logger(name)
 
 
+def set_console_level(level: int = logging.INFO) -> None:
+    """Set the logging level for all console handlers.
+    
+    Used to toggle debug mode at runtime.
+    
+    Args:
+        level: New logging level (e.g., logging.DEBUG or logging.INFO).
+    """
+    for logger in _loggers.values():
+        for handler in logger.handlers:
+            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, RotatingFileHandler):
+                handler.setLevel(level)
+
+
+
 # =============================================================================
 # Exports
 # =============================================================================
@@ -123,6 +138,8 @@ def get_logger(name: str) -> logging.Logger:
 __all__ = [
     "setup_logger",
     "get_logger",
+    "set_console_level",
+    "LOG_DIR",
     "LOG_DIR",
     "LOG_FILE",
 ]

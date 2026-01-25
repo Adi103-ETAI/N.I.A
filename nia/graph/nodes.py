@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from core.logger import setup_logger
 from typing import TYPE_CHECKING, List, Optional
+import asyncio
 
 logger = setup_logger("NIA.Nodes")
 
@@ -235,7 +236,13 @@ def summarize_oldest(messages: List, llm=None) -> List:
     ]
     
     try:
-        response = llm.invoke(summary_request)
+        # 🌊 ASYNC SUPPORT: If llm has ainvoke, use it.
+        if hasattr(llm, 'invoke'):
+            response = llm.invoke(summary_request)
+        else:
+            # Fallback
+            response = llm(summary_request)
+            
         summary_text = response.content if hasattr(response, 'content') else str(response)
         
         # 4. Create the Summary Message
@@ -251,22 +258,18 @@ def summarize_oldest(messages: List, llm=None) -> List:
         return messages  # Fail safe: return original list
 
 
+async def asummarize_oldest(messages: List, llm=None) -> List:
+    """Async version of summarize_oldest."""
+    return await asyncio.to_thread(summarize_oldest, messages, llm)
+
+
 # =============================================================================
 # Node Functions
 # =============================================================================
 
-def supervisor_node(state: AgentState, supervisor, summarize_llm=None) -> AgentState:
-    """Supervisor node function with smart summarization.
-    
-    Args:
-        state: Current agent state.
-        supervisor: SupervisorAgent instance.
-        summarize_llm: LLM for summarization (optional).
-        
-    Returns:
-        Updated agent state.
-    """
-    logger.debug("Executing supervisor node")
+async def supervisor_node(state: AgentState, supervisor, summarize_llm=None) -> AgentState:
+    """Supervisor node function with smart summarization (Async)."""
+    logger.debug("Executing supervisor node (Async)")
     
     # Inject dynamic system prompt (Root Fix)
     prompts = get_prompts()
@@ -275,28 +278,22 @@ def supervisor_node(state: AgentState, supervisor, summarize_llm=None) -> AgentS
     
     # 1. Manage Memory (Summarize if needed)
     current_messages = state.get("messages", [])
-    clean_messages = summarize_oldest(current_messages, summarize_llm)
+    # Call async summarizer
+    clean_messages = await asummarize_oldest(current_messages, summarize_llm)
     
     # Update state if messages were pruned
     if len(clean_messages) < len(current_messages):
         state = {**state, "messages": clean_messages}
     
-    # 2. Proceed with Supervisor Logic
-    return supervisor.process(state)
+    # 2. Proceed with Supervisor Logic (Async)
+    return await supervisor.aprocess(state)
 
 
-def iris_node(state: AgentState, iris) -> AgentState:
-    """IRIS node function.
-    
-    Args:
-        state: Current agent state.
-        iris: IrisAgent instance.
-        
-    Returns:
-        Updated agent state.
-    """
-    logger.debug("Executing IRIS node")
-    return iris.process(state)
+async def iris_node(state: AgentState, iris) -> AgentState:
+    """IRIS node function (Async Wrapper)."""
+    logger.debug("Executing IRIS node (Async Wrapper)")
+    # Wrap Sync Iris in Thread to prevent blocking
+    return await asyncio.to_thread(iris.process, state)
 
 
 
@@ -304,19 +301,8 @@ def iris_node(state: AgentState, iris) -> AgentState:
 # General Assistant Node (For Chat/Non-Automation Queries)
 # =============================================================================
 
-def general_assistant(state: AgentState) -> AgentState:
-    """
-    General assistant node for chat and non-automation queries.
-    
-    This node handles queries that don't require TARA (automation) or
-    IRIS (vision), using the LLM for general conversation.
-    
-    Args:
-        state: Current NIA AgentState.
-        
-    Returns:
-        Updated state with LLM response.
-    """
+async def general_assistant(state: AgentState) -> AgentState:
+    """General assistant node (Async)."""
     logger.info("💬 Routing to General Assistant (Chat)")
     
     try:
@@ -339,6 +325,7 @@ def general_assistant(state: AgentState) -> AgentState:
         prompts = get_prompts()
         system_prompt_text = prompts.get("identity", "You are N.I.A.")
         
+        # Handle message list updates similar to sync...
         if _HAS_LANGCHAIN_MESSAGES:
             # Check if first message is SystemMessage
             has_system = messages and isinstance(messages[0], SystemMessage)
@@ -350,8 +337,8 @@ def general_assistant(state: AgentState) -> AgentState:
             if not has_system:
                 messages = [{"role": "system", "content": system_prompt_text}] + messages
         
-        # Invoke LLM
-        response = llm.invoke(messages)
+        # Invoke LLM (Async)
+        response = await llm.ainvoke(messages)
         
         # Extract content
         response_content = response.content if hasattr(response, 'content') else str(response)
@@ -387,7 +374,7 @@ def general_assistant(state: AgentState) -> AgentState:
 try:
     from tara.graph import tara_app, create_initial_tara_state
     _HAS_TARA_2 = True
-    logger.info("✅ TARA 2.0 graph imported successfully")
+    logger.debug("✅ TARA 2.0 graph imported successfully")
 except ImportError as e:
     _HAS_TARA_2 = False
     tara_app = None  # type: ignore
@@ -395,21 +382,8 @@ except ImportError as e:
     logger.warning(f"⚠️ TARA 2.0 graph not available: {e}")
 
 
-def call_tara_2(state: AgentState) -> AgentState:
-    """
-    TARA 2.0 Node - Handovers control to TARA with a SANITIZED goal.
-    
-    Uses 'Strong Sanitization' strategy:
-    1. Retrieve: Scan backwards for HumanMessage
-    2. Sanitize: Split on "User Input:" to remove memory context pollution
-    3. Handoff: Pass clean goal to TARA
-    
-    Args:
-        state: Current NIA AgentState.
-        
-    Returns:
-        Updated AgentState with TARA's response.
-    """
+async def call_tara_2(state: AgentState) -> AgentState:
+    """TARA 2.0 Node (Async)."""
     if not _HAS_TARA_2 or not tara_app:
         logger.error("TARA 2.0 not available, falling back to error message")
         if _HAS_LANGCHAIN_MESSAGES:
@@ -465,8 +439,8 @@ def call_tara_2(state: AgentState) -> AgentState:
             "metadata": state.get("metadata", {}),
         }
         
-        # === INVOKE TARA 2.0 ===
-        result = tara_app.invoke(tara_input)
+        # === INVOKE TARA 2.0 (ASYNC) ===
+        result = await tara_app.ainvoke(tara_input)
         
         # === EXTRACT RESPONSE (TARA → NIA) ===
         final_response = result.get("final_response", "")
@@ -548,6 +522,12 @@ def route_from_supervisor(state: AgentState) -> str:
     1. Check explicit 'user_input' field first (most accurate)
     2. Fallback: scan backwards for last HumanMessage (robust)
     """
+    # STRATEGY 0: Respect the Supervisor's Explicit Instruction (The Brain's Decision)
+    next_agent = state.get("next")
+    if next_agent and next_agent in [AGENT_TARA, AGENT_IRIS]:
+        logger.info(f"🧠 Supervisor explicitly routed to: {next_agent}")
+        return next_agent
+
     # STRATEGY 1: Check the explicit 'user_input' field first (Most Accurate)
     user_text = state.get("user_input", "")
 

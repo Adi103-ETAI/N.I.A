@@ -227,7 +227,7 @@ def start_plugin_watcher(plugins_dir: Optional[Path] = None) -> "Observer":
     
     _observer = observer
     
-    logger.info(f"🔄 Plugin watcher started (monitoring: {plugins_dir})")
+    logger.debug(f"🔄 Plugin watcher started (monitoring: {plugins_dir})")
     
     return observer
 

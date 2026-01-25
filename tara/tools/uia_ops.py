@@ -3,7 +3,7 @@ MODULE: UI Automation Operations (Layer 1 - Semantic)
 STRICT SCOPE: Smart element interaction using Accessibility Tree.
 CONSTRAINTS: Uses Names/Types, NOT coordinates. The "Smart" layer.
 
-TARA 2.0 Atomic Tool Module.
+TARA 2.0 Atomic Tool Module - ASYNC UPDATE.
 
 Bridges the Vision Gap and Wait Gap from legacy uia_driver.py.
 
@@ -15,7 +15,10 @@ Exports:
 """
 from __future__ import annotations
 
+import asyncio
 import time
+import json
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from core.logger import setup_logger
@@ -43,9 +46,6 @@ settings = get_settings()
 # =============================================================================
 # Constants
 # =============================================================================
-
-import json
-from pathlib import Path
 
 def _load_config() -> dict:
     """Load UIA configuration from JSON."""
@@ -132,19 +132,6 @@ def _wait_for_element(
 ) -> "auto.Control":
     """
     Smart Wait: Retry finding an element until timeout expires.
-    
-    Args:
-        window: Parent window control.
-        name: Element name/text to search for.
-        control_type: Optional type filter (e.g., "ButtonControl").
-        timeout: Max seconds to wait.
-        poll_interval: Seconds between retries.
-        
-    Returns:
-        Found element control.
-        
-    Raises:
-        TimeoutError: If element not found within timeout.
     """
     start_time = time.time()
     last_error = None
@@ -200,158 +187,130 @@ def _wait_for_element(
 
 
 # =============================================================================
-# Core Function: The "Vision" Logic (Vision Gap Fix)
+# Core Function: The "Vision" Logic
 # =============================================================================
 
-def dump_ui_tree(window_alias: str, depth: int = 3, max_elements: int = MAX_ELEMENTS) -> str:
+async def dump_ui_tree(window_alias: str, depth: int = 3, max_elements: int = MAX_ELEMENTS) -> str:
     """
-    Scan UI tree and return formatted element map for LLM vision.
-    
-    ONE ACTION: Read and format the UI accessibility tree.
-    
-    Args:
-        window_alias: Window alias from registry.
-        depth: Max tree depth to scan (default: 3).
-        max_elements: Maximum elements to return (default: 100).
-        
-    Returns:
-        Formatted string map:
-        [1] {Button} "Save"
-        [2] {Edit} "File Name"
-        
-    Example:
-        >>> dump_ui_tree("notepad_1")
-        "[1] {MenuBar} \"Menu\"\n[2] {MenuItem} \"File\"\n..."
+    Scan UI tree and return formatted element map for LLM vision (Async).
     """
     if not _HAS_UIA:
         return "❌ uiautomation library not installed"
     
-    try:
-        # 🌊 RIPPLE CHECK: Initialize COM for this thread BEFORE any UIA operations
-        with auto.UIAutomationInitializerInThread():
-            # Get window control (MUST be inside COM context)
-            window, error = _get_window_control(window_alias)
-            if error:
-                return f"❌ {error}"
-            
-            elements = []
-            element_id = 0
-            
-            # Walk the tree with depth limit
-            for ctrl, current_depth in auto.WalkControl(window, maxDepth=depth):
-                if element_id >= max_elements:
-                    elements.append(f"... (truncated at {max_elements} elements)")
-                    break
+    def _do_dump():
+        try:
+            # 🌊 RIPPLE CHECK: Initialize COM for this thread BEFORE any UIA operations
+            with auto.UIAutomationInitializerInThread():
+                # Get window control (MUST be inside COM context)
+                window, error = _get_window_control(window_alias)
+                if error:
+                    return f"❌ {error}"
                 
-                try:
-                    # Get element info
-                    ctrl_type = ctrl.ControlTypeName
-                    ctrl_name = ctrl.Name or ""
+                elements = []
+                element_id = 0
+                
+                # Walk the tree with depth limit
+                for ctrl, current_depth in auto.WalkControl(window, maxDepth=depth):
+                    if element_id >= max_elements:
+                        elements.append(f"... (truncated at {max_elements} elements)")
+                        break
                     
-                    # Skip layout/container noise
-                    if ctrl_type in SKIP_TYPES:
+                    try:
+                        # Get element info
+                        ctrl_type = ctrl.ControlTypeName
+                        ctrl_name = ctrl.Name or ""
+                        
+                        # Skip layout/container noise
+                        if ctrl_type in SKIP_TYPES:
+                            continue
+                        
+                        # Skip elements with no name (not actionable)
+                        if not ctrl_name.strip():
+                            continue
+                        
+                        # Skip very long names (usually not buttons/inputs)
+                        if len(ctrl_name) > 100:
+                            continue
+                        
+                        # Format type name (remove "Control" suffix)
+                        short_type = ctrl_type.replace("Control", "")
+                        
+                        # Escape quotes in name
+                        safe_name = ctrl_name.replace('"', '\\"')[:50]
+                        
+                        # Add to list
+                        element_id += 1
+                        elements.append(f"[{element_id}] {{{short_type}}} \"{safe_name}\"")
+                        
+                    except Exception:
                         continue
-                    
-                    # Skip elements with no name (not actionable)
-                    if not ctrl_name.strip():
-                        continue
-                    
-                    # Skip very long names (usually not buttons/inputs)
-                    if len(ctrl_name) > 100:
-                        continue
-                    
-                    # Format type name (remove "Control" suffix)
-                    short_type = ctrl_type.replace("Control", "")
-                    
-                    # Escape quotes in name
-                    safe_name = ctrl_name.replace('"', '\\"')[:50]
-                    
-                    # Add to list
-                    element_id += 1
-                    elements.append(f"[{element_id}] {{{short_type}}} \"{safe_name}\"")
-                    
-                except Exception:
-                    continue
-            
-            if not elements:
-                return f"Window '{window_alias}' has no readable controls."
-            
-            header = f"UI Elements for '{window_alias}' ({len(elements)} items):\n"
-            return header + "\n".join(elements)
-        
-    except Exception as e:
-        logger.error(f"UI tree scan error: {e}")
-        return f"❌ Failed to scan UI: {e}"
+                
+                if not elements:
+                    return f"Window '{window_alias}' has no readable controls."
+                
+                header = f"UI Elements for '{window_alias}' ({len(elements)} items):\n"
+                return header + "\n".join(elements)
+        except Exception as e:
+            logger.error(f"UI tree scan error: {e}")
+            return f"❌ Failed to scan UI: {e}"
+
+    # Wrap blocking COM call in thread
+    return await asyncio.to_thread(_do_dump)
 
 
 # =============================================================================
 # Action Function: click_element
 # =============================================================================
 
-def click_element(
+async def click_element(
     window_alias: str,
     element_name: str,
     click_type: str = "left",
     timeout: float = 5.0,
 ) -> str:
     """
-    Click a UI element by its name.
-    
-    ONE ACTION: Find element by name and click it.
-    
-    Args:
-        window_alias: Window alias from registry.
-        element_name: Name/text of element to click.
-        click_type: "left", "right", or "double" (default: "left").
-        timeout: Seconds to wait for element.
-        
-    Returns:
-        Success or failure message.
-        
-    Raises:
-        RuntimeError: If element not found after timeout.
+    Click a UI element by its name (Async).
     """
     if not _HAS_UIA:
         return "❌ uiautomation library not installed"
     
-    try:
-        # 🌊 RIPPLE CHECK: Initialize COM for this thread BEFORE any UIA operations
-        with auto.UIAutomationInitializerInThread():
-            # Get window control (MUST be inside COM context)
-            window, error = _get_window_control(window_alias)
-            if error:
-                return f"❌ {error}"
+    def _do_click():
+        try:
+            with auto.UIAutomationInitializerInThread():
+                window, error = _get_window_control(window_alias)
+                if error:
+                    return f"❌ {error}"
+                
+                element = _wait_for_element(window, element_name, timeout=timeout)
+                
+                if click_type == "left":
+                    element.Click()
+                elif click_type == "right":
+                    element.RightClick()
+                elif click_type == "double":
+                    element.DoubleClick()
+                else:
+                    return f"❌ Invalid click_type '{click_type}'. Use 'left', 'right', or 'double'"
+                
+                logger.debug(f"Clicked '{element_name}' in '{window_alias}'")
+                return f"✅ Clicked '{element_name}'"
             
-            # Find element with patience
-            element = _wait_for_element(window, element_name, timeout=timeout)
-            
-            # Execute click
-            if click_type == "left":
-                element.Click()
-            elif click_type == "right":
-                element.RightClick()
-            elif click_type == "double":
-                element.DoubleClick()
-            else:
-                return f"❌ Invalid click_type '{click_type}'. Use 'left', 'right', or 'double'"
-            
-            logger.debug(f"Clicked '{element_name}' in '{window_alias}'")
-            return f"✅ Clicked '{element_name}'"
-        
-    except TimeoutError as e:
-        error_msg = f"Element '{element_name}' not found in '{window_alias}'"
-        logger.error(error_msg)
-        return f"❌ {error_msg}"
-    except Exception as e:
-        logger.error(f"Click failed: {e}")
-        return f"❌ Click failed: {e}"
+        except TimeoutError as e:
+            error_msg = f"Element '{element_name}' not found in '{window_alias}'"
+            logger.error(error_msg)
+            return f"❌ {error_msg}"
+        except Exception as e:
+            logger.error(f"Click failed: {e}")
+            return f"❌ Click failed: {e}"
+
+    return await asyncio.to_thread(_do_click)
 
 
 # =============================================================================
 # Action Function: type_in_element
 # =============================================================================
 
-def type_in_element(
+async def type_in_element(
     window_alias: str,
     element_name: str,
     text: str,
@@ -359,20 +318,7 @@ def type_in_element(
     clear_first: bool = True,
 ) -> str:
     """
-    Type text into a UI element with blind typing fallback.
-    
-    ONE ACTION: Find element by name and type text into it.
-    If element not found, falls back to typing into the active window.
-    
-    Args:
-        window_alias: Window alias from registry.
-        element_name: Name/text of element to type in.
-        text: Text to type.
-        timeout: Seconds to wait for element.
-        clear_first: Clear existing text before typing.
-        
-    Returns:
-        Success or failure message.
+    Type text into a UI element with blind typing fallback (Async).
     """
     if not _HAS_UIA:
         return "❌ uiautomation library not installed"
@@ -380,205 +326,162 @@ def type_in_element(
     if not text:
         return "❌ No text provided to type"
     
-    try:
-        # 🌊 RIPPLE CHECK: Initialize COM for this thread BEFORE any UIA operations
-        with auto.UIAutomationInitializerInThread():
-            # Get window control (MUST be inside COM context)
-            window, error = _get_window_control(window_alias)
-            if error:
-                return f"❌ {error}"
-            
-            element = None
-            use_blind_typing = False
-            
-            # Try to find the specific element
-            try:
-                element = _wait_for_element(
-                    window, element_name, 
-                    control_type="EditControl",  # Prioritize edit fields
-                    timeout=timeout
-                )
-            except TimeoutError:
-                # Element not found - will use blind typing fallback
-                logger.warning(f"⚠️ Element '{element_name}' not found, falling back to blind typing")
-                use_blind_typing = True
-            
-            if element and not use_blind_typing:
-                # === STRATEGY 1: Type into specific element ===
-                element.SetFocus()
-                time.sleep(0.1)
+    def _do_type():
+        try:
+            with auto.UIAutomationInitializerInThread():
+                window, error = _get_window_control(window_alias)
+                if error:
+                    return f"❌ {error}"
                 
-                # Try SetValue pattern first (faster)
+                element = None
+                use_blind_typing = False
+                
                 try:
-                    if hasattr(element, 'GetValuePattern') and element.GetValuePattern():
-                        pattern = element.GetValuePattern()
-                        if clear_first:
-                            pattern.SetValue("")
-                        pattern.SetValue(text)
-                        logger.debug(f"Used SetValue for '{element_name}'")
-                        return f"✅ Typed '{text[:30]}{'...' if len(text) > 30 else ''}' into '{element_name}'"
-                except Exception:
-                    pass
+                    element = _wait_for_element(
+                        window, element_name, 
+                        control_type="EditControl",
+                        timeout=timeout
+                    )
+                except TimeoutError:
+                    logger.warning(f"⚠️ Element '{element_name}' not found, falling back to blind typing")
+                    use_blind_typing = True
                 
-                # Fallback: Element SendKeys
-                if clear_first:
-                    element.SendKeys("{Ctrl}a", waitTime=0.05)
-                element.SendKeys(text, waitTime=0.01)
+                if element and not use_blind_typing:
+                    element.SetFocus()
+                    time.sleep(0.1)
+                    
+                    try:
+                        if hasattr(element, 'GetValuePattern') and element.GetValuePattern():
+                            pattern = element.GetValuePattern()
+                            if clear_first:
+                                pattern.SetValue("")
+                            pattern.SetValue(text)
+                            logger.debug(f"Used SetValue for '{element_name}'")
+                            return f"✅ Typed '{text[:30]}...' into '{element_name}'"
+                    except Exception:
+                        pass
+                    
+                    if clear_first:
+                        element.SendKeys("{Ctrl}a", waitTime=0.05)
+                    element.SendKeys(text, waitTime=0.01)
+                    
+                    return f"✅ Typed '{text[:30]}...' into '{element_name}'"
                 
-                logger.debug(f"Used SendKeys for '{element_name}'")
-                return f"✅ Typed '{text[:30]}{'...' if len(text) > 30 else ''}' into '{element_name}'"
+                else:
+                    logger.info(f"🔤 Blind typing into '{window_alias}'")
+                    window.SetFocus()
+                    time.sleep(0.2)
+                    
+                    if clear_first:
+                        auto.SendKeys("{Ctrl}a", waitTime=0.05)
+                    
+                    auto.SendKeys(text, waitTime=0.01)
+                    return f"✅ Typed '{text[:30]}...' (blind mode)"
             
-            else:
-                # === STRATEGY 2: Blind Typing Fallback ===
-                # Focus the main window and type directly
-                logger.info(f"🔤 Blind typing into '{window_alias}' (element '{element_name}' not found)")
-                
-                window.SetFocus()
-                time.sleep(0.2)  # Give window time to activate
-                
-                # Clear existing content if requested
-                if clear_first:
-                    auto.SendKeys("{Ctrl}a", waitTime=0.05)
-                
-                # Type the text using global keyboard
-                auto.SendKeys(text, waitTime=0.01)
-                
-                return f"✅ Typed '{text[:30]}{'...' if len(text) > 30 else ''}' (blind mode, window: '{window_alias}')"
-        
-    except Exception as e:
-        logger.error(f"Type failed: {e}")
-        return f"❌ Type failed: {e}"
+        except Exception as e:
+            logger.error(f"Type failed: {e}")
+            return f"❌ Type failed: {e}"
+
+    return await asyncio.to_thread(_do_type)
 
 
 # =============================================================================
 # Action Function: read_element_text
 # =============================================================================
 
-def read_element_text(
+async def read_element_text(
     window_alias: str,
     element_name: str,
     timeout: float = 5.0,
 ) -> str:
     """
-    Read text/value from a UI element.
-    
-    ONE ACTION: Find element and return its text content.
-    
-    Args:
-        window_alias: Window alias from registry.
-        element_name: Name/text of element to read.
-        timeout: Seconds to wait for element.
-        
-    Returns:
-        Element text/value or error message.
-        
-    Raises:
-        RuntimeError: If element not found after timeout.
+    Read text/value from a UI element (Async).
     """
     if not _HAS_UIA:
         return "❌ uiautomation library not installed"
     
-    try:
-        # 🌊 RIPPLE CHECK: Initialize COM for this thread BEFORE any UIA operations
-        with auto.UIAutomationInitializerInThread():
-            # Get window control (MUST be inside COM context)
-            window, error = _get_window_control(window_alias)
-            if error:
-                return f"❌ {error}"
-            
-            # Find element with patience
-            element = _wait_for_element(window, element_name, timeout=timeout)
-            
-            # Try multiple patterns to get text
-            text = None
-            
-            # Try ValuePattern (for edit controls)
-            try:
-                pattern = element.GetValuePattern()
-                if pattern:
-                    text = pattern.Value
-            except Exception:
-                pass
-            
-            # Try TextPattern (for document controls)
-            if not text:
+    def _do_read():
+        try:
+            with auto.UIAutomationInitializerInThread():
+                window, error = _get_window_control(window_alias)
+                if error:
+                    return f"❌ {error}"
+                
+                element = _wait_for_element(window, element_name, timeout=timeout)
+                
+                text = None
                 try:
-                    pattern = element.GetTextPattern()
+                    pattern = element.GetValuePattern()
                     if pattern:
-                        text = pattern.DocumentRange.GetText(-1)
+                        text = pattern.Value
                 except Exception:
                     pass
+                
+                if not text:
+                    try:
+                        pattern = element.GetTextPattern()
+                        if pattern:
+                            text = pattern.DocumentRange.GetText(-1)
+                    except Exception:
+                        pass
+                
+                if not text:
+                    text = element.Name
+                
+                if text:
+                    return f"'{element_name}': {text}"
+                else:
+                    return f"Element '{element_name}' has no readable text"
             
-            # Fallback to Name
-            if not text:
-                text = element.Name
-            
-            if text:
-                return f"'{element_name}': {text}"
-            else:
-                return f"Element '{element_name}' has no readable text"
-        
-    except TimeoutError as e:
-        error_msg = f"Element '{element_name}' not found in '{window_alias}'"
-        logger.error(error_msg)
-        return f"❌ {error_msg}"
-    except Exception as e:
-        logger.error(f"Read failed: {e}")
-        return f"❌ Read failed: {e}"
+        except TimeoutError as e:
+            return f"❌ {e}"
+        except Exception as e:
+            return f"❌ Read failed: {e}"
+
+    return await asyncio.to_thread(_do_read)
 
 
 # =============================================================================
 # Convenience: List Available Element Types
 # =============================================================================
 
-def get_element_by_type(
+async def get_element_by_type(
     window_alias: str,
     control_type: str,
     max_results: int = 10,
 ) -> str:
     """
-    List elements of a specific type in a window.
-    
-    Args:
-        window_alias: Window alias from registry.
-        control_type: Type to filter (e.g., "Button", "Edit").
-        max_results: Maximum results to return.
-        
-    Returns:
-        Formatted list of matching elements.
+    List elements of a specific type in a window (Async).
     """
     if not _HAS_UIA:
         return "❌ uiautomation library not installed"
     
-    # Normalize type name
     if not control_type.endswith("Control"):
         control_type = f"{control_type}Control"
     
-    try:
-        # 🌊 RIPPLE CHECK: Initialize COM for this thread BEFORE any UIA operations
-        with auto.UIAutomationInitializerInThread():
-            # Get window control (MUST be inside COM context)
-            window, error = _get_window_control(window_alias)
-            if error:
-                return f"❌ {error}"
-            
-            elements = []
-            
-            for ctrl, depth in auto.WalkControl(window, maxDepth=5):
-                if len(elements) >= max_results:
-                    break
+    def _do_search():
+        try:
+            with auto.UIAutomationInitializerInThread():
+                window, error = _get_window_control(window_alias)
+                if error:
+                    return f"❌ {error}"
                 
-                if ctrl.ControlTypeName == control_type and ctrl.Name:
-                    elements.append(f'  - "{ctrl.Name}"')
-            
-            if not elements:
-                return f"No {control_type} elements found in '{window_alias}'"
-            
-            return f"{control_type} in '{window_alias}':\n" + "\n".join(elements)
-        
-    except Exception as e:
-        logger.error(f"Search failed: {e}")
-        return f"❌ Search failed: {e}"
+                elements = []
+                for ctrl, depth in auto.WalkControl(window, maxDepth=5):
+                    if len(elements) >= max_results:
+                        break
+                    
+                    if ctrl.ControlTypeName == control_type and ctrl.Name:
+                        elements.append(f'  - "{ctrl.Name}"')
+                
+                if not elements:
+                    return f"No {control_type} elements found in '{window_alias}'"
+                
+                return f"{control_type} in '{window_alias}':\n" + "\n".join(elements)
+        except Exception as e:
+            return f"❌ Search failed: {e}"
+
+    return await asyncio.to_thread(_do_search)
 
 
 __all__ = [

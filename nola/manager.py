@@ -150,8 +150,9 @@ class NOLAManager:
         )
         self._thread.start()
         
-        print(f"🎙️ NOLA Voice System Started")
-        print(f"💤 State: {self.state} | Say '{self._wake_words[0]}' to wake")
+        # print(f"🎙️ NOLA Voice System Started")
+        # print(f"💤 State: {self.state} | Say '{self._wake_words[0]}' to wake")
+        logger.debug(f"NOLA Started | State: {self.state} | Wake words: {self._wake_words}")
         logger.info("NOLAManager started")
         return True
     

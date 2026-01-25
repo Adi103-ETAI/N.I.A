@@ -439,6 +439,21 @@ class Settings(BaseSettings):
         ]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def GHOST_STATE_FILE(self) -> Path:
+        """Path to ghost mode state file."""
+        return self.DATA_DIR / "ghost_state.json"
+
+    @property
+    def WINDOW_REGISTRY_FILE(self) -> Path:
+        """Path to window registry file."""
+        return self.DATA_DIR / "window_registry.json"
+
+    @property
+    def SUPERVISOR_PROMPT_FILE(self) -> Path:
+        """Path to supervisor system prompt."""
+        return self.BASE_DIR / "nia/config/supervisor_prompt.txt"
+
 
 # =============================================================================
 # Global Settings Instance (with fallback)

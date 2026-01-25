@@ -20,12 +20,16 @@ Usage:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import threading
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.logger import setup_logger
+from core.config import settings
 
 logger = setup_logger("TARA.Tools.Registry")
+REGISTRY_FILE = settings.WINDOW_REGISTRY_FILE
 
 
 # =============================================================================
@@ -75,7 +79,14 @@ class WindowRegistry:
         self._windows: Dict[str, WindowInfo] = {}
         self._counters: Dict[str, int] = {}
         self._lock = threading.Lock()
-        logger.debug("WindowRegistry initialized")
+        
+        # Ensure data directory exists
+        REGISTRY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Auto-load on startup
+        self.load_registry()
+        
+        logger.debug("WindowRegistry initialized (Persistence: Enabled)")
     
     def register(
         self,
@@ -116,6 +127,9 @@ class WindowRegistry:
             )
             self._windows[alias] = info
             
+            # Auto-save
+            self.save_registry()
+            
             logger.info(f"📝 Registered: {alias} (HWND={hwnd}, PID={pid})")
             return alias
     
@@ -133,6 +147,7 @@ class WindowRegistry:
         with self._lock:
             if alias in self._windows:
                 del self._windows[alias]
+                self.save_registry()
                 logger.info(f"🗑️ Deregistered: {alias}")
                 return True
             logger.warning(f"Alias '{alias}' not found for deregistration")
@@ -247,6 +262,62 @@ class WindowRegistry:
     def __contains__(self, alias: str) -> bool:
         with self._lock:
             return alias in self._windows
+
+    # =========================================================================
+    # Persistence (Ripple Fix)
+    # =========================================================================
+
+    def save_registry(self) -> bool:
+        """Save registry state to JSON file."""
+        try:
+            data = {alias: info.to_dict() for alias, info in self._windows.items()}
+            with open(REGISTRY_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save registry: {e}")
+            return False
+
+    def load_registry(self) -> bool:
+        """Load registry state from JSON file."""
+        if not REGISTRY_FILE.exists():
+            return False
+        
+        try:
+            with open(REGISTRY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            with self._lock:
+                self._windows.clear()
+                for alias, item in data.items():
+                    self._windows[alias] = WindowInfo(
+                        alias=item["alias"],
+                        app_name=item["app"],
+                        hwnd=item.get("hwnd"),
+                        pid=item.get("pid"),
+                        title=item.get("title", "")
+                    )
+                self._restore_counters()
+            
+            # logger.debug(f"Loaded {len(self._windows)} windows from registry")
+            return True
+            
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Failed to load registry (starting fresh): {e}")
+            return False
+
+    def _restore_counters(self) -> None:
+        """Restore auto-increment counters based on loaded aliases."""
+        self._counters.clear()
+        for alias in self._windows:
+            if "_" in alias:
+                try:
+                    name, num = alias.rsplit("_", 1)
+                    count = int(num)
+                    if count > self._counters.get(name, 0):
+                        self._counters[name] = count
+                except ValueError:
+                    pass
 
 
 # =============================================================================

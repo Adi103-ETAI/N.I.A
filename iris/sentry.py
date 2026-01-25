@@ -101,7 +101,7 @@ SCAN_INTERVAL = _SENTRY_CONFIG.get("SCAN_INTERVAL", 8)
 CAPTURE_REGION = None
 
 # Debug mode flag
-DEBUG_MODE = False
+# DEBUG_MODE = False
 
 
 # =============================================================================
@@ -214,9 +214,11 @@ async def scan_screen_for_text() -> str:
                 text = await _run_ocr(software_bitmap)
                 
                 # DEBUG: Print what OCR reads
-                if DEBUG_MODE and text.strip():
+                # if DEBUG_MODE and text.strip():
+                if text.strip():
                     preview = text.replace('\n', ' ')[:80]
-                    print(f"[DEBUG OCR] Read: {preview}...")
+                    # print(f"[DEBUG OCR] Read: {preview}...")
+                    logger.debug(f"[OCR READ] {preview}...")
                 
                 return text
             

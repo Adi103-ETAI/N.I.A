@@ -7,7 +7,7 @@ v2.5.2 "Velocity" - Key Features:
     - SafeLLM Integration: All LLM calls are wrapped with circuit breaker for
       automatic retry and fallback on 429/503 errors.
     - Unified Async Bridge: Tool executor uses `ainvoke()` polymorphically,
-      handling both sync and async tools via ThreadPoolExecutor.
+      Native Async: Executes tools in parallel via asyncio.gather.
 
 Data Flow:
     Supervisor -> TARA Reasoner -> SafeLLM -> ModelManager -> Active Provider
@@ -22,7 +22,7 @@ Architecture:
            │
            ▼
     ┌─────────────────┐
-    │  tool_executor  │ ← Unified Async Bridge (sync-to-async safe)
+    │  tool_executor  │ ← Parallel Native Async
     └────────┬────────┘
              │
              ▼
@@ -33,7 +33,6 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import re
 from typing import Any, Dict, List, Literal, Sequence, TypedDict
@@ -391,13 +390,12 @@ def reasoner(state: TaraState) -> TaraStateUpdate:
 # Node 2: Tool Executor (Async Bridge Pattern)
 # =============================================================================
 
-async def _async_tool_executor(state: TaraState) -> TaraStateUpdate:
+async def tool_executor(state: TaraState) -> TaraStateUpdate:
     """
-    Internal async worker for tool execution.
+    Async Tool Executor Node (Parallel Native).
     
-    Uses LangChain's polymorphic `ainvoke()` which automatically handles:
-        - Async tools: Awaits the coroutine directly
-        - Sync tools: Wraps in thread executor for non-blocking I/O
+    Executes multiple tool calls in parallel using asyncio.gather.
+    Leverages LangChain's ainvoke() which handles Sync/Async dispatch internally.
     
     Args:
         state: Current TaraState with tool calls pending.
@@ -423,62 +421,45 @@ async def _async_tool_executor(state: TaraState) -> TaraStateUpdate:
         logger.warning("[TOOL_EXECUTOR] No tool_calls in last message")
         return {"messages": [], "tool_calls_pending": False}
     
-    logger.info(f"[TOOL_EXECUTOR] 🚀 Executing {len(tool_calls)} tool(s) via unified async")
+    logger.info(f"[TOOL_EXECUTOR] 🚀 Executing {len(tool_calls)} tool(s) in parallel")
     
-    # Execute each tool call with UNIFIED AWAIT
-    tool_messages: List[ToolMessage] = []
+    # Prepare tasks for parallel execution
+    tasks = []
     
-    for tool_call in tool_calls:
-        tool_name = tool_call.get("name", "")
-        tool_args = tool_call.get("args", {})
-        tool_id = tool_call.get("id", f"call_{tool_name}")
+    async def _exec_single(t_call):
+        t_name = t_call.get("name", "")
+        t_args = t_call.get("args", {})
+        t_id = t_call.get("id", f"call_{t_name}")
         
-        logger.info(f"[TOOL_EXECUTOR] → {tool_name}({tool_args})")
+        logger.info(f"[TOOL_EXECUTOR] → {t_name}({t_args})")
         
-        # Lookup tool
-        tool = tools_map.get(tool_name)
+        tool = tools_map.get(t_name)
         if tool is None:
-            error_msg = f"❌ Tool not found: {tool_name}"
+            error_msg = f"❌ Tool not found: {t_name}"
             logger.error(error_msg)
-            tool_messages.append(ToolMessage(
-                content=error_msg,
-                tool_call_id=tool_id,
-                name=tool_name,
-            ))
-            continue
+            return ToolMessage(content=error_msg, tool_call_id=t_id, name=t_name)
         
-        # Execute with try/except for robustness
         try:
-            # ═══════════════════════════════════════════════════════════════
-            # 
-            # LangChain's ainvoke() is polymorphic:
-            # - For async tools: awaits the coroutine
-            # - For sync tools: runs in thread pool (non-blocking)
-            # 
-            # This single line handles ALL tool types correctly.
-            # ═══════════════════════════════════════════════════════════════
-            result = await tool.ainvoke(tool_args)
+            # Polymorphic Dispatch (Async or ThreadPool for Sync)
+            # LangChain's ainvoke handles this automatically
+            result = await tool.ainvoke(t_args)
             
-            # Ensure result is string
-            result_str = str(result) if result is not None else f"✅ {tool_name} completed"
+            result_str = str(result) if result is not None else f"✅ {t_name} completed"
+            logger.info(f"[TOOL_EXECUTOR] ✅ {t_name}: {result_str[:80]}...")
             
-            logger.info(f"[TOOL_EXECUTOR] ✅ {tool_name}: {result_str[:80]}...")
-            
-            tool_messages.append(ToolMessage(
-                content=result_str,
-                tool_call_id=tool_id,
-                name=tool_name,
-            ))
+            return ToolMessage(content=result_str, tool_call_id=t_id, name=t_name)
             
         except Exception as e:
-            # Per-tool error handling (don't crash the loop)
-            error_msg = f"❌ {tool_name} failed: {e}"
+            error_msg = f"❌ {t_name} failed: {e}"
             logger.error(f"[TOOL_EXECUTOR] {error_msg}")
-            tool_messages.append(ToolMessage(
-                content=error_msg,
-                tool_call_id=tool_id,
-                name=tool_name,
-            ))
+            return ToolMessage(content=error_msg, tool_call_id=t_id, name=t_name)
+
+    # Launch all tasks
+    for tool_call in tool_calls:
+        tasks.append(_exec_single(tool_call))
+    
+    # Wait for all to complete
+    tool_messages = await asyncio.gather(*tasks)
     
     logger.info(f"[TOOL_EXECUTOR] ✓ Completed {len(tool_messages)} tool execution(s)")
     
@@ -490,45 +471,6 @@ async def _async_tool_executor(state: TaraState) -> TaraStateUpdate:
         "tool_calls_pending": False,
         **context_updates,
     }
-
-
-def tool_executor(state: TaraState) -> TaraStateUpdate:
-    """
-    Sync-to-async bridge for LangGraph tool execution.
-    
-    LangGraph's parent NIA graph runs synchronously, but TARA's browser tools
-    are async (Playwright). This wrapper safely bridges the two execution contexts.
-    
-    Threading Strategy:
-        1. If NO event loop is running: Use `asyncio.run()` directly.
-        2. If loop IS running (nested): Use ThreadPoolExecutor to spawn
-           a fresh event loop in a separate thread, avoiding "nested loop" errors.
-    
-    This pattern is essential for integrating async Playwright operations
-    with LangGraph's synchronous node execution model.
-    
-    Args:
-        state: Current TaraState with tool calls pending.
-        
-    Returns:
-        TaraStateUpdate with tool results and updated context.
-    """
-    import concurrent.futures
-    
-    try:
-        # Check if we're already in an event loop (Safety Check)
-        loop = asyncio.get_running_loop()
-        # We ARE in a running loop - use thread pool to avoid nesting
-        logger.debug("Running async tools in thread pool (loop already running)")
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, _async_tool_executor(state))
-            return future.result()
-    except RuntimeError:
-        # No loop running - this is the expected path for N.I.A.
-        pass
-    
-    # The Standard Bridge: Run async code synchronously
-    return asyncio.run(_async_tool_executor(state))
 
 
 def _extract_context_from_results(tool_messages: Sequence[BaseMessage]) -> Dict[str, Any]:

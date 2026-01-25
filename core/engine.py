@@ -25,15 +25,21 @@ Version: 2.5.2
 """
 from __future__ import annotations
 
+import warnings
+warnings.filterwarnings("ignore", message=".*timeout is not default parameter.*")
+
 import json
 import os
+import time
+import sys
 import subprocess
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Tuple
 
 # Centralized Logging (lightweight - loads quickly)
 from core.logger import setup_logger
+import asyncio
+import aioconsole
 
 # =============================================================================
 # TYPE_CHECKING Block: IDE-only imports (no runtime cost)
@@ -42,18 +48,15 @@ if TYPE_CHECKING:
     # 🌊 RIPPLE SAFE: These imports are for type hints only, not loaded at runtime
     from core.memory import MemoryManager
 
+    # 🌊 LAZY LOAD: core.logger functions (for runtime switching)
+    from core.logger import set_console_level, logging
+
 # =============================================================================
 # Lazy Import Markers (actual imports happen in _init_nia)
 # =============================================================================
 # The following were previously top-level imports that blocked startup:
 # - from core.memory import get_memory_manager  (ChromaDB, SQLite, NetworkX)
 # Now deferred to: _init_nia()
-
-# Import banner (lightweight - just a string constant)
-try:
-    from interface.banner import MINI_BANNER
-except ImportError:
-    MINI_BANNER = "N.I.A. - Neural Intelligence Assistant"
 
 # Import Terminal UI (lazy-ish - only UI components)
 try:
@@ -166,6 +169,38 @@ class NIAAssistant:
         
         # Plugin Hot-Reload Watcher (v3.0)
         self._plugin_observer: Optional[object] = None
+
+        # Ghost Mode Cache (TTL: 1.0s) to prevent blocking I/O
+        self._ghost_cache: Tuple[bool, int] = (False, 0)
+        self._ghost_last_check: float = 0.0
+
+        self.system_commands = {}
+        self._init_command_registry()
+
+    def _init_command_registry(self) -> None:
+        """Initialize the strict command dispatch registry."""
+        self.system_commands = {
+            "reload": self._cmd_reload,
+            "debug": self._cmd_toggle_debug,
+            "mic": self._cmd_mic_control,
+            "ghost": self._cmd_ghost_control,
+            "exit": self._cmd_shutdown,
+            "quit": self._cmd_shutdown,
+            # Standby Triggers (Soft Stop)
+            "bye": self._cmd_standby,
+            "goodbye": self._cmd_standby,
+            "goodnight": self._cmd_standby,
+            "standby": self._cmd_standby,
+            "sleep": self._cmd_standby,
+            "rest": self._cmd_standby,
+            
+            "help": self._handle_help,     # Keeping existing helper
+            "status": self._handle_status, # Keeping existing helper
+            "clear": self._handle_clear,   # Keeping existing helper
+            "cls": self._handle_clear,
+            "history": self._handle_history,
+            "reset": self._handle_reset,
+        }
     
     def _init_nia(self) -> bool:
         """Initialize the NIA brain (LangGraph reasoning engine).
@@ -181,23 +216,22 @@ class NIAAssistant:
             t0 = time.perf_counter()
             
             # 🌊 LAZY LOAD: NIA brain (LangGraph, LangChain, NVIDIA API)
-            from nia import process_input
+            from nia import aprocess_input
             
             t1 = time.perf_counter()
             self.logger.debug(f"Step 2: NIA import complete ({t1-t0:.2f}s)")
             
-            self._nia_process = process_input
+            self._nia_process = aprocess_input
             
             t2 = time.perf_counter()
             self.logger.debug(f"Step 3: Process function assigned ({t2-t1:.2f}s)")
             
-            self.logger.info("🧠 NIA brain initialized (total: %.2fs)", t2-t0)
+            # self.logger.info("🧠 NIA brain initialized (total: %.2fs)", t2-t0)
             
             # 🌊 LAZY LOAD: 4-Layer Memory System (ChromaDB, SQLite, NetworkX)
             try:
                 from core.memory import get_memory_manager
                 self.memory = get_memory_manager()
-                self.logger.info("💾 Memory connected: %s", self.memory.get_stats())
                 
                 # Housekeeping: vacuum SQLite databases on startup
                 if hasattr(self.memory, '_vacuum_memory_db'):
@@ -263,12 +297,20 @@ class NIAAssistant:
     def _check_ghost_state(self) -> Tuple[bool, int]:
         """Check if ghost mode is active by reading state file.
         
+        Optimized with TTL Cache (1.0s) to prevent blocking I/O in main loop.
+        
         Returns:
             Tuple of (is_active, layer). Defaults to (False, 0) on any error.
         """
+        # ⚡ Fast Path: Return cached result if within TTL
+        if time.time() - self._ghost_last_check < 1.0:
+            return self._ghost_cache
+            
         try:
-            state_file = "data/ghost_state.json"
+            from core.config import settings
+            state_file = settings.GHOST_STATE_FILE
             if not os.path.exists(state_file):
+                self._update_ghost_cache((False, 0))
                 return (False, 0)
             
             with open(state_file, 'r', encoding='utf-8') as f:
@@ -276,6 +318,9 @@ class NIAAssistant:
             
             active = state.get("active", False)
             layer = state.get("layer", 0)
+            
+            # Update cache
+            self._update_ghost_cache((active, layer))
             return (active, layer)
             
         except json.JSONDecodeError as e:
@@ -287,6 +332,11 @@ class NIAAssistant:
         except (KeyError, TypeError) as e:
             self.logger.warning(f"Invalid ghost state format: {e}")
             return (False, 0)
+
+    def _update_ghost_cache(self, state: Tuple[bool, int]) -> None:
+        """Helper to update ghost cache and timestamp."""
+        self._ghost_cache = state
+        self._ghost_last_check = time.time()
     
     def _init_sentry(self, headless: bool = False) -> None:
         """Initialize IRIS Sentry for Security & Communications monitoring.
@@ -320,22 +370,17 @@ class NIAAssistant:
         except ImportError:
             self.logger.debug("IRIS Sentry not available")
     
-    def start(self) -> bool:
-        """Start the assistant and initialize all components.
+    async def start(self) -> bool:
+        """Start the assistant and initialize all components."""
         
-        Initializes NIA brain, IRIS vision (optional), and NOLA voice (if enabled).
-        Must be called before run() or process().
+        # 🌊 RIPPLE FIX: Check if we are recovering from a reload
+        if os.environ.get("NIA_RELOADED"):
+             self.logger.info("🔄 NIA Reloaded successfully")
+             # Clean env
+             os.environ.pop("NIA_RELOADED", None)
         
-        Returns:
-            True if core components initialized successfully.
-            
-        Example:
-            >>> assistant = NIAAssistant()
-            >>> if assistant.start():
-            ...     response = assistant.process("Hello")
-        """
-        print(MINI_BANNER)
-        self.logger.info("Initializing N.I.A. Core Engine...")
+
+        self.logger.debug("Initializing N.I.A. Core Engine...")
         
         # Initialize NIA
         if not self._init_nia():
@@ -355,14 +400,14 @@ class NIAAssistant:
         # Sentry now manual-start only (use 'sentry on')
         self.logger.debug("Sentry in standby mode (use 'sentry on' to activate)")
         
-        # Log mode info
+        # Log mode info (Silent Boot: DEBUG only)
         if self.voice_mode:
             if self.wake_word_enabled:
-                self.logger.info(f"Voice mode active | Wake words: {', '.join(self.wake_words)}")
+                self.logger.debug(f"Voice mode active | Wake words: {', '.join(self.wake_words)}")
             else:
-                self.logger.info("Voice mode active (always listening)")
+                self.logger.debug("Voice mode active (always listening)")
         else:
-            self.logger.info("Text mode active")
+            self.logger.debug("Text mode active")
         
         print("\nType 'help' for commands, 'exit' to quit.\n")
         
@@ -399,7 +444,7 @@ class NIAAssistant:
         
         self.logger.info("👋 NIA shutdown complete")
     
-    def process(self, text: str) -> str:
+    async def process(self, text: str) -> str:
         """Process user input through the NIA brain.
         
         Handles wake word detection, fast-path responses (time/date),
@@ -434,12 +479,6 @@ class NIAAssistant:
                     return "Listening..."
                 break
         
-        # Fast path (time/date)
-        fast_response = self._handle_fast_path(text)
-        if fast_response:
-            print(f"⚡ Reflex: {fast_response}")
-            return fast_response
-        
         if not self._nia_process:
             return "❌ NIA brain not initialized."
         
@@ -452,7 +491,8 @@ class NIAAssistant:
         memory_context = ""
         if self.memory:
             try:
-                ctx = self.memory.get_full_context(text)
+                # 🌊 ASYNC MEMORY CALL
+                ctx = await self.memory.get_full_context(text)
                 if ctx.get("relevant_episodes") or ctx.get("relevant_skills") or ctx.get("preferences"):
                     memory_context = self._format_memory_context(ctx)
                     self.logger.debug("Memory context: %d episodes, %d skills", 
@@ -469,13 +509,15 @@ class NIAAssistant:
             else:
                 augmented_input = text
             
-            response = self._nia_process(augmented_input, thread_id=self.thread_id)
+            # Run Async NIA process directly (Native)
+            response = await self._nia_process(augmented_input, thread_id=self.thread_id)
             
             # Store Episodes (Layer 1) - store original text, not augmented
             if self.memory:
                 try:
-                    self.memory.store_episode(text, role="user")
-                    self.memory.store_episode(response, role="assistant")
+                    # 🌊 ASYNC MEMORY CALLS
+                    await self.memory.store_episode(text, role="user")
+                    await self.memory.store_episode(response, role="assistant")
                 except Exception as e:
                     self.logger.debug(f"Memory storage failed: {e}")
             
@@ -513,46 +555,7 @@ class NIAAssistant:
         
         return "\n".join(parts)
     
-    def _handle_fast_path(self, text: str) -> Optional[str]:
-        """Handle simple utility queries locally without LLM.
-        
-        Provides instant responses for time and date queries,
-        bypassing the AI for zero-latency user experience.
-        
-        Args:
-            text: User input to check for fast-path patterns.
-            
-        Returns:
-            Response string if fast-path matched, None otherwise.
-        """
-        query = text.lower().strip()
-        now = datetime.now()
-        
-        # TIME queries
-        if any(kw in query for kw in ["time", "clock", "hour"]):
-            if any(q in query for q in ["what", "tell", "current", "now"]):
-                return f"The current time is {now.strftime('%I:%M %p')}."
-        
-        # DATE queries
-        if any(kw in query for kw in ["date", "day", "today"]):
-            if any(q in query for q in ["what", "tell", "current", "today"]):
-                suffix = self._get_day_suffix(now.day)
-                return f"Today is {now.strftime(f'%A, %B {now.day}{suffix}, %Y')}."
-        
-        return None
     
-    def _get_day_suffix(self, day: int) -> str:
-        """Get ordinal suffix for a day number (st, nd, rd, th).
-        
-        Args:
-            day: Day of month (1-31).
-            
-        Returns:
-            Ordinal suffix string.
-        """
-        if 11 <= day <= 13:
-            return "th"
-        return {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
     
     def speak(self, text: str) -> None:
         """Speak text through NOLA voice system.
@@ -581,76 +584,93 @@ class NIAAssistant:
             except RuntimeError as exc:
                 self.logger.error(f"TTS runtime error: {exc}", exc_info=True)
     
-    def run(self) -> None:
-        """Main application loop (synchronous blocking).
+    async def run(self) -> None:
+        """Main application loop (Native Async).
         
-        Starts the assistant, displays the terminal UI, and processes
-        user input in a loop until 'exit' or Ctrl+C.
-        
-        This is the primary entry point for running NIA interactively.
-        
-        Example:
-            >>> assistant = NIAAssistant(voice_mode=True)
-            >>> assistant.run()  # Blocks until exit
+        Starts the assistant and processes user input using aioconsole
+        for non-blocking I/O.
         """
-        if not self.start():
+        print("\033[0m", end="", flush=True) # Reset terminal colors
+        
+        # Show Splash Screen (High-Quality ASCII)
+        import os
+
+        from interface.banner import BANNER
+        print("\n" + BANNER + "\n")
+        
+        if not await self.start():
             return
         
-        # Initialize Terminal UI
+        # We no longer use TerminalUI's context manager strictly if we want async input
+        ui_print = print
         if TerminalUI:
-            ui = TerminalUI()
-        else:
-            # Fallback
-            class FallbackUI:
-                def context(self):
-                    import contextlib
-                    return contextlib.nullcontext()
-                def get_input(self, prompt: str) -> str:
-                    return input(prompt)
-                def print(self, *args, **kwargs):
-                    print(*args, **kwargs)
-            ui = FallbackUI()
-        
+            try:
+                # Basic instantiation if needed for other things, but input is replaced
+                _ui = TerminalUI()
+                ui_print = _ui.print
+            except:
+                pass
+
+        print("\nType 'help' for commands, 'exit' to quit.\n")
+
         # Main loop
-        with ui.context():
-            while self._running:
+        while self._running:
+            try:
+                # Ghost Protocol Watchdog - Auto-engage stealth sentry on Layer 3
+                is_ghost, layer = self._check_ghost_state()
+                if is_ghost and layer >= 3 and self.sentry_thread is None:
+                    self.logger.info("Ghost Layer 3: Auto-engaging Sentry (Stealth Mode)")
+                    self._init_sentry(headless=True)
+                
+                # Async Non-Blocking Input (Green Prompt)
                 try:
-                    # Ghost Protocol Watchdog - Auto-engage stealth sentry on Layer 3
-                    is_ghost, layer = self._check_ghost_state()
-                    if is_ghost and layer >= 3 and self.sentry_thread is None:
-                        self.logger.info("Ghost Layer 3: Auto-engaging Sentry (Stealth Mode)")
-                        self._init_sentry(headless=True)
-                    
-                    user_input = ui.get_input("You: ")
-                    
-                    if not user_input or not user_input.strip():
-                        continue
-                    
-                    user_input = user_input.strip()
-                    
-                    # Handle commands locally
-                    if self._handle_command(user_input):
-                        continue
-                    
-                    # Process through NIA brain
-                    self.logger.debug(f"Processing: {user_input[:50]}...")
-                    response = self.process(user_input)
-                    ui.print(f"\n💬 NIA: {response}\n")
-                    self.speak(response)
-                    
-                except KeyboardInterrupt:
-                    ui.print("\n\n👋 Goodbye!")
-                    break
+                    # \033[1;92m = Bold Bright Green, \033[0m = Reset
+                    user_input = await aioconsole.ainput("\033[1;92mYou\033[0m: ")
                 except EOFError:
+                    break
+                
+                if not user_input or not user_input.strip():
                     continue
+                
+                user_input = user_input.strip()
+                
+                # Handle commands locally
+                if self._handle_command(user_input):
+                    continue
+                
+        
+                # Process through NIA brain (Async)
+                self.logger.debug(f"Processing: {user_input[:50]}...")
+                
+                response = await self.process(user_input)
+                
+                # UI Output
+                if ui_print:
+                    ui_print(f"\n💬 NIA: {response}\n")
+                else:
+                    print(f"\n💬 NIA: {response}\n")
+                
+                # Speak Response (Blocking I/O wrapped in thread)
+                # Note: self.speak calls NOLA which might block, so we offload it
+                await asyncio.to_thread(self.speak, response)
+                
+                # Heartbeat Yield
+                await asyncio.sleep(0.01)
+                
+            except asyncio.CancelledError:
+                print("\n👋 Goodbye!")
+                break
+            except KeyboardInterrupt:
+                print("\n👋 Interrupted by user")
+                break
+            except Exception as e:
+                self.logger.error(f"Loop error: {e}", exc_info=True)
+                await asyncio.sleep(1.0)
         
         self.stop()
     
     def _handle_command(self, text: str) -> bool:
-        """Handle built-in commands using vocabulary-based reflex matching.
-        
-        Reflex commands bypass the NIA brain for zero-latency response.
-        Supports fuzzy keyword matching for natural variations.
+        """Handle built-in commands using Dispatcher Pattern.
         
         Args:
             text: User input to check for commands.
@@ -659,24 +679,90 @@ class NIAAssistant:
             True if command was handled, False to continue to NIA brain.
         """
         cmd = text.lower().strip()
+        verb = cmd.split()[0] if cmd else ""
         
-        # =================================================================
-        # FUZZY KEYWORD MATCHING (catches natural variations)
-        # =================================================================
+        # 1. Strict Dispatch (Administrator Override)
+        if verb in self.system_commands:
+            return self.system_commands[verb](cmd)
+            
+        # 2. Reflex Layer (Fuzzy Hardware Control)
+        if self._handle_reflex(cmd):
+            return True
+            
+        return False
         
-        # 🎤 MIC OFF: "turn off mic", "disable microphone", "kill the mic"
-        # Load mic control words from config
-        mic_cfg = _COMMANDS.get("mic_control", {})
-        mic_words = mic_cfg.get("mic_words", ["mic", "microphone"])
-        off_words = mic_cfg.get("off_words", ["off", "mute", "stop"])
-        on_words = mic_cfg.get("on_words", ["on", "unmute", "start"])
+    # =========================================================================
+    # COMMAND HANDLERS (Priority 0)
+    # =========================================================================
+
+    def _cmd_toggle_debug(self, text: str) -> bool:
+        """Handle debug on/off."""
+        if "on" in text:
+            from core.logger import set_console_level, logging
+            set_console_level(logging.DEBUG)
+            self.debug = True
+            print("🐞 Debug Mode: ON")
+        elif "off" in text:
+            from core.logger import set_console_level, logging
+            set_console_level(logging.WARNING)
+            self.debug = False
+            print("🐞 Debug Mode: OFF")
+        else:
+            print(f"Debug is {'ON' if self.debug else 'OFF'}")
+        return True
+
+    def _cmd_reload(self, text: str) -> bool:
+        """Handle system reload (restart script)."""
+        print("[SYSTEM] 🔄 Reloading...")
+        self.stop()
         
-        has_mic = any(w in cmd for w in mic_words)
-        has_off = any(w in cmd for w in off_words)
-        has_on = any(w in cmd for w in on_words)
+        # Mark reload in env to detect on startup
+        os.environ["NIA_RELOADED"] = "1"
         
-        if has_mic and has_off and not has_on:
-            # MIC OFF command
+        # Re-execute the current script
+        os.execv(sys.executable, ['python'] + sys.argv)
+        return True
+
+    def _cmd_ghost_control(self, text: str) -> bool:
+        """Handle ghost mode on/off."""
+        from core.config import settings
+        state_file = settings.GHOST_STATE_FILE
+        try:
+             # Default to False
+             new_state = False
+             
+             if "on" in text:
+                 new_state = True
+             elif "off" in text:
+                 new_state = False
+             else:
+                 # Toggle if no arg? No, safer to just show status
+                 active, layer = self._check_ghost_state()
+                 print(f"👻 Ghost Mode: {'ON' if active else 'OFF'} (Layer {layer})")
+                 return True
+
+             # Write state
+             layer_val = 3 if new_state else 0
+             with open(state_file, "w") as f:
+                 json.dump({"active": new_state, "layer": layer_val}, f)
+             
+             # 🌊 RIPPLE FIX: Update cache immediately to reflect change
+             self._update_ghost_cache((new_state, layer_val))
+             
+             if new_state:
+                 print("👻 [Ghost Mode ENABLED] Audio Suppressed. Stealth Sentry Active.")
+             else:
+                 print("👻 [Ghost Mode DISABLED] Systems Normal.")
+                 
+        except Exception as e:
+            self.logger.error(f"Ghost toggle failed: {e}")
+            print(f"⚠️ Failed to toggle Ghost Mode: {e}")
+            
+        return True
+        
+    def _cmd_mic_control(self, text: str) -> bool:
+        """Handle mic on/off."""
+        if "off" in text or "mute" in text:
             if self._nola:
                 self._nola.pause_listening()
             try:
@@ -684,182 +770,77 @@ class NIAAssistant:
                 print_mic_off()
             except ImportError:
                 print("🔇 Microphone Paused")
+            self.speak("Voice system offline.")
             return True
-        
-        if has_mic and has_on and not has_off:
-            # MIC ON command
+            
+        if "on" in text or "unmute" in text:
             if not self.voice_mode:
                 self.voice_mode = True
                 if self._init_nola():
-                    try:
-                        from main import print_mic_on
-                        print_mic_on()
-                    except ImportError:
-                        print("🎙️ Microphone Active")
-                    self.speak("Voice mode enabled.")
+                    print("[SYSTEM] 🎙️ Voice System ONLINE")
+                    self.speak("Voice system online.")
             else:
                 if self._nola:
                     self._nola.resume_listening()
-                try:
-                    from main import print_mic_on
-                    print_mic_on()
-                except ImportError:
-                    print("🎙️ Microphone Active")
+                print("[SYSTEM] 🎙️ Voice System ONLINE")
+                self.speak("Voice system online.")
             return True
-        
-        # =================================================================
-        # VOCABULARY DEFINITIONS (Loaded from config)
-        # =================================================================
-        
-        # 👁️ IRIS (Sentry/Vision Control)
-        iris_cfg = _COMMANDS.get("iris_control", {})
-        IRIS_ON = iris_cfg.get("on", [])
-        IRIS_OFF = iris_cfg.get("off", [])
-        
-        # 🔊 TARA (Speaker Mute - Zero Latency Reflex)
-        speaker_cfg = _COMMANDS.get("speaker_control", {})
-        SPEAKER_MUTE = speaker_cfg.get("mute", [])
-        SPEAKER_UNMUTE = speaker_cfg.get("unmute", [])
-        
-        # 🔇 TTS (Stop Speaking)
-        tts_cfg = _COMMANDS.get("tts_control", {})
-        TTS_STOP = tts_cfg.get("stop", [])
-        
-        # ⚙️ SYSTEM (Maintenance)
-        sys_cfg = _COMMANDS.get("system_control", {})
-        SYS_STATUS = sys_cfg.get("status", [])
-        SYS_CLEAR = sys_cfg.get("clear", [])
-        SYS_EXIT = sys_cfg.get("exit", [])
-        SYS_HELP = sys_cfg.get("help", [])
-        
-        # =================================================================
-        # HELPER: Check if any phrase matches the command
-        # =================================================================
-        def matches(phrases):
-            """Returns True if any phrase is found in cmd."""
-            return any(phrase in cmd for phrase in phrases)
-        
-        def match(*words):
-            """Returns True if ALL keywords are present (order-independent)."""
-            return all(w in cmd for w in words)
-        
-        # =================================================================
-        # 1. 👁️ IRIS SENTRY CONTROL (Priority)
-        # =================================================================
-        if matches(IRIS_ON):
-            if not self.sentry_thread:
-                self._init_sentry()
-                print("👁️ ✅ Sentry: ONLINE")
+            
+        print("Usage: mic [on|off]")
+        return True
+
+    def _cmd_shutdown(self, text: str) -> bool:
+        """Handle exit/quit."""
+        if self.voice_mode:
+            self.speak("Goodbye!")
+        print("👋 Goodbye!")
+        self._running = False
+        return True
+
+    def _cmd_standby(self, text: str) -> bool:
+        """
+        Enter Standby Mode (End current conversation, keep system running).
+        Acts as a 'Soft Stop' - the system stops processing the current turn 
+        and returns to the main loop to await the next wake word.
+        """
+        # Visual Feedback
+        print("\n[SYSTEM] 🌙 Entering Standby Mode...")
+
+        # Audio Feedback (Non-blocking if possible, or short)
+        self.speak("Standing by, Director.")
+
+        # Return True to signal 'Command Handled'. 
+        # This prevents the text from falling through to the AI Brain.
+        return True
+
+    def _handle_help(self, text: str) -> bool:
+        self._print_help()
+        return True
+
+    def _handle_clear(self, text: str) -> bool:
+        subprocess.run(['cls' if os.name == 'nt' else 'clear'], shell=True, check=False)
+        return True
+
+    def _handle_status(self, text: str) -> bool:
+        self._print_status()
+        return True
+
+    def _handle_prefs(self, text: str) -> bool:
+        try:
+            import json
+            prefs = self.memory.get_all_preferences() if self.memory else {}
+            if prefs:
+                print(f"\n📋 [User Preferences]:\n{json.dumps(prefs, indent=2)}\n")
             else:
-                print("⚠️  Sentry is already running")
-            return True
-        
-        if matches(IRIS_OFF):
-            if self.sentry_thread:
-                self.sentry_thread.stop()
-                self.sentry_thread = None
-                print("👁️ ❌ Sentry: OFFLINE")
-            else:
-                print("⚠️  Sentry is not active")
-            return True
-        
-        # =================================================================
-        # 2. 🔊 SPEAKER MUTE/UNMUTE (Zero-Latency TARA Reflex)
-        # =================================================================
-        # UNMUTE first (to avoid "unmute" matching "mute")
-        if matches(SPEAKER_UNMUTE) and "mic" not in cmd and "microphone" not in cmd:
-            try:
-                from tara.tools.system_ops import mute_volume
-                result = mute_volume(mute=False)
-                print(result)  # Tool returns "🔊 System Unmuted"
-            except Exception as e:
-                print(f"⚠️  Audio control error: {e}")
-            return True
-        
-        # MUTE SPEAKERS (exclude "mic" to prevent false matches)
-        if matches(SPEAKER_MUTE) and "mic" not in cmd and "microphone" not in cmd:
-            try:
-                from tara.tools.system_ops import mute_volume
-                result = mute_volume(mute=True)
-                print(result)  # Tool returns "🔇 System Muted"
-            except Exception as e:
-                print(f"⚠️  Audio control error: {e}")
-            return True
-        
-        # Microphone commands now handled by fuzzy matching above
-        
-        # =================================================================
-        # 4. 🔇 TTS CONTROL (Stop Speaking)
-        # =================================================================
-        if matches(TTS_STOP):
-            if self._nola:
-                self._nola.stop_speaking()
-            print("🔇 Silenced")
-            return True
-        
-        # =================================================================
-        # 5. ⚙️ SYSTEM COMMANDS
-        # =================================================================
-        # EXIT
-        if matches(SYS_EXIT):
-            if self.voice_mode:
-                self.speak("Goodbye!")
-            print("👋 Goodbye!")
-            self._running = False
-            return True
-        
-        # HELP
-        if matches(SYS_HELP):
-            self._print_help()
-            return True
-        
-        # STATUS
-        if matches(SYS_STATUS):
-            self._print_status()
-            return True
-        
-        # CLEAR SCREEN
-        if matches(SYS_CLEAR):
-            # 🌊 MODERNIZED: subprocess.run instead of os.system (cross-platform)
-            subprocess.run(['cls' if os.name == 'nt' else 'clear'], shell=True, check=False)
-            print(MINI_BANNER)
-            return True
-        
-        # =================================================================
-        # 6. 📋 PREFERENCES (God Mode - Direct DB Access)
-        # =================================================================
-        if cmd == "prefs":
-            try:
-                import json
-                prefs = self.memory.get_all_preferences() if self.memory else {}
-                if prefs:
-                    print(f"\n📋 [User Preferences]:\n{json.dumps(prefs, indent=2)}\n")
-                else:
-                    print("\n📋 No preferences saved yet.\n")
-            except Exception as exc:
-                print(f"⚠️  Could not retrieve preferences: {exc}")
-            return True
-        
-        # =================================================================
-        # 7. 📜 HISTORY MANAGEMENT
-        # =================================================================
-        if cmd == "history":
-            try:
-                from nia import get_conversation_history
-                history = get_conversation_history(self.thread_id)
-                if history:
-                    print(f"📜 History ({len(history)} messages):")
-                    for msg in history[-10:]:
-                        role = getattr(msg, 'type', 'unknown')
-                        content = getattr(msg, 'content', str(msg))[:100]
-                        print(f"   [{role}]: {content}")
-                else:
-                    print("📜 History empty")
-            except Exception as exc:
-                print(f"⚠️  Could not retrieve history: {exc}")
-            return True
-        
-        if match("clear", "history"):
+                print("\n📋 No preferences saved yet.\n")
+        except Exception as exc:
+            print(f"⚠️  Could not retrieve preferences: {exc}")
+        return True
+
+    def _handle_history(self, text: str) -> bool:
+        """Handle history commands (view/clear)."""
+        # "history clear" or "clear history"
+        if "clear" in text:
             try:
                 from nia import clear_conversation
                 if clear_conversation(self.thread_id):
@@ -869,23 +850,76 @@ class NIAAssistant:
             except Exception as exc:
                 print(f"❌ Error: {exc}")
             return True
-        
-        # =================================================================
-        # 7. 🔧 AUDIO RESET
-        # =================================================================
-        if match("reset", "audio"):
+            
+        # Default: View history
+        try:
+            from nia import get_conversation_history
+            history = get_conversation_history(self.thread_id)
+            if history:
+                print(f"📜 History ({len(history)} messages):")
+                # Show last 5 interactions (10 messages roughly)
+                for msg in history[-10:]:
+                    role = getattr(msg, 'type', 'unknown')
+                    content = getattr(msg, 'content', str(msg))[:100]
+                    content = content.replace('\n', ' ')
+                    print(f"   [{role}]: {content}")
+            else:
+                print("📜 History empty")
+        except Exception as exc:
+            print(f"⚠️  Could not retrieve history: {exc}")
+        return True
+
+    def _handle_reset(self, text: str) -> bool:
+        """Handle component resets."""
+        if "audio" in text:
             print("⚙️  Resetting audio engine...")
             if self._nola:
                 self._nola.stop_speaking()
                 self._nola.resume_listening()
             print("✅ Audio reset complete")
             return True
-        
-        # =================================================================
-        # NOT A REFLEX - Pass to Brain/TARA
-        # =================================================================
         return False
-    
+         
+    # =========================================================================
+    # REFLEX HANDLERS (Priority 1 - Fuzzy)
+    # =========================================================================
+
+    def _handle_reflex(self, text: str) -> bool:
+        """Handle hardware reflex commands (mic, speaker, sentry)."""
+        cmd = text.lower()
+        
+        # 🎤 MIC CONTROL
+        # Note: 'mic on'/'mic off' are handled by strict dispatcher now.
+        # This block catches legacy variations if needed, or we can just return False.
+        # For safety/consistency with user request, we'll keep the logic but delegate to strict if match found?
+        # Actually user said "If no match, check _handle_reflex".
+        
+        if "sentry on" in cmd or "activate sentry" in cmd:
+            if not self.sentry_thread:
+                self._init_sentry()
+                print("👁️ ✅ Sentry: ONLINE")
+            else:
+                print("⚠️  Sentry is already running")
+            return True
+        
+        if "sentry off" in cmd or "deactivate sentry" in cmd:
+            if self.sentry_thread:
+                self.sentry_thread.stop()
+                self.sentry_thread = None
+                print("👁️ ❌ Sentry: OFFLINE")
+            else:
+                print("⚠️  Sentry is not active")
+            return True
+
+        # 🔇 TTS STOP
+        if "shut up" in cmd or "stop talking" in cmd or "silence" in cmd:
+             if self._nola:
+                self._nola.stop_speaking()
+             print("🔇 Silenced")
+             return True
+
+        return False
+
     def _print_help(self) -> None:
         """Print help information from external file."""
         print(f"\n{_HELP_TEXT}\n")
@@ -901,7 +935,6 @@ class NIAAssistant:
         """Displays the Precision Aligned Dashboard (Strict Grid Layout)."""
         import psutil
         from datetime import datetime
-
         # 1. Gather Data
         cpu_p = psutil.cpu_percent(interval=0.1)
         mem = psutil.virtual_memory()
@@ -919,7 +952,6 @@ class NIAAssistant:
         # API Keys (Strict 7 chars)
         k_nv = "LINKED " if os.environ.get("NVIDIA_API_KEY") else "MISSING"
         k_oa = "LINKED " if os.environ.get("OPENAI_API_KEY") else "MISSING"
-
         # Resource Bars (Strict 17 chars)
         bar_cpu = self._draw_bar(cpu_p)
         bar_ram = self._draw_bar(mem.percent)
@@ -930,7 +962,6 @@ class NIAAssistant:
         mem_tot  = f"{mem.total / (1024**3):.1f}"
         mem_str  = f"{mem_used}/{mem_tot} GB"
         dsk_free = f"{dsk.free / (1024**3):.1f} GB Free"
-
         # 3. Render Dashboard (Grid: Left=29, Right=36)
         print("\n┌" + "─"*29 + "┬" + "─"*36 + "┐")
         print(f"│ N.I.A. SYSTEM DASHBOARD     │ {time_str:>34} │")
@@ -942,6 +973,6 @@ class NIAAssistant:
         print(f"│ • TOOLS (TARA): [{s_tara}]       │                                    │")
         print("├─────────────────────────────┼────────────────────────────────────┤")
         print(f"│ 💾 MEMORY                   │ 🔐 SECURITY KEYS                   │")
-        print(f"│  RAM : {mem_str:<21}│  NVIDIA API: [{k_nv:<7}]             │")
-        print(f"│  DISK: {dsk_free:<21}│  OPENAI API: [{k_oa:<7}]             │")
+        print(f"│  RAM : {mem_str:<21}│  NVIDIA API: [{k_nv:<7}]            │")
+        print(f"│  DISK: {dsk_free:<21}│  OPENAI API: [{k_oa:<7}]            │")
         print("└─────────────────────────────┴────────────────────────────────────┘\n")

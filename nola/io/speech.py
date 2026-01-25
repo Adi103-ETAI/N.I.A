@@ -128,14 +128,14 @@ class HybridTTS:
         
         # Log status
         if self._has_edge_tts and self._has_pygame:
-            logger.info("HybridTTS: Edge TTS ready (voice: %s)", self.voice)
-            print(f"🔊 Edge TTS Ready (Voice: {self.voice})")
+            logger.debug("HybridTTS: Edge TTS ready (voice: %s)", self.voice)
+            # print(f"🔊 Edge TTS Ready (Voice: {self.voice})")
         elif self._has_piper:
-            logger.info("HybridTTS: Using Piper fallback")
-            print("🔊 Piper TTS Ready (Fallback Mode)")
+            logger.debug("HybridTTS: Using Piper fallback")
+            # print("🔊 Piper TTS Ready (Fallback Mode)")
         else:
             logger.warning("HybridTTS: No TTS backend available")
-            print("⚠️ TTS not available - will print to console")
+            # print("⚠️ TTS not available - will print to console")
     
     def speak(self, text: str) -> bool:
         """Speak text. Blocks until speech is complete.
@@ -170,7 +170,9 @@ class HybridTTS:
                     logger.error(f"Piper TTS also failed: {e}", exc_info=True)
             
             # No TTS available - print to console
-            print(f"🔊 [Console] {text}")
+            # No TTS available - print to console
+            # print(f"🔊 [Console] {text}")
+            logger.warning(f"[Console Fallback] {text}")
             return False
             
         finally:

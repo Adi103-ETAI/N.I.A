@@ -71,7 +71,7 @@ def build_tara_graph(with_memory: bool = False):
     if not _HAS_LANGGRAPH:
         raise RuntimeError("langgraph not installed. Run: pip install langgraph")
     
-    logger.info("Building TARA SubGraph...")
+    logger.debug("Building TARA SubGraph...")
     
     # Initialize StateGraph with TaraState schema
     workflow = StateGraph(TaraState)
@@ -124,7 +124,7 @@ def build_tara_graph(with_memory: bool = False):
     # Compile the graph
     tara_app = workflow.compile(checkpointer=checkpointer)
     
-    logger.info("TARA SubGraph compiled successfully")
+    logger.debug("TARA SubGraph compiled successfully")
     return tara_app
 
 
