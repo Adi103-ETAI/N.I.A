@@ -1,6 +1,6 @@
 """
 MODULE: Web Browser Automation (Async Playwright-based)
-VERSION: 2.5.2
+VERSION: 3.0.0
 STRICT SCOPE: Navigation, Tabs, URL handling, Page interaction.
 CONSTRAINTS: Uses Async Playwright for non-blocking browser control.
 

@@ -16,7 +16,7 @@ import argparse
 import logging
 import os
 import sys
-import sys
+
 import asyncio
 
 # Suppress pygame welcome message before any imports
@@ -108,7 +108,7 @@ async def main() -> int:
     parser.add_argument("--status", "-s", action="store_true", help="Print system status and exit")
     parser.add_argument("--debug", "-d", action="store_true", help="Enable debug logging")
     parser.add_argument("--thread-id", "-t", type=str, default="root", help="Conversation thread ID")
-    parser.add_argument("--version", action="version", version="N.I.A. v2.6.0")
+    parser.add_argument("--version", action="version", version="N.I.A. v3.0.0")
     
     args = parser.parse_args()
     
@@ -126,15 +126,61 @@ async def main() -> int:
         return 0
     
     # Log startup configuration
-    logger.debug("N.I.A. v2.6.0 starting (Async Native)...")
+    logger.debug("N.I.A. v3.0.0 starting (Async Native)...")
     logger.debug(f"Mode: {'Voice' if args.voice else 'Text'} | Debug: {args.debug} | Thread: {args.thread_id}")
     if args.voice:
         logger.debug(f"Wake words: {args.wake_words} | Wake required: {not args.no_wake}")
     
     # Import and run engine
+    # Import components for Dependency Injection
+    from core.services import ServiceRegistry
     from core.engine import NIAAssistant
+    from nola.manager import get_nola_manager, NOLAConfig
+    from iris.agent import IrisAgent
     
     wake_words = [w.strip() for w in args.wake_words.split(",") if w.strip()]
+    
+    # 0. Event Bus (The Spine)
+    from core.event_bus import get_event_bus
+    ServiceRegistry.register("events", get_event_bus())
+    
+    # --- SERVICE REGISTRY WIRING ---
+    
+    # 1. Voice Service (NOLA)
+    if args.voice:
+        try:
+            nola_config = NOLAConfig(
+                wake_word_enabled=not args.no_wake,
+                wake_words=wake_words,
+                wake_word_timeout=30.0,
+                security_enabled=True,
+                pause_ear_while_speaking=True,
+            )
+            # Initialize singleton
+            nola = get_nola_manager(config=nola_config)
+            
+            # Start NOLA hardware
+            if nola.start():
+                ServiceRegistry.register("voice", nola)
+                logger.info("🎤 Registered Service: 'voice' -> NOLAManager")
+            else:
+                logger.error("❌ Failed to start NOLA voice service")
+        except ImportError as e:
+            logger.error(f"❌ Failed to load Voice Service: {e}")
+
+    # 2. Vision Service (IRIS)
+    try:
+        # Initialize IrisAgent
+        iris = IrisAgent()
+        if iris.is_ready:
+            ServiceRegistry.register("vision", iris)
+            logger.info("👁️ Registered Service: 'vision' -> IrisAgent")
+        else:
+             logger.warning("Vision Service not ready (check API key)")
+    except Exception as e:
+        logger.warning(f"Failed to load Vision Service: {e}")
+
+    # --- END WIRING ---
     
     assistant = NIAAssistant(
         voice_mode=args.voice,

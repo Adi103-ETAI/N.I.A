@@ -669,7 +669,7 @@ class ModelManager:
         """
         if self._smart_model is None:
             self._smart_model = self._get_best_available_model(
-                preferred_specs=["nvidia/llama-3.1-405b", "nvidia/llama-3.1-70b", "nvidia/nemotron", "openai/gpt-4o"],
+                preferred_specs=["nvidia/llama-3.1-70b", "nvidia/nemotron", "openai/gpt-4o"],
                 temperature=temperature,
             )
         return self._smart_model

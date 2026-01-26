@@ -31,7 +31,7 @@ from typing import Optional, Tuple
 
 from core.logger import setup_logger
 
-from .registry import get_registry
+from .window_manager import get_registry
 
 logger = setup_logger("TARA.Tools.WindowOps")
 

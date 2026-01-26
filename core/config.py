@@ -245,7 +245,7 @@ class Settings(BaseSettings):
     # =========================================================================
     
     VERSION: str = Field(
-        default="2.5.2",
+        default="3.0.0",
         description="N.I.A. version string",
     )
     

@@ -208,6 +208,7 @@ def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
     global _cached_tools
     
     if _cached_tools is not None and not refresh:
+        # logger.debug("⚡ Using Cached Tools") 
         return _cached_tools
     
     logger.info("Discovering TARA tools...")

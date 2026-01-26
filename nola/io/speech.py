@@ -129,13 +129,25 @@ class HybridTTS:
         # Log status
         if self._has_edge_tts and self._has_pygame:
             logger.debug("HybridTTS: Edge TTS ready (voice: %s)", self.voice)
-            # print(f"🔊 Edge TTS Ready (Voice: {self.voice})")
         elif self._has_piper:
             logger.debug("HybridTTS: Using Piper fallback")
-            # print("🔊 Piper TTS Ready (Fallback Mode)")
         else:
             logger.warning("HybridTTS: No TTS backend available")
-            # print("⚠️ TTS not available - will print to console")
+
+        # 🌊 RIPPLE SAFE: Start persistent background loop for Async TTS generation
+        # This prevents "loop overhead" (creating a new loop for every sentence)
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._start_background_loop,
+            name="NOLA-TTS-Worker",
+            daemon=True
+        )
+        self._thread.start()
+
+    def _start_background_loop(self):
+        """Worker thread for async TTS generation."""
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
     
     def speak(self, text: str) -> bool:
         """Speak text. Blocks until speech is complete.
@@ -189,8 +201,16 @@ class HybridTTS:
         mp3_file = TTS_CACHE / f"edge_{self._speech_count}.mp3"
         
         try:
-            # Generate audio asynchronously
-            asyncio.run(self._async_generate_edge(text, str(mp3_file)))
+            # Generate audio asynchronously on background worker
+            # 🌊 OPTIMIZATION: Use persistent loop instead of asyncio.run()
+            future = asyncio.run_coroutine_threadsafe(
+                self._async_generate_edge(text, str(mp3_file)),
+                self._loop
+            )
+            
+            # 🌊 RIPPLE GUARD: Block here to maintain synchronous API compatibility
+            # This ensures we don't return before audio is ready
+            future.result()
             
             if not mp3_file.exists():
                 logger.error("Edge TTS failed to generate audio file")
@@ -294,13 +314,18 @@ class HybridTTS:
             raise
     
     def stop(self) -> None:
-        """Stop current audio playback."""
+        """Stop current audio playback and shutdown worker."""
         if self._has_pygame:
             try:
                 import pygame
                 pygame.mixer.music.stop()
             except (ImportError, OSError, RuntimeError):
                 pass
+                
+        # Stop background loop
+        if self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            # We don't join thread here to avoid blocking shutdown excessively
     
     @property
     def is_speaking(self) -> bool:

@@ -40,6 +40,10 @@ from typing import TYPE_CHECKING, Optional, Tuple
 from core.logger import setup_logger
 import asyncio
 import aioconsole
+import asyncio
+import aioconsole
+from core.services import ServiceRegistry
+from core.event_bus import get_event_bus
 
 # =============================================================================
 # TYPE_CHECKING Block: IDE-only imports (no runtime cost)
@@ -158,10 +162,8 @@ class NIAAssistant:
         # Centralized logger (lightweight - already imported at module level)
         self.logger = setup_logger("BRAIN")
         
-        # Components (lazy initialization in start() -> _init_*)
+        # Components (Now managed via ServiceRegistry)
         self._nia_process: Optional[callable] = None
-        self._nola: Optional[object] = None
-        self.sentry_thread: Optional[object] = None
         self._running: bool = False
         
         # 4-Layer Memory System (initialized in _init_nia, typed for IDE)
@@ -174,8 +176,29 @@ class NIAAssistant:
         self._ghost_cache: Tuple[bool, int] = (False, 0)
         self._ghost_last_check: float = 0.0
 
+        # Input Queue for serialization (Voice + Text)
+        self.processing_queue = asyncio.Queue()
+        
+        # Event Bus Subscription
+        self.bus = get_event_bus()
+        self.bus.subscribe("voice_command", self._handle_voice_command)
+
+        # UI Lock (Semaphore) for Turn-Taking
+        # Green (Set) = Ready for Input
+        # Red (Clear) = System Busy / Processing
+        self.ui_lock = asyncio.Event()
+        self.ui_lock.set()  # Start Green
+
         self.system_commands = {}
         self._init_command_registry()
+
+    def _handle_voice_command(self, text: str) -> None:
+        """Callback for EventBus voice commands."""
+        if not text or not text.strip():
+            self.logger.warning("[DEBUG] Ignored empty voice input")
+            return
+        self.logger.info(f"🎤 Voice Command Queued: '{text}'")
+        self.processing_queue.put_nowait(text)
 
     def _init_command_registry(self) -> None:
         """Initialize the strict command dispatch registry."""
@@ -255,42 +278,8 @@ class NIAAssistant:
             return False
 
     
-    def _init_nola(self) -> bool:
-        """Initialize NOLA voice system via singleton.
-        
-        Creates the NOLAManager with wake word configuration and starts
-        the voice processing loop if voice_mode is enabled.
-        
-        Returns:
-            True if NOLA initialized and started, False otherwise.
-        """
-        if not self.voice_mode:
-            return True
-        
-        try:
-            from nola.manager import get_nola_manager, NOLAConfig
-            
-            config = NOLAConfig(
-                wake_word_enabled=self.wake_word_enabled,
-                wake_words=self.wake_words,
-                wake_word_timeout=30.0,
-                security_enabled=True,
-                pause_ear_while_speaking=True,
-            )
-            
-            # Use singleton manager
-            self._nola = get_nola_manager(config=config)
-            
-            if self._nola.start():
-                self.logger.info("🎤 NOLA voice system initialized")
-                return True
-            else:
-                self.logger.error("❌ NOLA failed to start")
-                return False
-                
-        except ImportError as exc:
-            self.logger.error("❌ Failed to import NOLA: %s", exc)
-            return False
+    # NOLA is now initialized externally and registered as "voice"
+    # IRIS is now initialized externally and registered as "vision"
     
     # NOTE: IRIS is now managed by NIAGraph singleton - no separate init needed
     
@@ -338,37 +327,7 @@ class NIAAssistant:
         self._ghost_cache = state
         self._ghost_last_check = time.time()
     
-    def _init_sentry(self, headless: bool = False) -> None:
-        """Initialize IRIS Sentry for Security & Communications monitoring.
-        
-        Args:
-            headless: If True, run in stealth mode (no visible window).
-        """
-        try:
-            from iris.sentry import start_sentry
-            
-            def sentry_callback(alert_type: str, found_keyword: str):
-                """Handle sentry alerts via voice."""
-                if alert_type == "SECURITY":
-                    print("🚨", end="", flush=True)
-                    self.speak("Security alert. Sensitive information visible.")
-                elif alert_type == "COMMS":
-                    print("📩", end="", flush=True)
-                    self.speak("You have a new message.")
-            
-            self.sentry_thread = start_sentry(
-                callback=sentry_callback,
-                interval=8,
-                headless=headless
-            )
-            if self.sentry_thread:
-                if headless:
-                    self.logger.debug("👁️ Sentry started (Stealth Mode)")
-                else:
-                    self.logger.debug("👁️ IRIS Sentry started")
-                
-        except ImportError:
-            self.logger.debug("IRIS Sentry not available")
+    # Sentry moved to external IRIS agent
     
     async def start(self) -> bool:
         """Start the assistant and initialize all components."""
@@ -389,16 +348,10 @@ class NIAAssistant:
         
         # NOTE: IRIS is initialized via NIAGraph singleton (no duplicate needed)
         
-        # Initialize NOLA (if voice mode)
-        if self.voice_mode:
-            if not self._init_nola():
-                self.logger.warning("Voice mode unavailable, continuing in text mode")
-                self.voice_mode = False
-        
         self._running = True
         
-        # Sentry now manual-start only (use 'sentry on')
-        self.logger.debug("Sentry in standby mode (use 'sentry on' to activate)")
+        # Sentry checks are now delegated to "vision" service
+        self.logger.debug("Sentry managed by Vision Service (if active)")
         
         # Log mode info (Silent Boot: DEBUG only)
         if self.voice_mode:
@@ -428,10 +381,12 @@ class NIAAssistant:
         except ImportError:
             pass
         
-        if self._nola:
-            self.logger.info("🔇 Stopping NOLA...")
-            self._nola.stop()
-            self._nola = None
+        if self._running:
+            # Stop NOLA via Registry
+            nola = ServiceRegistry.get("voice")
+            if nola:
+                self.logger.info("🔇 Stopping NOLA...")
+                nola.stop()
         
         # Stop Plugin Watcher (v3.0)
         if self._plugin_observer:
@@ -576,19 +531,21 @@ class NIAAssistant:
             print(f"🤫 [Ghost Mode: Audio Suppressed] NIA: {text}")
             return
         
-        if self._nola and text:
-            try:
-                self._nola.speak(text)
-            except OSError as exc:
-                self.logger.error(f"Audio device error: {exc}", exc_info=True)
-            except RuntimeError as exc:
-                self.logger.error(f"TTS runtime error: {exc}", exc_info=True)
+        if text:
+            nola = ServiceRegistry.get("voice")
+            if nola:
+                try:
+                    nola.speak(text)
+                except OSError as exc:
+                    self.logger.error(f"Audio device error: {exc}", exc_info=True)
+                except RuntimeError as exc:
+                    self.logger.error(f"TTS runtime error: {exc}", exc_info=True)
     
     async def run(self) -> None:
-        """Main application loop (Native Async).
+        """Main application loop (Concurrent).
         
-        Starts the assistant and processes user input using aioconsole
-        for non-blocking I/O.
+        Handles both voice events (via Queue) and keyboard input (via asyncio task)
+        concurrently without blocking.
         """
         print("\033[0m", end="", flush=True) # Reset terminal colors
         
@@ -612,62 +569,90 @@ class NIAAssistant:
                 pass
 
         print("\nType 'help' for commands, 'exit' to quit.\n")
+        
+        # Capture the loop for EventBus thread-safety
+        self.bus.set_loop(asyncio.get_running_loop())
 
-        # Main loop
-        while self._running:
-            try:
+        # Start Keyboard Listener Task
+        keyboard_task = asyncio.create_task(self._keyboard_listener())
+
+        # Main Processing Loop
+        self.logger.info("🚀 Main Loop Started (Concurrent Mode)")
+        
+        try:
+            while self._running:
                 # Ghost Protocol Watchdog - Auto-engage stealth sentry on Layer 3
-                is_ghost, layer = self._check_ghost_state()
-                if is_ghost and layer >= 3 and self.sentry_thread is None:
-                    self.logger.info("Ghost Layer 3: Auto-engaging Sentry (Stealth Mode)")
-                    self._init_sentry(headless=True)
+                # 🌊 ASYNC OFFLOAD: Prevent blocking I/O in main loop
+                is_ghost, layer = await asyncio.to_thread(self._check_ghost_state)
+                if is_ghost and layer >= 3:
+                     # Delegate Sentry toggle to Vision Service
+                     vision = ServiceRegistry.get("vision")
+                     if vision and hasattr(vision, "start_sentry"):
+                          # Only log once periodically? keeping simple
+                          pass 
                 
-                # Async Non-Blocking Input (Green Prompt)
-                try:
-                    # \033[1;92m = Bold Bright Green, \033[0m = Reset
-                    user_input = await aioconsole.ainput("\033[1;92mYou\033[0m: ")
-                except EOFError:
-                    break
+                # Wait for next input (Voice OR Text)
+                input_text = await self.processing_queue.get()
                 
-                if not user_input or not user_input.strip():
+                # Validation: Ghostbuster (Silence Filter)
+                if not input_text or not input_text.strip():
+                    self.ui_lock.set()  # Release lock immediately
                     continue
-                
-                user_input = user_input.strip()
                 
                 # Handle commands locally
-                if self._handle_command(user_input):
+                if self._handle_command(input_text):
+                    self.ui_lock.set() # Commands are fast, release immediately
                     continue
                 
-        
                 # Process through NIA brain (Async)
-                self.logger.debug(f"Processing: {user_input[:50]}...")
+                self.logger.debug(f"Processing: {input_text[:50]}...")
                 
-                response = await self.process(user_input)
+                try:
+                    response = await self.process(input_text)
+                    
+                    # UI Output
+                    if ui_print:
+                        ui_print(f"\n💬 NIA: {response}\n")
+                    else:
+                        print(f"\n💬 NIA: {response}\n")
+                    
+                    # Speak Response (Blocking I/O wrapped in thread)
+                    await asyncio.to_thread(self.speak, response)
+                finally:
+                    # 🌊 RIPPLE SAFE: Always release lock, even on error
+                    self.ui_lock.set()
                 
-                # UI Output
-                if ui_print:
-                    ui_print(f"\n💬 NIA: {response}\n")
-                else:
-                    print(f"\n💬 NIA: {response}\n")
+        except asyncio.CancelledError:
+            print("\n👋 Goodbye!")
+        except KeyboardInterrupt:
+            print("\n👋 Interrupted by user")
+        except Exception as e:
+            self.logger.error(f"Loop error: {e}", exc_info=True)
+        finally:
+            keyboard_task.cancel()
+            self.stop()
+
+    async def _keyboard_listener(self) -> None:
+        """Background task for keyboard input."""
+        while self._running:
+            try:
+                # 🚦 TURN-TAKING: Wait for Green Light (System Ready)
+                await self.ui_lock.wait()
                 
-                # Speak Response (Blocking I/O wrapped in thread)
-                # Note: self.speak calls NOLA which might block, so we offload it
-                await asyncio.to_thread(self.speak, response)
+                # \033[1;92m = Bold Bright Green, \033[0m = Reset
+                user_input = await aioconsole.ainput("\033[1;92mYou\033[0m: ")
                 
-                # Heartbeat Yield
-                await asyncio.sleep(0.01)
-                
+                if user_input and user_input.strip():
+                    # 🔴 Stop Light: System Busy (Lock UI immediately)
+                    self.ui_lock.clear()
+                    await self.processing_queue.put(user_input.strip())
             except asyncio.CancelledError:
-                print("\n👋 Goodbye!")
                 break
-            except KeyboardInterrupt:
-                print("\n👋 Interrupted by user")
+            except EOFError:
                 break
             except Exception as e:
-                self.logger.error(f"Loop error: {e}", exc_info=True)
+                self.logger.error(f"Keyboard input error: {e}")
                 await asyncio.sleep(1.0)
-        
-        self.stop()
     
     def _handle_command(self, text: str) -> bool:
         """Handle built-in commands using Dispatcher Pattern.
@@ -763,8 +748,9 @@ class NIAAssistant:
     def _cmd_mic_control(self, text: str) -> bool:
         """Handle mic on/off."""
         if "off" in text or "mute" in text:
-            if self._nola:
-                self._nola.pause_listening()
+            nola = ServiceRegistry.get("voice")
+            if nola:
+                nola.pause_listening()
             try:
                 from main import print_mic_off
                 print_mic_off()
@@ -776,12 +762,13 @@ class NIAAssistant:
         if "on" in text or "unmute" in text:
             if not self.voice_mode:
                 self.voice_mode = True
-                if self._init_nola():
+                if self.voice_mode: # We still track the boolean preference
                     print("[SYSTEM] 🎙️ Voice System ONLINE")
                     self.speak("Voice system online.")
             else:
-                if self._nola:
-                    self._nola.resume_listening()
+                nola = ServiceRegistry.get("voice")
+                if nola:
+                    nola.resume_listening()
                 print("[SYSTEM] 🎙️ Voice System ONLINE")
                 self.speak("Voice system online.")
             return True

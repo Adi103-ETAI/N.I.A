@@ -1,6 +1,6 @@
 """
 MODULE: File System Operations (3-Tier Security Model)
-VERSION: 2.5.2
+VERSION: 3.0.0
 STRICT SCOPE: Read, Write, List, Delete, Create Dir.
 CONSTRAINTS: Atomic actions only. Explicit guards on destructive operations.
 

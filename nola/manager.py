@@ -14,7 +14,7 @@ Singleton Pattern:
 """
 from __future__ import annotations
 
-import queue
+
 import threading
 import time
 from dataclasses import dataclass, field
@@ -23,6 +23,9 @@ from typing import Callable, List, Optional
 # Import I/O classes (explicit submodules)
 from .io.speech import HybridTTS, get_async_tts
 from .io.hearing import VoskSTT, get_async_ear
+
+# Event Bus (Decoupled Communication)
+from core.event_bus import get_event_bus
 
 # Centralized logging
 from core.logger import setup_logger
@@ -110,8 +113,10 @@ class NOLAManager:
         self._tts = get_async_tts()
         self._stt = get_async_ear()
         
-        # Input queue for processed commands
-        self._input_queue: queue.Queue[str] = queue.Queue(maxsize=20)
+        # Event Bus
+        self.bus = get_event_bus()
+        
+        # Thread control
         
         # Thread control
         self._is_running = False
@@ -268,7 +273,7 @@ class NOLAManager:
                 if command:
                     # One-shot: "Hey Nia what time is it?"
                     logger.info(f"One-shot command: '{text}' → '{command}'")
-                    self._enqueue_input(command)
+                    self._emit_command(command)
                 else:
                     # Just wake word, wait for next utterance
                     logger.debug("Wake word only, awaiting command...")
@@ -289,7 +294,7 @@ class NOLAManager:
             
             # Accept command
             logger.info(f"Command received: '{text}'")
-            self._enqueue_input(text)
+            self._emit_command(text)
             
             # Auto-sleep after command
             if self.config.auto_sleep_after_command:
@@ -335,36 +340,20 @@ class NOLAManager:
         self.state = STATE_ASLEEP
         logger.info(f"State transition: {old_state} → {self.state}")
     
-    def _enqueue_input(self, text: str) -> None:
-        """Add command to input queue."""
-        try:
-            self._input_queue.put_nowait(text)
-        except queue.Full:
-            try:
-                self._input_queue.get_nowait()
-                self._input_queue.put_nowait(text)
-            except queue.Empty:
-                pass
+    def _emit_command(self, text: str) -> None:
+        """Emit command to event bus (Cross-Thread Safe)."""
+        if not text or not text.strip():
+            # logger.warning("Attempted to emit empty voice command")
+            return
+            
+        logger.info(f"📡 Emitting voice_command: '{text}'")
+        self.bus.emit_threadsafe("voice_command", text)
     
     # =========================================================================
     # Public API
     # =========================================================================
     
-    def get_input(self, timeout: Optional[float] = None) -> Optional[str]:
-        """Get next voice command (after wake word processing).
-        
-        Args:
-            timeout: Seconds to wait. None for non-blocking.
-            
-        Returns:
-            Command text or None.
-        """
-        try:
-            if timeout is None:
-                return self._input_queue.get_nowait()
-            return self._input_queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
+    # get_input removed (Using EventBus push model)
     
     def speak(self, text: str, block_listening: bool = True) -> bool:
         """Speak text via TTS.

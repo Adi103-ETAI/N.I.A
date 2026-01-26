@@ -24,7 +24,7 @@ from typing import List, Optional, Tuple
 from core.logger import setup_logger
 from core.config import get_settings
 
-from .registry import get_registry
+from .window_manager import get_registry
 
 logger = setup_logger("TARA.Tools.UIAOps")
 

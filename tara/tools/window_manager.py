@@ -10,7 +10,7 @@ This module provides state persistence across tool calls, enabling:
 - Alias-based window operations
 
 Usage:
-    from tara.tools.registry import get_registry
+    from tara.tools.window_manager import get_registry
     
     registry = get_registry()
     alias = registry.register("notepad", hwnd=12345, pid=6789, title="Untitled")
@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 from core.logger import setup_logger
 from core.config import settings
 
-logger = setup_logger("TARA.Tools.Registry")
+logger = setup_logger("TARA.Tools.WindowManager")
 REGISTRY_FILE = settings.WINDOW_REGISTRY_FILE
 
 

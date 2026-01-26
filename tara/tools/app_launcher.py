@@ -1,6 +1,6 @@
 """
 MODULE: Process Management
-VERSION: 2.5.3
+VERSION: 3.0.0
 STRICT SCOPE: Start, Kill, List Processes.
 CONSTRAINTS: No Window manipulation. No generic 'app_control'.
 RETURNS: PIDs and Process Objects only.
@@ -34,7 +34,7 @@ from typing import List, Optional, Set, Tuple
 from core.logger import setup_logger
 from core.config import get_settings
 
-from .registry import get_registry
+from .window_manager import get_registry
 
 logger = setup_logger("TARA.Tools.AppLauncher")
 

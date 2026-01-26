@@ -8,7 +8,7 @@
 ║    ██╔██╗ ██║   ██║   ███████║     ─────────────────────────────          ║
 ║    ██║╚██╗██║   ██║   ██╔══██║     CLASSIFICATION: DIRECTOR_LEVEL_ACCESS  ║
 ║    ██║ ╚████║██╗██║██╗██║  ██║     DEVELOPER: SentArc Labs                ║
-║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 2.6.0 (Velocity)              ║
+║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 3.0.0                         ║
 ║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 ```
@@ -29,14 +29,14 @@
 
 **N.I.A.** (Neural Intelligence Assistant) is a privacy-first, modular AI assistant designed for power users. It combines offline voice recognition, vision-based analysis, and automated desktop control into a unified system.
 
-**v2.6.0 "Velocity" Release Highlights:**
-- 🎭 **Centralized Identity Engine** — Single source of truth for prompts (`config/nia/prompts.json`)
-- 👁️ **Vision Hardening** — Robust initialization and explicit API key validation for IRIS
-- 🔥 **Multi-Provider LLM Hot-Swap** — Switch between NVIDIA, OpenAI, Groq, Ollama at runtime
-- ⚡ **Self-Healing Circuit Breaker** — Auto-fallback on rate limits (429/503 errors)
-- 🏛️ **ServiceContainer DI** — Clean dependency injection
-- 🔄 **Unified Async Bridge** — Stable browser automation
-- ✅ **Production Ready** — All critical issues resolved
+**v3.0.0 Release Highlights:**
+- 🧹 **Codebase Hygiene** — Massive dead code removal & architectural cleanup
+- 🔄 **TTS Optimization** — Persistent background loop for zero-latency speech
+- 🛡️ **Error Hardening** — Comprehensive try/catch blocks & silent failure elimination
+- 🎭 **Centralized Identity Engine** — Single source of truth for prompts
+- 👁️ **Vision Hardening** — Robust initialization and explicit API key validation
+- 🔥 **Multi-Provider LLM Hot-Swap** — Switch between NVIDIA, OpenAI, Groq, Ollama
+- 🏛️ **ServiceContainer DI** — Clean dependency injection (Legacy container removed)
 
 ---
 
@@ -51,7 +51,7 @@ N.I.A. uses a **LangGraph-based Supervisor Pattern** with four specialized units
 | 👁️  | **IRIS** | Vision & Screen Analysis   | Llama 3.2 Vision + mss               |
 | 🛠️  | **TARA** | Tool Execution (v2.0)      | Unified Async Bridge + 50 Tools      |
 
-### System Architecture (v2.6.0)
+### System Architecture (v3.0.0)
 
 ```
                     ┌──────────────────┐
@@ -113,7 +113,7 @@ N.I.A. uses a **LangGraph-based Supervisor Pattern** with four specialized units
 
 ---
 
-## ⚡ What's New in v2.6.0
+## ⚡ What's New in v3.0.0
 
 ### 🎭 Centralized Identity Engine
 - Prompts are now loaded from `config/nia/prompts.json` rather than hardcoded.
@@ -280,14 +280,14 @@ python main.py --version
 
 ## 🗺️ Roadmap
 
-### v2.6.0 (Current - Velocity)
+### v3.0.0 (Current)
+- ✅ **Codebase Hygiene** — Removed orphaned files (`core/container.py`) & unused imports
+- ✅ **TTS Latency Fix** — Implemented `run_coroutine_threadsafe` for NOLA
+- ✅ **Robust Error Handling** — Added `check_db_health` & full stack trace logging
 - ✅ Centralized Identity Engine & Prompts
 - ✅ Vision Initialization Hardening
-- ✅ Multi-Provider LLM (NVIDIA, OpenAI, Groq, Ollama)
-- ✅ SafeLLM Circuit Breaker with auto-fallback
-- ✅ Dynamic provider hot-swap via ModelManager
 
-### v3.0 (Future)
+### v3.1 (Future)
 - 🚀 **Native Async Graph** — Full async-first LangGraph
 - 📦 **Poetry Migration** — Modern dependency management
 - 🔌 **Plugin Architecture** — Dynamic tool loading
@@ -305,6 +305,6 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 **Built with ❤️ by SentArc Labs**
 
-*"N.I.A. v2.6.0 — Velocity."*
+*"N.I.A. v3.0.0"*
 
 </div>

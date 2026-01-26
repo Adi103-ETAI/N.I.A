@@ -7,7 +7,7 @@ Tools are auto-discovered by the interface module.
 Structure:
     tara/tools/
     ├── interface.py      ← LangChain integration (dynamic loader)
-    ├── registry.py       ← WindowRegistry singleton
+    ├── window_manager.py ← WindowRegistry singleton
     ├── app_launcher.py   ← Process management
     ├── window_ops.py     ← Window control
     ├── uia_ops.py        ← UI Automation (semantic)
@@ -27,7 +27,7 @@ Usage:
     result = launch_app("notepad")
     
     # For shared state
-    from tara.tools.registry import get_registry
+    from tara.tools.window_manager import get_registry
     registry = get_registry()
 
 Plug & Play:
@@ -46,7 +46,7 @@ from .interface import (
 )
 
 # Registry is always available
-from .registry import get_registry, WindowRegistry, WindowInfo
+from .window_manager import get_registry, WindowRegistry, WindowInfo
 
 __all__ = [
     # Interface

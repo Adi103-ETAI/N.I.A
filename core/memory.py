@@ -159,7 +159,7 @@ class MemoryManager:
                 logger.debug("🧠 Episodic Memory: Connected (Local/Free)")
             
         except Exception as exc:
-            logger.error("❌ ChromaDB Init Failed: %s", exc)
+            logger.error("❌ ChromaDB Init Failed: %s", exc, exc_info=True)
             self._episodes = None
     
     async def store_episode(
@@ -175,7 +175,7 @@ class MemoryManager:
         try:
             return await asyncio.to_thread(self._store_episode_sync, text, role, metadata)
         except Exception as exc:
-            logger.error("store_episode failed: %s", exc)
+            logger.error("store_episode failed: %s", exc, exc_info=True)
             return False
 
     def _store_episode_sync(self, text, role, metadata):
@@ -199,7 +199,7 @@ class MemoryManager:
         try:
             return await asyncio.to_thread(self._recall_episodes_sync, query, n)
         except Exception as exc:
-            logger.error("recall_episodes failed: %s", exc)
+            logger.error("recall_episodes failed: %s", exc, exc_info=True)
             return []
 
     def _recall_episodes_sync(self, query, n):
@@ -226,7 +226,7 @@ class MemoryManager:
                 self._graph = nx.DiGraph()
                 logger.debug("Created new skills graph")
         except Exception as exc:
-            logger.error("Graph init failed: %s", exc)
+            logger.error("Graph init failed: %s", exc, exc_info=True)
             self._graph = nx.DiGraph() if _HAS_NETWORKX else None
     
     def _save_graph(self) -> bool:
@@ -237,7 +237,7 @@ class MemoryManager:
             nx.write_gml(self._graph, str(self._skills_file))
             return True
         except Exception as exc:
-            logger.error("_save_graph failed: %s", exc)
+            logger.error("_save_graph failed: %s", exc, exc_info=True)
             return False
     
     def add_skill_path(self, goal: str, steps: List[str]) -> bool:
@@ -258,7 +258,7 @@ class MemoryManager:
             logger.debug("Added skill: %s (%d steps)", goal, len(steps))
             return True
         except Exception as exc:
-            logger.error("add_skill_path failed: %s", exc)
+            logger.error("add_skill_path failed: %s", exc, exc_info=True)
             return False
     
     def get_skill_path(self, goal: str) -> List[str]:
@@ -272,7 +272,8 @@ class MemoryManager:
                 for s in successors:
                     steps.append(self._graph.nodes[s].get("label", s))
             return steps
-        except Exception:
+        except Exception as exc:
+            logger.error("get_skill_path failed: %s", exc, exc_info=True)
             return []
     
     def find_similar_goal(self, query: str) -> Optional[str]:
@@ -330,7 +331,8 @@ class MemoryManager:
                     (key, value, category),
                 )
             return True
-        except Exception:
+        except Exception as e:
+            logger.error("set_preference failed: %s", e, exc_info=True)
             return False
     
     def get_preference(self, key: str) -> Optional[str]:
@@ -341,7 +343,8 @@ class MemoryManager:
                     "SELECT value FROM preferences WHERE key = ?", (key,)
                 ).fetchone()
                 return row[0] if row else None
-        except Exception:
+        except Exception as e:
+            logger.error("get_preference failed: %s", e, exc_info=True)
             return None
     
     def get_all_preferences(self) -> Dict[str, str]:
@@ -350,7 +353,8 @@ class MemoryManager:
             with sqlite3.connect(str(self._db_path)) as conn:
                 rows = conn.execute("SELECT key, value FROM preferences").fetchall()
                 return {r[0]: r[1] for r in rows}
-        except Exception:
+        except Exception as e:
+            logger.error("get_all_preferences failed: %s", e, exc_info=True)
             return {}
     
     def record_skill_usage(self, tool_name: str) -> bool:
@@ -377,7 +381,7 @@ class MemoryManager:
             logger.debug("📈 Skill Reinforced: %s", tool_name)
             return True
         except Exception as e:
-            logger.error("Failed to record skill: %s", e)
+            logger.error("Failed to record skill: %s", e, exc_info=True)
             return False
     
     def get_skill_stats(self) -> Dict[str, Any]:
@@ -395,7 +399,8 @@ class MemoryManager:
                     r[0]: {"usage_count": r[1], "last_used": r[2]} 
                     for r in rows
                 }
-        except Exception:
+        except Exception as e:
+            logger.error("get_skill_stats failed: %s", e, exc_info=True)
             return {}
     
     # =========================================================================
@@ -412,7 +417,8 @@ class MemoryManager:
                 )
             logger.info("Security: %s -> %s", trigger, action)
             return True
-        except Exception:
+        except Exception as e:
+            logger.error("log_security_event failed: %s", e, exc_info=True)
             return False
     
     def is_blocked(self, trigger: str) -> bool:
@@ -424,7 +430,8 @@ class MemoryManager:
                     (trigger,),
                 ).fetchone()
                 return row is not None
-        except Exception:
+        except Exception as e:
+            logger.error("is_blocked failed: %s", e, exc_info=True)
             return False
     
     # =========================================================================
@@ -492,6 +499,41 @@ class MemoryManager:
             pass
         
         return stats
+
+    def check_db_health(self) -> Dict[str, bool]:
+        """Check health of all memory layers.
+        
+        Returns:
+            Dict with status for 'episodic', 'procedural', 'sql'.
+            Values are True (healthy) or False (unhealthy).
+        """
+        health = {
+            "episodic": False,
+            "procedural": False,
+            "sql": False
+        }
+        
+        # Check Episodic (Chroma)
+        if self._episodes:
+            try:
+                self._episodes.count()
+                health["episodic"] = True
+            except Exception:
+                pass
+                
+        # Check Procedural (NetworkX)
+        if self._graph is not None:
+             health["procedural"] = True
+             
+        # Check SQL
+        try:
+            with sqlite3.connect(str(self._db_path)) as conn:
+                conn.execute("SELECT 1").fetchone()
+                health["sql"] = True
+        except Exception:
+            pass
+            
+        return health
 
 
 
