@@ -241,6 +241,15 @@ def write_file(path: str, content: str, overwrite: bool = False) -> str:
     Raises:
         FileExistsError: If file exists and overwrite is False.
     """
+    # 🔒 LAYER 4: Security Audit Log
+    try:
+        from core.services import ServiceRegistry  # RIPPLE FIX
+        mem = ServiceRegistry.get("memory")
+        if mem:
+            mem.log_security_event("file_write", f"Writing to: {path}")
+    except Exception:
+        pass  # Fail safe, don't block the tool
+    
     try:
         p = _validate_path(path)
         
@@ -354,6 +363,15 @@ def move_file(src: str, dst: str) -> str:
     Returns:
         Success message.
     """
+    # 🔒 LAYER 4: Security Audit Log
+    try:
+        from core.services import ServiceRegistry  # RIPPLE FIX
+        mem = ServiceRegistry.get("memory")
+        if mem:
+            mem.log_security_event("file_move", f"Moving: {src} -> {dst}")
+    except Exception:
+        pass  # Fail safe, don't block the tool
+    
     try:
         src_p = _validate_path(src, must_exist=True)
         dst_p = _validate_path(dst)
@@ -436,6 +454,15 @@ def delete_file(path: str, confirm: bool = False) -> str:
         raise ValueError(
             "Security Error: Wildcards (*?) not allowed in delete path"
         )
+    
+    # 🔒 LAYER 4: Security Audit Log
+    try:
+        from core.services import ServiceRegistry  # RIPPLE FIX
+        mem = ServiceRegistry.get("memory")
+        if mem:
+            mem.log_security_event("file_delete", f"Deleting: {path}")
+    except Exception:
+        pass  # Fail safe, don't block the tool
     
     try:
         p = _validate_path(path, must_exist=True)

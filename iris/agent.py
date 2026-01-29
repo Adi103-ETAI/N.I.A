@@ -73,15 +73,16 @@ import json
 from pathlib import Path
 
 def _load_iris_config() -> dict:
-    """Load IRIS configuration from external files.
+    """Load IRIS configuration from centralized ROOT/config/iris/.
     
     Returns:
         Dictionary with intent keywords and vision prompt.
     """
-    config_dir = Path(__file__).parent / "config"
+    # Centralized config path: iris -> ROOT (1 level up via .parents[1])
+    config_dir = Path(__file__).resolve().parents[1] / "config" / "iris"
     config = {}
     
-    vision_config_path = Path(__file__).parent.parent / "config" / "iris" / "triggers.json"
+    vision_config_path = config_dir / "triggers.json"
     try:
         with open(vision_config_path, "r", encoding="utf-8") as f:
             vision_cfg = json.load(f)
@@ -94,7 +95,7 @@ def _load_iris_config() -> dict:
         config["screen_keywords"] = ["screen", "window", "monitor", "display"]
         config["webcam_keywords"] = ["camera", "webcam", "photo", "picture"]
     
-    # Load vision prompt template
+    # Load vision prompt template from centralized config
     prompt_path = config_dir / "prompt.txt"
     if prompt_path.exists():
         with open(prompt_path, "r", encoding="utf-8") as f:
@@ -296,7 +297,7 @@ class IrisAgent:
         # Step 1: Extract user text
         user_input = self._extract_user_input(input_data)
         
-        if not self._initialized or not self._llm:
+        if not self._initialized:
             # === ROOT FIX: Specific Error Message ===
             if not os.getenv("NVIDIA_API_KEY"):
                 response = "❌ IRIS Setup Error: NVIDIA_API_KEY not found in environment. Please check your .env file."
@@ -311,7 +312,7 @@ class IrisAgent:
             intent_func = self._detect_intent(user_input)
             
             if intent_func is not None:
-                print("👁️ 📸 IRIS: Capturing visual data...")
+                logger.debug("👁️ 📸 IRIS: Capturing visual data...")
                 result = intent_func()
                 
                 # Check if tool returned an error
@@ -336,7 +337,7 @@ class IrisAgent:
         
         # Step 4: Encode image and run inference
         try:
-            print("👁️ 🤔 IRIS: Analyzing image...")
+            logger.debug("👁️ 🤔 IRIS: Analyzing image...")
             
             b64_image = self._encode_image(path)
             if not b64_image:
@@ -466,7 +467,7 @@ class IrisAgent:
     @property
     def is_ready(self) -> bool:
         """Check if IRIS is ready."""
-        return self._initialized and self._llm is not None
+        return self._initialized
 
 
 # =============================================================================

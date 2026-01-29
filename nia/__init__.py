@@ -80,7 +80,7 @@ if TYPE_CHECKING:
 # Package Metadata
 # =============================================================================
 
-__version__ = "2.5.2"
+__version__ = "3.0.0"
 __author__ = "NIA Team"
 
 __all__ = [

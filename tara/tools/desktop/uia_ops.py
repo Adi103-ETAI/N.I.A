@@ -48,8 +48,9 @@ settings = get_settings()
 # =============================================================================
 
 def _load_config() -> dict:
-    """Load UIA configuration from JSON."""
-    config_path = Path(__file__).parent.parent.parent / "config" / "tara" / "uia.json"
+    """Load UIA configuration from centralized ROOT/config/tara/."""
+    # Path: desktop -> tools -> tara -> ROOT (4 levels up via .parents[3])
+    config_path = Path(__file__).resolve().parents[3] / "config" / "tara" / "uia.json"
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)

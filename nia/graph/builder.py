@@ -117,8 +117,12 @@ class NIAGraph:
         self.enable_persistence = enable_persistence and _HAS_CHECKPOINTER
         
         try:
-            from core.memory import get_memory_manager
-            self.memory = get_memory_manager()
+            from core.services import ServiceRegistry
+            self.memory = ServiceRegistry.get("memory")
+            if self.memory is None:
+                # Fallback: create and register if engine hasn't done it yet
+                from core.memory import get_memory_manager
+                self.memory = get_memory_manager()
         except Exception:
             self.memory = None
             logger.debug("MemoryManager not available for skill tracking")
@@ -367,11 +371,8 @@ class NIAGraph:
 
 
 # =============================================================================
-# Module-level Singleton
+# ServiceRegistry Integration
 # =============================================================================
-
-_graph_instance: Optional[NIAGraph] = None
-
 
 def get_graph(
     model_type: str = "smart",
@@ -380,29 +381,40 @@ def get_graph(
     enable_persistence: bool = True,
     force_new: bool = False,
 ) -> NIAGraph:
-    """Get or create the NIA graph singleton.
+    """Get or create the NIAGraph via ServiceRegistry.
+    
+    The NIAGraph is registered as "graph" in the ServiceRegistry.
+    If not yet registered, it will be created and registered automatically.
     
     Args:
         model_type: Type of model to use ('smart' or 'fast').
         temperature: Sampling temperature.
         state_db_path: Path to SQLite database for persistence.
         enable_persistence: Whether to enable conversation persistence.
-        force_new: If True, create a new instance.
+        force_new: If True, create a new instance (replaces existing).
         
     Returns:
         NIAGraph instance.
     """
-    global _graph_instance
+    from core.services import ServiceRegistry
     
-    if _graph_instance is None or force_new:
-        _graph_instance = NIAGraph(
+    graph = ServiceRegistry.get("graph")
+    
+    if graph is None or force_new:
+        # Close existing graph if forcing new
+        if graph is not None and force_new:
+            graph.close()
+        
+        graph = NIAGraph(
             model_type=model_type,
             temperature=temperature,
             state_db_path=state_db_path,
             enable_persistence=enable_persistence,
         )
+        ServiceRegistry.register("graph", graph)
+        logger.info("NIAGraph registered in ServiceRegistry")
     
-    return _graph_instance
+    return graph
 
 
 # =============================================================================

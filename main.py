@@ -31,28 +31,6 @@ except ImportError:
 
 
 # =============================================================================
-# Logging Configuration (Uses Centralized Logger)
-# =============================================================================
-
-def setup_logging(debug: bool = False) -> None:
-    """Configure logging using centralized logger module."""
-    # Import here to avoid circular imports
-    from core.logger import setup_logger
-    
-    # Initialize the main logger (also sets up file handler)
-    console_level = logging.DEBUG if debug else logging.INFO
-    setup_logger("MAIN", console_level=console_level)
-    
-    # Silence noisy third-party libraries
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("vosk").setLevel(logging.ERROR)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("asyncio").setLevel(logging.WARNING)
-    logging.getLogger("PIL").setLevel(logging.WARNING)
-
-
-# =============================================================================
 # UI Helper Functions
 # =============================================================================
 
@@ -112,11 +90,12 @@ async def main() -> int:
     
     args = parser.parse_args()
     
-    # Setup logging BEFORE any other imports
-    setup_logging(debug=args.debug)
+    # Initialize global logging BEFORE any other imports
+    # This ensures all modules pick up the correct debug level
+    from core.logger import init_logging, setup_logger
+    init_logging(debug=args.debug)
     
     # Get logger for this module
-    from core.logger import setup_logger
     logger = setup_logger("MAIN")
     
     # Status check mode

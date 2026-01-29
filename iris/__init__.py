@@ -33,6 +33,8 @@ except ImportError:
     is_sentry_running = None  # type: ignore
 
 
+__version__ = "3.0.0"
+
 __all__ = [
     "IrisAgent",
     "run_iris_agent",

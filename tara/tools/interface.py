@@ -216,7 +216,7 @@ def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
     all_tools: List[StructuredTool] = []
     
     # =========================================================================
-    # Phase 1: Core Tools (tara/tools/*.py)
+    # Phase 1: Core Tools (tara/tools/*.py and tara/tools/**/*.py)
     # =========================================================================
     
     # Get the tara.tools package path
@@ -227,19 +227,36 @@ def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
         logger.error(f"Cannot access tara.tools package: {e}")
         return []
     
-    # Iterate all modules in the package
-    for importer, module_name, is_pkg in pkgutil.iter_modules(package_path):
-        # Skip non-tool modules
-        if module_name in SKIP_MODULES:
-            continue
+    # Helper function to discover tools from a module path
+    def discover_from_path(base_path, prefix=""):
+        """Recursively discover tools from a package path."""
+        discovered = []
+        for importer, module_name, is_pkg in pkgutil.iter_modules(base_path):
+            full_module_name = f"{prefix}{module_name}" if prefix else module_name
+            
+            # Skip non-tool modules
+            if module_name in SKIP_MODULES:
+                continue
+            
+            if is_pkg:
+                # Recursively scan sub-packages (desktop/, system/, etc.)
+                try:
+                    subpkg_name = f"tara.tools.{full_module_name}"
+                    subpkg = importlib.import_module(subpkg_name)
+                    if hasattr(subpkg, "__path__"):
+                        sub_tools = discover_from_path(subpkg.__path__, f"{full_module_name}.")
+                        discovered.extend(sub_tools)
+                except Exception as e:
+                    logger.debug(f"Could not scan subpackage {full_module_name}: {e}")
+            else:
+                # Discover tools from this module
+                module_tools = _discover_module_tools(full_module_name)
+                discovered.extend(module_tools)
         
-        # Skip sub-packages (only want .py files)
-        if is_pkg:
-            continue
-        
-        # Discover tools from this module
-        module_tools = _discover_module_tools(module_name)
-        all_tools.extend(module_tools)
+        return discovered
+    
+    # Discover all tools (including subdirectories)
+    all_tools = discover_from_path(package_path)
     
     core_count = len(all_tools)
     

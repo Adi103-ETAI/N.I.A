@@ -1,5 +1,6 @@
 """Central definition for the NIA assistant persona."""
 
+import random
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
@@ -58,15 +59,26 @@ class PersonaProfile:
     )
 
     def persona_prompt(self) -> str:
-        """Return the base persona prompt text used for all reasoning."""
+        """Return the base persona prompt text used for all reasoning.
+        
+        Uses 80/20 dynamic title selection: 80% Director, 20% random alias.
+        """
         rules = " ".join(self.additional_rules.values())
-        alias_text = ", ".join(self.owner_aliases)
+        
+        # 80/20 Dynamic Title Selection
+        if random.random() < 0.8:
+            current_title = "Director"
+        else:
+            # Pick from aliases excluding "Director" to ensure variety
+            alias_options = [a for a in self.owner_aliases if a != "Director"]
+            current_title = random.choice(alias_options) if alias_options else "Director"
         
         return (
             f"You are {self.name}, {self.role} dedicated to helping {self.owner}. "
             f"{self.introduction_policy} "
             f"When you do introduce yourself, say \"{self.identity_statement}\". "
-            f"Maintain a {self.voice} tone. Address the user with respectful variety using names like: {alias_text}. "
+            f"Maintain a {self.voice} tone. "
+            f"For this response, you MUST address the user specifically as '{current_title}' to maintain the vibe. "
             f"\n\n{self.unified_identity_rules}\n\n"
             f"ADDITIONAL GUIDELINES: {rules}"
         )

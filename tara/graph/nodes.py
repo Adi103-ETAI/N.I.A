@@ -219,7 +219,7 @@ def _parse_llama_tool_calls(content: str) -> List[Dict[str, Any]]:
     if not content or "<|python_tag|>" not in content:
         return tool_calls
     
-    logger.info("[ROBUST PARSER] Detected <|python_tag|> in response, parsing...")
+    logger.debug("[ROBUST PARSER] Detected <|python_tag|> in response, parsing...")
     
     # Extract all JSON objects from the content
     json_candidates = _extract_json_objects(content)
@@ -366,7 +366,7 @@ def reasoner(state: TaraState) -> TaraStateUpdate:
                 # Inject parsed tool calls into the AIMessage
                 response.tool_calls = parsed_calls
                 has_tool_calls = True
-                logger.info(f"[REASONER] Fallback parser found {len(parsed_calls)} tool call(s)")
+                logger.debug(f"[REASONER] Fallback parser found {len(parsed_calls)} tool call(s)")
         
         logger.debug(f"LLM response: {response.content[:100] if response.content else 'Tool call'}...")
         logger.info(f"[REASONER] tool_calls_pending={has_tool_calls}")
@@ -462,6 +462,35 @@ async def tool_executor(state: TaraState) -> TaraStateUpdate:
     tool_messages = await asyncio.gather(*tasks)
     
     logger.info(f"[TOOL_EXECUTOR] ✓ Completed {len(tool_messages)} tool execution(s)")
+    
+    # 🧠 LAYER 3: Learn successful tool chains (Procedural Memory)
+    # Check if tools actually ran and succeeded (no "❌" in output)
+    if tool_messages and all("❌" not in getattr(m, 'content', '') for m in tool_messages):
+        try:
+            # RIPPLE FIX: Local import to avoid circular dependency issues
+            from core.services import ServiceRegistry
+            from langchain_core.messages import HumanMessage  # RIPPLE: For type check
+
+            memory_svc = ServiceRegistry.get("memory")
+            
+            # 🎯 GOAL FALLBACK: If user_goal is None, extract from last human message
+            user_goal = state.get("user_goal")
+            if not user_goal:
+                messages = state.get("messages", [])
+                for msg in reversed(messages):
+                    if isinstance(msg, HumanMessage):
+                        user_goal = getattr(msg, 'content', '')[:100]  # Truncate to 100 chars
+                        break
+            
+            # Ensure memory service is active AND we have a derived goal
+            if memory_svc and user_goal:
+                # Extract tool names from the original tool_calls list
+                tool_names = [tc.get("name") for tc in tool_calls if tc.get("name")]
+                if tool_names:
+                    memory_svc.add_skill_path(user_goal, tool_names)
+                    logger.info(f"🧠 [SKILL] Learned sequence for '{user_goal[:50]}': {tool_names}")
+        except Exception as e:
+            logger.warning(f"🧠 [SKILL] Failed to save skill path: {e}")
     
     # Update context based on tool results
     context_updates = _extract_context_from_results(tool_messages)

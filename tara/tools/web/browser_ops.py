@@ -215,16 +215,26 @@ class AsyncBrowserManager:
         return self._initialized and self._browser is not None
 
 
-# Global manager instance
-_browser_manager: Optional[AsyncBrowserManager] = None
-
+# =============================================================================
+# ServiceRegistry Integration
+# =============================================================================
 
 def get_browser_manager() -> AsyncBrowserManager:
-    """Get or create the async browser manager singleton."""
-    global _browser_manager
-    if _browser_manager is None:
-        _browser_manager = AsyncBrowserManager()
-    return _browser_manager
+    """Get or create the AsyncBrowserManager via ServiceRegistry.
+    
+    The AsyncBrowserManager is registered as "browser" in the ServiceRegistry.
+    If not yet registered, it will be created and registered automatically.
+    This ensures only one instance exists per session while enabling 
+    centralized lifecycle management.
+    """
+    from core.services import ServiceRegistry
+    
+    manager = ServiceRegistry.get("browser")
+    if manager is None:
+        manager = AsyncBrowserManager()
+        ServiceRegistry.register("browser", manager)
+        logger.info("AsyncBrowserManager registered in ServiceRegistry")
+    return manager
 
 
 # =============================================================================

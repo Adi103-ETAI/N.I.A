@@ -40,8 +40,6 @@ from typing import TYPE_CHECKING, Optional, Tuple
 from core.logger import setup_logger
 import asyncio
 import aioconsole
-import asyncio
-import aioconsole
 from core.services import ServiceRegistry
 from core.event_bus import get_event_bus
 
@@ -256,6 +254,9 @@ class NIAAssistant:
                 from core.memory import get_memory_manager
                 self.memory = get_memory_manager()
                 
+                # Register in ServiceRegistry for centralized access
+                ServiceRegistry.register("memory", self.memory)
+                
                 # Housekeeping: vacuum SQLite databases on startup
                 if hasattr(self.memory, '_vacuum_memory_db'):
                     self.memory._vacuum_memory_db()
@@ -426,10 +427,10 @@ class NIAAssistant:
             if text_lower.startswith(wake_word):
                 cleaned = text[len(wake_word):].strip()
                 if cleaned:
-                    print(f"⚡ One-Shot: '{cleaned}'")
+                    self.logger.debug(f"⚡ One-Shot: '{cleaned}'")
                     text = cleaned
                 else:
-                    print("🎤 Wake Word Detected. Listening...")
+                    self.logger.debug("🎤 Wake Word Detected. Listening...")
                     self.speak("Yes, Director?")
                     return "Listening..."
                 break
@@ -470,11 +471,15 @@ class NIAAssistant:
             # Store Episodes (Layer 1) - store original text, not augmented
             if self.memory:
                 try:
-                    # 🌊 ASYNC MEMORY CALLS
+                    # 🌊 ASYNC MEMORY CALLS with loud logging
+                    user_preview = text[:50] if len(text) > 50 else text
+                    response_preview = response[:50] if len(response) > 50 else response
+                    self.logger.debug(f"🧠 [ENGINE] Saving to Memory -> User: '{user_preview}...' | AI: '{response_preview}...'")
                     await self.memory.store_episode(text, role="user")
                     await self.memory.store_episode(response, role="assistant")
+                    self.logger.debug("🧠 [ENGINE] Memory save complete!")
                 except Exception as e:
-                    self.logger.debug(f"Memory storage failed: {e}")
+                    self.logger.error(f"🧠 [ENGINE] Memory storage FAILED: {e}")
             
             return response
         except ConnectionError as exc:
@@ -528,7 +533,7 @@ class NIAAssistant:
         is_ghost, layer = self._check_ghost_state()
         if is_ghost:
             self.logger.debug(f"Ghost mode active (layer {layer}), audio suppressed")
-            print(f"🤫 [Ghost Mode: Audio Suppressed] NIA: {text}")
+            self.logger.debug(f"🤫 [Ghost Mode: Audio Suppressed] NIA: {text}")
             return
         
         if text:
@@ -931,9 +936,15 @@ class NIAAssistant:
         time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # Status Flags (Strict 3 chars: "ON ", "OFF")
+        # 🔧 FIX: Use ServiceRegistry instead of dead instance variables
+        from core.services import ServiceRegistry
+        
+        nola_manager = ServiceRegistry.get("voice")
+        iris_manager = ServiceRegistry.get("iris")
+        
         s_nia  = "ON " 
-        s_nola = "ON " if self._nola else "OFF"
-        s_iris = "ON " if self.sentry_thread else "OFF"
+        s_nola = "ON " if (nola_manager and getattr(nola_manager, 'is_active', lambda: False)()) else "OFF"
+        s_iris = "ON " if iris_manager else "OFF"
         s_tara = "ON "
         
         # API Keys (Strict 7 chars)
@@ -960,6 +971,6 @@ class NIAAssistant:
         print(f"│ • TOOLS (TARA): [{s_tara}]       │                                    │")
         print("├─────────────────────────────┼────────────────────────────────────┤")
         print(f"│ 💾 MEMORY                   │ 🔐 SECURITY KEYS                   │")
-        print(f"│  RAM : {mem_str:<21}│  NVIDIA API: [{k_nv:<7}]            │")
-        print(f"│  DISK: {dsk_free:<21}│  OPENAI API: [{k_oa:<7}]            │")
+        print(f"│  RAM : {mem_str:<21}│  NVIDIA API: [{k_nv:<7}]             │")
+        print(f"│  DISK: {dsk_free:<21}│  OPENAI API: [{k_oa:<7}]             │")
         print("└─────────────────────────────┴────────────────────────────────────┘\n")

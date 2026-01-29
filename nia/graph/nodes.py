@@ -320,10 +320,10 @@ async def general_assistant(state: AgentState) -> AgentState:
         # Get messages
         messages = state.get("messages", [])
         
-        # === IDENTITY INJECTION (ROOT FIX) ===
-        # Prepend System Prompt if not present
-        prompts = get_prompts()
-        system_prompt_text = prompts.get("identity", "You are N.I.A.")
+        # === IDENTITY INJECTION (UNIFIED PERSONA) ===
+        # Use PersonaProfile for consistent identity across all nodes
+        from persona.profile import get_system_prompt
+        system_prompt_text = get_system_prompt()
         
         # Handle message list updates similar to sync...
         if _HAS_LANGCHAIN_MESSAGES:
@@ -507,7 +507,7 @@ def route_from_tara(state: AgentState) -> str:
     
     # If TARA specifically requested to go back to supervisor (Active Listening)
     if next_agent == "supervisor" or next_agent == AGENT_SUPERVISOR:
-        logger.info("🔄 TARA -> Supervisor: Active Listening loop")
+        logger.debug("🔄 TARA -> Supervisor: Active Listening loop")
         return AGENT_SUPERVISOR
     
     # Default: End the turn

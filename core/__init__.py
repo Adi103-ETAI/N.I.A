@@ -49,3 +49,7 @@ def __getattr__(name: str):
         return print_system_status
     raise AttributeError(f"module 'core' has no attribute '{name}'")
 
+
+__version__ = "3.0.0"
+
+

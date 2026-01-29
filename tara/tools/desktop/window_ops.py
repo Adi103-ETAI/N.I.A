@@ -53,9 +53,11 @@ except ImportError:
 
 try:
     import win32com.client
+    import pythoncom
     _HAS_WIN32COM = True
 except ImportError:
     _HAS_WIN32COM = False
+    pythoncom = None  # type: ignore
     logger.warning("win32com not available - fallback focus disabled")
 
 
@@ -163,12 +165,17 @@ def focus_window(alias: str) -> str:
         # the user "recently" pressed a key
         if _HAS_WIN32COM:
             try:
-                shell = win32com.client.Dispatch("WScript.Shell")
-                shell.SendKeys('%')  # Simulate Alt key press
-                time.sleep(0.05)
-                win32gui.SetForegroundWindow(hwnd)
-                logger.debug(f"Alt-key fallback succeeded for {alias}")
-                return f"✅ Brought {alias} to front"
+                # COM thread initialization for non-main threads
+                pythoncom.CoInitialize()
+                try:
+                    shell = win32com.client.Dispatch("WScript.Shell")
+                    shell.SendKeys('%')  # Simulate Alt key press
+                    time.sleep(0.05)
+                    win32gui.SetForegroundWindow(hwnd)
+                    logger.debug(f"Alt-key fallback succeeded for {alias}")
+                    return f"✅ Brought {alias} to front"
+                finally:
+                    pythoncom.CoUninitialize()
             except Exception as e2:
                 logger.warning(f"Alt-key fallback failed: {e2}")
         
@@ -408,10 +415,15 @@ def show_desktop() -> str:
         return "❌ win32com not available"
     
     try:
-        shell = win32com.client.Dispatch("Shell.Application")
-        shell.MinimizeAll()
-        logger.debug("Minimized all windows (show desktop)")
-        return "🖥️ Desktop shown (all windows minimized)"
+        # COM thread initialization for non-main threads
+        pythoncom.CoInitialize()
+        try:
+            shell = win32com.client.Dispatch("Shell.Application")
+            shell.MinimizeAll()
+            logger.debug("Minimized all windows (show desktop)")
+            return "🖥️ Desktop shown (all windows minimized)"
+        finally:
+            pythoncom.CoUninitialize()
     except Exception as e:
         return f"❌ Show desktop failed: {e}"
 

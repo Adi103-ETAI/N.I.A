@@ -8,7 +8,7 @@
 ║    ██╔██╗ ██║   ██║   ███████║     ─────────────────────────────          ║
 ║    ██║╚██╗██║   ██║   ██╔══██║     CLASSIFICATION: DIRECTOR_LEVEL_ACCESS  ║
 ║    ██║ ╚████║██╗██║██╗██║  ██║     DEVELOPER: SentArc Labs                ║
-║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 3.0.0                         ║
+║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 3.0.0 (Velocity Edition)      ║
 ║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 ```
@@ -37,6 +37,10 @@
 - 👁️ **Vision Hardening** — Robust initialization and explicit API key validation
 - 🔥 **Multi-Provider LLM Hot-Swap** — Switch between NVIDIA, OpenAI, Groq, Ollama
 - 🏛️ **ServiceContainer DI** — Clean dependency injection (Legacy container removed)
+- 🛡️ **Diamond Security** — 3-Tier File System Protection with Path Traversal Locks
+- 🔇 **Silent Core** — "Zero-Print" policy with Global Debug Mode (-d)
+- 🧩 **Plugin Architecture** — Hot-loadable external tools support (ROOT/plugins/)
+- 🏛️ **Unified Config** — Centralized configuration management (ROOT/config/)
 
 ---
 
@@ -235,7 +239,7 @@ DEBUG=false                   # Enable debug logging
 ## 📖 Usage
 
 ```bash
-# Text mode (default)
+# Standard Run (Silent Mode)
 python main.py
 
 # Voice mode
@@ -244,8 +248,8 @@ python main.py --voice
 # Always listening (no wake word)
 python main.py --voice --no-wake
 
-# Debug mode
-python main.py --debug
+# Debug Run (Verbose Logs)
+python main.py -d
 
 # Check version
 python main.py --version

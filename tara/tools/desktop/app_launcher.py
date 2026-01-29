@@ -64,9 +64,9 @@ except ImportError:
 # =============================================================================
 
 def _load_app_config() -> dict:
-    """Load app configuration from external JSON file."""
-    # Fix: Point to correctly located config file in root config/
-    config_path = Path(__file__).parent.parent.parent / "config" / "apps.json"
+    """Load app configuration from centralized ROOT/config/tara/."""
+    # Path: desktop -> tools -> tara -> ROOT (3 levels up via .parents[3])
+    config_path = Path(__file__).resolve().parents[3] / "config" / "tara" / "apps.json"
     
     if not config_path.exists():
         # Auto-create default if missing

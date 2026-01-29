@@ -117,8 +117,6 @@ class NOLAManager:
         self.bus = get_event_bus()
         
         # Thread control
-        
-        # Thread control
         self._is_running = False
         self._is_paused = False
         self._user_paused = False  # Track if user explicitly paused (vs TTS auto-pause)
@@ -245,7 +243,7 @@ class NOLAManager:
                     break
                 
                 time.sleep(1.0)
-                logger.info("Restarting STT stream...")
+                logger.debug("Restarting STT stream...")
             except Exception as e:
                 retry_count += 1
                 logger.error(f"STT stream error (attempt {retry_count}/{max_retries}): {e}", exc_info=True)
@@ -255,7 +253,7 @@ class NOLAManager:
                     break
                 
                 time.sleep(1.0)
-                logger.info("Restarting STT stream...")
+                logger.debug("Restarting STT stream...")
     
     def _handle_input(self, text: str) -> None:
         """Handle recognized speech based on current state.
@@ -438,25 +436,29 @@ class NOLAManager:
 
 
 # =============================================================================
-# Singleton Instance
+# ServiceRegistry Integration
 # =============================================================================
 
-_nola_manager_instance: Optional[NOLAManager] = None
-
-
 def get_nola_manager(config: Optional[NOLAConfig] = None) -> NOLAManager:
-    """Get or create the NOLAManager singleton.
+    """Get or create the NOLAManager via ServiceRegistry.
+    
+    The NOLAManager is registered as "voice" in the ServiceRegistry.
+    If not yet registered, it will be created and registered automatically.
     
     Args:
         config: Configuration (only used on first call).
         
     Returns:
-        The singleton NOLAManager instance.
+        The NOLAManager instance.
     """
-    global _nola_manager_instance
-    if _nola_manager_instance is None:
-        _nola_manager_instance = NOLAManager(config=config)
-    return _nola_manager_instance
+    from core.services import ServiceRegistry
+    
+    manager = ServiceRegistry.get("voice")
+    if manager is None:
+        manager = NOLAManager(config=config)
+        ServiceRegistry.register("voice", manager)
+        logger.info("NOLAManager registered in ServiceRegistry as 'voice'")
+    return manager
 
 
 # =============================================================================

@@ -536,20 +536,26 @@ class MemoryManager:
         return health
 
 
-
 # =============================================================================
-# Singleton
+# ServiceRegistry Integration
 # =============================================================================
-
-_instance: Optional[MemoryManager] = None
-
 
 def get_memory_manager(**kwargs) -> MemoryManager:
-    """Get or create the MemoryManager singleton."""
-    global _instance
-    if _instance is None:
-        _instance = MemoryManager(**kwargs)
-    return _instance
+    """Get or create the MemoryManager via ServiceRegistry.
+    
+    The MemoryManager is registered as "memory" in the ServiceRegistry.
+    If not yet registered, it will be created and registered automatically.
+    This provides backward compatibility while enabling centralized lifecycle management.
+    """
+    from core.services import ServiceRegistry
+    
+    memory = ServiceRegistry.get("memory")
+    if memory is None:
+        memory = MemoryManager(**kwargs)
+        ServiceRegistry.register("memory", memory)
+        logger.info("MemoryManager registered in ServiceRegistry")
+    return memory
 
 
 __all__ = ["MemoryManager", "get_memory_manager"]
+

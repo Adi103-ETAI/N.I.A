@@ -288,10 +288,10 @@ class SentryThread(threading.Thread):
     def run(self) -> None:
         """Main sentry loop - monitors for SECURITY and COMMS events."""
         if self.headless:
-            print("👁️", end="", flush=True)
+            logger.debug("👁️ ✅ Sentry: Starting in Stealth Mode")
             logger.info("👁️ ✅ Sentry: ONLINE (Stealth Mode - No Window)")
         else:
-            print("👁️", end="", flush=True)
+            logger.debug("👁️ ✅ Sentry: Starting monitoring...")
             logger.info("👁️ ✅ Sentry: ONLINE (Monitoring...)")
         
         self._loop = asyncio.new_event_loop()
@@ -420,7 +420,7 @@ def stop_sentry() -> bool:
         _sentry_thread.stop()
         _sentry_thread.join(timeout=2)
         _sentry_thread = None
-        print("👁️ ❌ Sentry: OFFLINE")
+        logger.info("👁️ ❌ Sentry: OFFLINE")
         return True
     
     return False
