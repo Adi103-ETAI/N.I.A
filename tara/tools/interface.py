@@ -111,24 +111,26 @@ def _create_tool_from_function(func: Callable) -> Optional[StructuredTool]:
         first_line = docstring.strip().split("\n")[0].strip()
         description = first_line if first_line else f"Execute {func.__name__}"
         
+        # Extract security level (Metadata Tagging Phase 1)
+        # Default to "host_standard" if not tagged
+        sec_level = getattr(func, "_security_level", "host_standard")
+        tool_metadata = {"security_level": sec_level}
+
+        # [ROOT FIX] 1. Calculate Async Status first
         is_async = inspect.iscoroutinefunction(func)
         
-        if is_async:
-            # ASYNC FUNCTIONS: Use coroutine= parameter
-            # This tells LangChain to await the function when called
-            logger.debug(f"Registering async tool: {func.__name__}")
-            tool = StructuredTool.from_function(
-                coroutine=func,  # KEY FIX: coroutine= for async
-                name=func.__name__,
-                description=description,
-            )
-        else:
-            # SYNC FUNCTIONS: Use func= parameter
-            tool = StructuredTool.from_function(
-                func=func,
-                name=func.__name__,
-                description=description,
-            )
+        # Log registration
+        logger.debug(f"Registering tool: {func.__name__} [Async={is_async}, Sec={sec_level}]")
+
+        # 4. Create Tool safely (Handling Sync vs Async)
+        tool = StructuredTool.from_function(
+            func=func if not is_async else None,
+            coroutine=func if is_async else None,
+            name=func.__name__,
+            description=description,
+            # [METADATA] Inject Security Tag
+            metadata=tool_metadata,
+        )
         
         return tool
         

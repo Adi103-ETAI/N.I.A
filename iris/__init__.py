@@ -1,6 +1,37 @@
-"""IRIS Package - Intelligent Recognition & Image System.
+"""I.R.I.S. - Intelligent Recognition & Image System.
 
-Vision specialist agent for NIA.
+Vision specialist agent for NIA providing screen analysis and visual understanding.
+
+Architecture:
+    ┌─────────────────────────────────────────────────────────────────┐
+    │                        IRIS System                              │
+    │                                                                 │
+    │  [Screenshot] → [Vision LLM] → [Analysis/OCR/UI Detection]      │
+    │                      │                                          │
+    │          ┌───────────┼───────────┐                              │
+    │          ▼           ▼           ▼                              │
+    │     [Describe]   [Find UI]   [Extract Text]                     │
+    │      Screen      Elements      (OCR)                            │
+    └─────────────────────────────────────────────────────────────────┘
+
+Components:
+    - IrisAgent: Main vision agent with tool bindings
+    - capture_screen: Take screenshot and return base64
+    - capture_screen_raw: Take screenshot and return PIL Image
+    - Sentry: Background screen monitoring (start_sentry/stop_sentry)
+
+Usage:
+    # Via NIA (recommended):
+    NIA routes vision queries to IRIS automatically
+    
+    # Direct usage:
+    from iris import IrisAgent, capture_screen
+    
+    agent = IrisAgent()
+    if agent.is_ready:
+        result = agent.analyze("What's on my screen?")
+
+Version: 3.0.0
 """
 from __future__ import annotations
 
@@ -33,7 +64,7 @@ except ImportError:
     is_sentry_running = None  # type: ignore
 
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 __all__ = [
     "IrisAgent",

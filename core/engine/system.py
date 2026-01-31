@@ -1,6 +1,6 @@
 """N.I.A. Core Engine - Central Nervous System.
 
-v2.5.2 "Velocity" - The Orchestrator
+v3.0 "Velocity" - The Orchestrator (Modular Edition)
     Contains the NIAAssistant class that coordinates all components:
     - NOLA (Voice I/O) with wake word detection
     - NIA Supervisor (LLM-based routing) with SafeLLM protection
@@ -21,7 +21,7 @@ Data Flow:
         v
     Memory Storage -> Response -> NOLA/Terminal -> User
 
-Version: 2.5.2
+Version: 3.0.0
 """
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ import json
 import os
 import time
 import sys
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Tuple
 
@@ -40,7 +39,7 @@ from typing import TYPE_CHECKING, Optional, Tuple
 from core.logger import setup_logger
 import asyncio
 import aioconsole
-from core.services import ServiceRegistry
+from core.registry import ServiceRegistry
 from core.event_bus import get_event_bus
 
 # =============================================================================
@@ -77,7 +76,7 @@ def _load_engine_config() -> dict:
     Returns:
         Dictionary with command vocabularies and help text.
     """
-    config_dir = Path(__file__).parent.parent / "config" / "tara"
+    config_dir = Path(__file__).parent.parent.parent / "config" / "tara"
     config = {}
     
     # Load command vocabularies
@@ -163,6 +162,7 @@ class NIAAssistant:
         # Components (Now managed via ServiceRegistry)
         self._nia_process: Optional[callable] = None
         self._running: bool = False
+        self._nola: Optional[object] = None  # Reference for direct control
         
         # 4-Layer Memory System (initialized in _init_nia, typed for IDE)
         self.memory: Optional['MemoryManager'] = None
@@ -174,12 +174,21 @@ class NIAAssistant:
         self._ghost_cache: Tuple[bool, int] = (False, 0)
         self._ghost_last_check: float = 0.0
 
+        # Sentry thread reference (for legacy reflex handlers)
+        self.sentry_thread: Optional[object] = None
+
         # Input Queue for serialization (Voice + Text)
         self.processing_queue = asyncio.Queue()
         
         # Event Bus Subscription
         self.bus = get_event_bus()
         self.bus.subscribe("voice_command", self._handle_voice_command)
+        
+        # 🌊 Event-Driven Logger Init
+        from core.logger import start_log_listener
+        start_log_listener()
+        
+        # NOTE: Warden init moved to start() - fixes core→tara coupling
 
         # UI Lock (Semaphore) for Turn-Taking
         # Green (Set) = Ready for Input
@@ -187,6 +196,7 @@ class NIAAssistant:
         self.ui_lock = asyncio.Event()
         self.ui_lock.set()  # Start Green
 
+        # Command Registry - Built from commands.py
         self.system_commands = {}
         self._init_command_registry()
 
@@ -200,28 +210,9 @@ class NIAAssistant:
 
     def _init_command_registry(self) -> None:
         """Initialize the strict command dispatch registry."""
-        self.system_commands = {
-            "reload": self._cmd_reload,
-            "debug": self._cmd_toggle_debug,
-            "mic": self._cmd_mic_control,
-            "ghost": self._cmd_ghost_control,
-            "exit": self._cmd_shutdown,
-            "quit": self._cmd_shutdown,
-            # Standby Triggers (Soft Stop)
-            "bye": self._cmd_standby,
-            "goodbye": self._cmd_standby,
-            "goodnight": self._cmd_standby,
-            "standby": self._cmd_standby,
-            "sleep": self._cmd_standby,
-            "rest": self._cmd_standby,
-            
-            "help": self._handle_help,     # Keeping existing helper
-            "status": self._handle_status, # Keeping existing helper
-            "clear": self._handle_clear,   # Keeping existing helper
-            "cls": self._handle_clear,
-            "history": self._handle_history,
-            "reset": self._handle_reset,
-        }
+        # Import command registry builder from commands module
+        from .commands import build_command_registry
+        self.system_commands = build_command_registry(self)
     
     def _init_nia(self) -> bool:
         """Initialize the NIA brain (LangGraph reasoning engine).
@@ -247,8 +238,6 @@ class NIAAssistant:
             t2 = time.perf_counter()
             self.logger.debug(f"Step 3: Process function assigned ({t2-t1:.2f}s)")
             
-            # self.logger.info("🧠 NIA brain initialized (total: %.2fs)", t2-t0)
-            
             # 🌊 LAZY LOAD: 4-Layer Memory System (ChromaDB, SQLite, NetworkX)
             try:
                 from core.memory import get_memory_manager
@@ -264,14 +253,13 @@ class NIAAssistant:
                 self.logger.warning("Memory init failed (continuing without): %s", mem_exc)
                 self.memory = None
             
-            # 🔌 PLUGIN SYSTEM: Start hot-reload watcher (v3.0)
-            try:
-                from tara.plugin_system.watcher import start_plugin_watcher
-                self._plugin_observer = start_plugin_watcher()
-            except ImportError as plugin_exc:
-                self.logger.debug("Plugin watcher not available: %s", plugin_exc)
-            except Exception as plugin_exc:
-                self.logger.warning("Plugin watcher failed (continuing without): %s", plugin_exc)
+            # 🔌 PLUGIN SYSTEM: Get from ServiceRegistry (v3.1 Decoupled)
+            plugins = ServiceRegistry.get("plugins")
+            if plugins:
+                self._plugin_observer = plugins
+                self.logger.debug("Plugin watcher attached from ServiceRegistry")
+            else:
+                self.logger.debug("Plugin watcher not registered (optional)")
             
             return True
         except ImportError as exc:
@@ -282,7 +270,15 @@ class NIAAssistant:
     # NOLA is now initialized externally and registered as "voice"
     # IRIS is now initialized externally and registered as "vision"
     
-    # NOTE: IRIS is now managed by NIAGraph singleton - no separate init needed
+    def _init_sentry(self) -> None:
+        """Initialize IRIS Sentry (placeholder for legacy reflex handler)."""
+        try:
+            vision = ServiceRegistry.get("vision")
+            if vision and hasattr(vision, "start_sentry"):
+                vision.start_sentry()
+                self.sentry_thread = vision
+        except Exception as e:
+            self.logger.warning(f"Sentry init failed: {e}")
     
     def _check_ghost_state(self) -> Tuple[bool, int]:
         """Check if ghost mode is active by reading state file.
@@ -328,8 +324,6 @@ class NIAAssistant:
         self._ghost_cache = state
         self._ghost_last_check = time.time()
     
-    # Sentry moved to external IRIS agent
-    
     async def start(self) -> bool:
         """Start the assistant and initialize all components."""
         
@@ -348,6 +342,14 @@ class NIAAssistant:
             return False
         
         # NOTE: IRIS is initialized via NIAGraph singleton (no duplicate needed)
+        
+        # 🛡️ Operation Iron Cage: Warden via ServiceRegistry (v3.1 Decoupled)
+        warden = ServiceRegistry.get("security")
+        if warden and hasattr(warden, "start"):
+            warden.start()
+            self.logger.debug("Warden security service started via ServiceRegistry")
+        else:
+            self.logger.debug("Warden not registered (security features limited)")
         
         self._running = True
         
@@ -375,28 +377,25 @@ class NIAAssistant:
         """
         self._running = False
         
-        # Stop IRIS Sentry
-        try:
-            from iris.sentry import stop_sentry
-            stop_sentry()
-        except ImportError:
-            pass
+        # Stop IRIS Sentry via ServiceRegistry (v3.1 Decoupled)
+        vision = ServiceRegistry.get("vision")
+        if vision and hasattr(vision, "stop_sentry"):
+            vision.stop_sentry()
+        else:
+            self.logger.debug("Vision service not available for sentry stop")
         
-        if self._running:
-            # Stop NOLA via Registry
-            nola = ServiceRegistry.get("voice")
-            if nola:
-                self.logger.info("🔇 Stopping NOLA...")
-                nola.stop()
+        # Stop NOLA via Registry
+        nola = ServiceRegistry.get("voice")
+        if nola:
+            self.logger.info("🔇 Stopping NOLA...")
+            nola.stop()
         
-        # Stop Plugin Watcher (v3.0)
-        if self._plugin_observer:
-            try:
-                from tara.plugin_system.watcher import stop_plugin_watcher
-                stop_plugin_watcher(self._plugin_observer)
-                self._plugin_observer = None
-            except Exception as e:
-                self.logger.debug(f"Plugin watcher stop error: {e}")
+        # Stop Plugin Watcher via ServiceRegistry (v3.1 Decoupled)
+        plugins = ServiceRegistry.get("plugins")
+        if plugins and hasattr(plugins, "stop"):
+            plugins.stop()
+            self._plugin_observer = None
+            self.logger.debug("Plugin watcher stopped via ServiceRegistry")
         
         self.logger.info("👋 NIA shutdown complete")
     
@@ -418,8 +417,6 @@ class NIAAssistant:
         """
         if not text:
             return ""
-        
-        # The wake-up-only signal handling is now done exclusively in NOLA before calling process()
         
         # Handle wake words in commands
         text_lower = text.lower().strip()
@@ -468,10 +465,9 @@ class NIAAssistant:
             # Run Async NIA process directly (Native)
             response = await self._nia_process(augmented_input, thread_id=self.thread_id)
             
-            # Store Episodes (Layer 1) - store original text, not augmented
+            # Store Episodes (Layer 1)
             if self.memory:
                 try:
-                    # 🌊 ASYNC MEMORY CALLS with loud logging
                     user_preview = text[:50] if len(text) > 50 else text
                     response_preview = response[:50] if len(response) > 50 else response
                     self.logger.debug(f"🧠 [ENGINE] Saving to Memory -> User: '{user_preview}...' | AI: '{response_preview}...'")
@@ -555,9 +551,7 @@ class NIAAssistant:
         print("\033[0m", end="", flush=True) # Reset terminal colors
         
         # Show Splash Screen (High-Quality ASCII)
-        import os
-
-        from interface.banner import BANNER
+        from interface.cli.banner import BANNER
         print("\n" + BANNER + "\n")
         
         if not await self.start():
@@ -567,7 +561,6 @@ class NIAAssistant:
         ui_print = print
         if TerminalUI:
             try:
-                # Basic instantiation if needed for other things, but input is replaced
                 _ui = TerminalUI()
                 ui_print = _ui.print
             except:
@@ -593,7 +586,6 @@ class NIAAssistant:
                      # Delegate Sentry toggle to Vision Service
                      vision = ServiceRegistry.get("vision")
                      if vision and hasattr(vision, "start_sentry"):
-                          # Only log once periodically? keeping simple
                           pass 
                 
                 # Wait for next input (Voice OR Text)
@@ -676,301 +668,8 @@ class NIAAssistant:
             return self.system_commands[verb](cmd)
             
         # 2. Reflex Layer (Fuzzy Hardware Control)
-        if self._handle_reflex(cmd):
+        from .commands import dispatch_reflex
+        if dispatch_reflex(self, cmd):
             return True
             
         return False
-        
-    # =========================================================================
-    # COMMAND HANDLERS (Priority 0)
-    # =========================================================================
-
-    def _cmd_toggle_debug(self, text: str) -> bool:
-        """Handle debug on/off."""
-        if "on" in text:
-            from core.logger import set_console_level, logging
-            set_console_level(logging.DEBUG)
-            self.debug = True
-            print("🐞 Debug Mode: ON")
-        elif "off" in text:
-            from core.logger import set_console_level, logging
-            set_console_level(logging.WARNING)
-            self.debug = False
-            print("🐞 Debug Mode: OFF")
-        else:
-            print(f"Debug is {'ON' if self.debug else 'OFF'}")
-        return True
-
-    def _cmd_reload(self, text: str) -> bool:
-        """Handle system reload (restart script)."""
-        print("[SYSTEM] 🔄 Reloading...")
-        self.stop()
-        
-        # Mark reload in env to detect on startup
-        os.environ["NIA_RELOADED"] = "1"
-        
-        # Re-execute the current script
-        os.execv(sys.executable, ['python'] + sys.argv)
-        return True
-
-    def _cmd_ghost_control(self, text: str) -> bool:
-        """Handle ghost mode on/off."""
-        from core.config import settings
-        state_file = settings.GHOST_STATE_FILE
-        try:
-             # Default to False
-             new_state = False
-             
-             if "on" in text:
-                 new_state = True
-             elif "off" in text:
-                 new_state = False
-             else:
-                 # Toggle if no arg? No, safer to just show status
-                 active, layer = self._check_ghost_state()
-                 print(f"👻 Ghost Mode: {'ON' if active else 'OFF'} (Layer {layer})")
-                 return True
-
-             # Write state
-             layer_val = 3 if new_state else 0
-             with open(state_file, "w") as f:
-                 json.dump({"active": new_state, "layer": layer_val}, f)
-             
-             # 🌊 RIPPLE FIX: Update cache immediately to reflect change
-             self._update_ghost_cache((new_state, layer_val))
-             
-             if new_state:
-                 print("👻 [Ghost Mode ENABLED] Audio Suppressed. Stealth Sentry Active.")
-             else:
-                 print("👻 [Ghost Mode DISABLED] Systems Normal.")
-                 
-        except Exception as e:
-            self.logger.error(f"Ghost toggle failed: {e}")
-            print(f"⚠️ Failed to toggle Ghost Mode: {e}")
-            
-        return True
-        
-    def _cmd_mic_control(self, text: str) -> bool:
-        """Handle mic on/off."""
-        if "off" in text or "mute" in text:
-            nola = ServiceRegistry.get("voice")
-            if nola:
-                nola.pause_listening()
-            try:
-                from main import print_mic_off
-                print_mic_off()
-            except ImportError:
-                print("🔇 Microphone Paused")
-            self.speak("Voice system offline.")
-            return True
-            
-        if "on" in text or "unmute" in text:
-            if not self.voice_mode:
-                self.voice_mode = True
-                if self.voice_mode: # We still track the boolean preference
-                    print("[SYSTEM] 🎙️ Voice System ONLINE")
-                    self.speak("Voice system online.")
-            else:
-                nola = ServiceRegistry.get("voice")
-                if nola:
-                    nola.resume_listening()
-                print("[SYSTEM] 🎙️ Voice System ONLINE")
-                self.speak("Voice system online.")
-            return True
-            
-        print("Usage: mic [on|off]")
-        return True
-
-    def _cmd_shutdown(self, text: str) -> bool:
-        """Handle exit/quit."""
-        if self.voice_mode:
-            self.speak("Goodbye!")
-        print("👋 Goodbye!")
-        self._running = False
-        return True
-
-    def _cmd_standby(self, text: str) -> bool:
-        """
-        Enter Standby Mode (End current conversation, keep system running).
-        Acts as a 'Soft Stop' - the system stops processing the current turn 
-        and returns to the main loop to await the next wake word.
-        """
-        # Visual Feedback
-        print("\n[SYSTEM] 🌙 Entering Standby Mode...")
-
-        # Audio Feedback (Non-blocking if possible, or short)
-        self.speak("Standing by, Director.")
-
-        # Return True to signal 'Command Handled'. 
-        # This prevents the text from falling through to the AI Brain.
-        return True
-
-    def _handle_help(self, text: str) -> bool:
-        self._print_help()
-        return True
-
-    def _handle_clear(self, text: str) -> bool:
-        subprocess.run(['cls' if os.name == 'nt' else 'clear'], shell=True, check=False)
-        return True
-
-    def _handle_status(self, text: str) -> bool:
-        self._print_status()
-        return True
-
-    def _handle_prefs(self, text: str) -> bool:
-        try:
-            import json
-            prefs = self.memory.get_all_preferences() if self.memory else {}
-            if prefs:
-                print(f"\n📋 [User Preferences]:\n{json.dumps(prefs, indent=2)}\n")
-            else:
-                print("\n📋 No preferences saved yet.\n")
-        except Exception as exc:
-            print(f"⚠️  Could not retrieve preferences: {exc}")
-        return True
-
-    def _handle_history(self, text: str) -> bool:
-        """Handle history commands (view/clear)."""
-        # "history clear" or "clear history"
-        if "clear" in text:
-            try:
-                from nia import clear_conversation
-                if clear_conversation(self.thread_id):
-                    print("✅ History cleared")
-                else:
-                    print("⚠️  Could not clear history")
-            except Exception as exc:
-                print(f"❌ Error: {exc}")
-            return True
-            
-        # Default: View history
-        try:
-            from nia import get_conversation_history
-            history = get_conversation_history(self.thread_id)
-            if history:
-                print(f"📜 History ({len(history)} messages):")
-                # Show last 5 interactions (10 messages roughly)
-                for msg in history[-10:]:
-                    role = getattr(msg, 'type', 'unknown')
-                    content = getattr(msg, 'content', str(msg))[:100]
-                    content = content.replace('\n', ' ')
-                    print(f"   [{role}]: {content}")
-            else:
-                print("📜 History empty")
-        except Exception as exc:
-            print(f"⚠️  Could not retrieve history: {exc}")
-        return True
-
-    def _handle_reset(self, text: str) -> bool:
-        """Handle component resets."""
-        if "audio" in text:
-            print("⚙️  Resetting audio engine...")
-            if self._nola:
-                self._nola.stop_speaking()
-                self._nola.resume_listening()
-            print("✅ Audio reset complete")
-            return True
-        return False
-         
-    # =========================================================================
-    # REFLEX HANDLERS (Priority 1 - Fuzzy)
-    # =========================================================================
-
-    def _handle_reflex(self, text: str) -> bool:
-        """Handle hardware reflex commands (mic, speaker, sentry)."""
-        cmd = text.lower()
-        
-        # 🎤 MIC CONTROL
-        # Note: 'mic on'/'mic off' are handled by strict dispatcher now.
-        # This block catches legacy variations if needed, or we can just return False.
-        # For safety/consistency with user request, we'll keep the logic but delegate to strict if match found?
-        # Actually user said "If no match, check _handle_reflex".
-        
-        if "sentry on" in cmd or "activate sentry" in cmd:
-            if not self.sentry_thread:
-                self._init_sentry()
-                print("👁️ ✅ Sentry: ONLINE")
-            else:
-                print("⚠️  Sentry is already running")
-            return True
-        
-        if "sentry off" in cmd or "deactivate sentry" in cmd:
-            if self.sentry_thread:
-                self.sentry_thread.stop()
-                self.sentry_thread = None
-                print("👁️ ❌ Sentry: OFFLINE")
-            else:
-                print("⚠️  Sentry is not active")
-            return True
-
-        # 🔇 TTS STOP
-        if "shut up" in cmd or "stop talking" in cmd or "silence" in cmd:
-             if self._nola:
-                self._nola.stop_speaking()
-             print("🔇 Silenced")
-             return True
-
-        return False
-
-    def _print_help(self) -> None:
-        """Print help information from external file."""
-        print(f"\n{_HELP_TEXT}\n")
-    
-    def _draw_bar(self, percent: float) -> str:
-        """Returns a strict 17-character progress bar string."""
-        bar_len = 10
-        filled = int((percent / 100) * bar_len)
-        bar = "█" * filled + "░" * (bar_len - filled)
-        return f"[{bar}] {percent:>3.0f}%"
-
-    def _print_status(self) -> None:
-        """Displays the Precision Aligned Dashboard (Strict Grid Layout)."""
-        import psutil
-        from datetime import datetime
-        # 1. Gather Data
-        cpu_p = psutil.cpu_percent(interval=0.1)
-        mem = psutil.virtual_memory()
-        dsk = psutil.disk_usage('/')
-        
-        # 2. Prepare Strings
-        time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Status Flags (Strict 3 chars: "ON ", "OFF")
-        # 🔧 FIX: Use ServiceRegistry instead of dead instance variables
-        from core.services import ServiceRegistry
-        
-        nola_manager = ServiceRegistry.get("voice")
-        iris_manager = ServiceRegistry.get("iris")
-        
-        s_nia  = "ON " 
-        s_nola = "ON " if (nola_manager and getattr(nola_manager, 'is_active', lambda: False)()) else "OFF"
-        s_iris = "ON " if iris_manager else "OFF"
-        s_tara = "ON "
-        
-        # API Keys (Strict 7 chars)
-        k_nv = "LINKED " if os.environ.get("NVIDIA_API_KEY") else "MISSING"
-        k_oa = "LINKED " if os.environ.get("OPENAI_API_KEY") else "MISSING"
-        # Resource Bars (Strict 17 chars)
-        bar_cpu = self._draw_bar(cpu_p)
-        bar_ram = self._draw_bar(mem.percent)
-        bar_dsk = self._draw_bar(dsk.percent)
-        
-        # Memory Strings
-        mem_used = f"{mem.used / (1024**3):.1f}"
-        mem_tot  = f"{mem.total / (1024**3):.1f}"
-        mem_str  = f"{mem_used}/{mem_tot} GB"
-        dsk_free = f"{dsk.free / (1024**3):.1f} GB Free"
-        # 3. Render Dashboard (Grid: Left=29, Right=36)
-        print("\n┌" + "─"*29 + "┬" + "─"*36 + "┐")
-        print(f"│ N.I.A. SYSTEM DASHBOARD     │ {time_str:>34} │")
-        print("├─────────────────────────────┼────────────────────────────────────┤")
-        print(f"│ 🧠 SUBSYSTEMS               │ 📊 RESOURCES                       │")
-        print(f"│ • BRAIN (NIA) : [{s_nia}]       │  CPU: {bar_cpu:<25}    │")
-        print(f"│ • VOICE (NOLA): [{s_nola}]       │  RAM: {bar_ram:<25}    │")
-        print(f"│ • SENTRY(IRIS): [{s_iris}]       │  DSK: {bar_dsk:<25}    │")
-        print(f"│ • TOOLS (TARA): [{s_tara}]       │                                    │")
-        print("├─────────────────────────────┼────────────────────────────────────┤")
-        print(f"│ 💾 MEMORY                   │ 🔐 SECURITY KEYS                   │")
-        print(f"│  RAM : {mem_str:<21}│  NVIDIA API: [{k_nv:<7}]             │")
-        print(f"│  DISK: {dsk_free:<21}│  OPENAI API: [{k_oa:<7}]             │")
-        print("└─────────────────────────────┴────────────────────────────────────┘\n")

@@ -227,7 +227,7 @@ def get_browser_manager() -> AsyncBrowserManager:
     This ensures only one instance exists per session while enabling 
     centralized lifecycle management.
     """
-    from core.services import ServiceRegistry
+    from core.registry import ServiceRegistry
     
     manager = ServiceRegistry.get("browser")
     if manager is None:

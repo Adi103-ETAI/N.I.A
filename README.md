@@ -8,7 +8,7 @@
 ║    ██╔██╗ ██║   ██║   ███████║     ─────────────────────────────          ║
 ║    ██║╚██╗██║   ██║   ██╔══██║     CLASSIFICATION: DIRECTOR_LEVEL_ACCESS  ║
 ║    ██║ ╚████║██╗██║██╗██║  ██║     DEVELOPER: SentArc Labs                ║
-║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 3.0.0 (Velocity Edition)      ║
+║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 3.1.0 (Unknown Edition)       ║
 ║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 ```
@@ -309,6 +309,6 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 **Built with ❤️ by SentArc Labs**
 
-*"N.I.A. v3.0.0"*
+*"N.I.A. v3.1.0"*
 
 </div>

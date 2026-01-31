@@ -50,6 +50,6 @@ def __getattr__(name: str):
     raise AttributeError(f"module 'core' has no attribute '{name}'")
 
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 

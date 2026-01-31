@@ -235,7 +235,7 @@ class SupervisorAgent:
             Formatted memory context string, or None if unavailable.
         """
         # Get memory from ServiceRegistry
-        from core.services import ServiceRegistry
+        from core.registry import ServiceRegistry
         memory = ServiceRegistry.get("memory")
         
         if memory is None:
@@ -341,7 +341,7 @@ class SupervisorAgent:
             user_query: The user's input message (may be None).
             ai_response: The AI's response content.
         """
-        from core.services import ServiceRegistry
+        from core.registry import ServiceRegistry
         memory = ServiceRegistry.get("memory")
         
         if memory is None:

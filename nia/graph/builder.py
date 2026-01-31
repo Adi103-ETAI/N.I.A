@@ -117,7 +117,7 @@ class NIAGraph:
         self.enable_persistence = enable_persistence and _HAS_CHECKPOINTER
         
         try:
-            from core.services import ServiceRegistry
+            from core.registry import ServiceRegistry
             self.memory = ServiceRegistry.get("memory")
             if self.memory is None:
                 # Fallback: create and register if engine hasn't done it yet
@@ -396,7 +396,7 @@ def get_graph(
     Returns:
         NIAGraph instance.
     """
-    from core.services import ServiceRegistry
+    from core.registry import ServiceRegistry
     
     graph = ServiceRegistry.get("graph")
     

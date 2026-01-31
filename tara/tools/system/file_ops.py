@@ -243,7 +243,7 @@ def write_file(path: str, content: str, overwrite: bool = False) -> str:
     """
     # 🔒 LAYER 4: Security Audit Log
     try:
-        from core.services import ServiceRegistry  # RIPPLE FIX
+        from core.registry import ServiceRegistry  # RIPPLE FIX
         mem = ServiceRegistry.get("memory")
         if mem:
             mem.log_security_event("file_write", f"Writing to: {path}")
@@ -365,7 +365,7 @@ def move_file(src: str, dst: str) -> str:
     """
     # 🔒 LAYER 4: Security Audit Log
     try:
-        from core.services import ServiceRegistry  # RIPPLE FIX
+        from core.registry import ServiceRegistry  # RIPPLE FIX
         mem = ServiceRegistry.get("memory")
         if mem:
             mem.log_security_event("file_move", f"Moving: {src} -> {dst}")
@@ -457,7 +457,7 @@ def delete_file(path: str, confirm: bool = False) -> str:
     
     # 🔒 LAYER 4: Security Audit Log
     try:
-        from core.services import ServiceRegistry  # RIPPLE FIX
+        from core.registry import ServiceRegistry  # RIPPLE FIX
         mem = ServiceRegistry.get("memory")
         if mem:
             mem.log_security_event("file_delete", f"Deleting: {path}")

@@ -101,7 +101,7 @@ from .io import (
 )
 
 # Package metadata
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 __author__ = "NIA Team"
 __all__ = [
     # Core

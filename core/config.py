@@ -15,6 +15,8 @@ Usage:
 from __future__ import annotations
 
 import os
+import platform
+import shutil
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Optional, Union
@@ -344,8 +346,8 @@ class Settings(BaseSettings):
     )
     
     BROWSER_EXECUTABLE_PATH: Optional[str] = Field(
-        default=r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
-        description="Custom browser executable path (e.g., Brave, Edge). Set to None for default Chromium.",
+        default=None,  # Dynamically resolved at runtime via get_browser_path()
+        description="Custom browser executable path. Set to None for auto-detection.",
     )
     
     # Safety Limits
@@ -510,6 +512,76 @@ def get_embedding_function() -> Any:
 
 
 # =============================================================================
+# Browser Detection (v3.1 - Cross-Platform)
+# =============================================================================
+
+def get_browser_path() -> Optional[str]:
+    """Dynamically detect browser executable path.
+    
+    Searches for browsers in this priority order:
+    1. User-configured BROWSER_EXECUTABLE_PATH (if set in .env)
+    2. Brave Browser
+    3. Google Chrome
+    4. Microsoft Edge
+    5. Firefox
+    
+    Returns:
+        Absolute path to browser executable, or None for Playwright default.
+        
+    Example:
+        >>> path = get_browser_path()
+        >>> path
+        'C:\\\\Program Files\\\\BraveSoftware\\\\Brave-Browser\\\\Application\\\\brave.exe'
+    """
+    # 1. Check if user explicitly set a path
+    user_path = settings.BROWSER_EXECUTABLE_PATH
+    if user_path and Path(user_path).exists():
+        return user_path
+    
+    # 2. Try shutil.which() for PATH-installed browsers
+    for browser_name in ["brave", "brave-browser", "chrome", "google-chrome", "msedge", "firefox"]:
+        path = shutil.which(browser_name)
+        if path:
+            return path
+    
+    # 3. Platform-specific fallback paths
+    system = platform.system()
+    
+    if system == "Windows":
+        candidates = [
+            # Brave
+            Path(os.environ.get("PROGRAMFILES", "")) / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe",
+            # Chrome
+            Path(os.environ.get("PROGRAMFILES", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+            # Edge
+            Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+        ]
+    elif system == "Darwin":  # macOS
+        candidates = [
+            Path("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+            Path("/Applications/Firefox.app/Contents/MacOS/firefox"),
+        ]
+    else:  # Linux
+        candidates = [
+            Path("/usr/bin/brave-browser"),
+            Path("/usr/bin/google-chrome"),
+            Path("/usr/bin/chromium-browser"),
+            Path("/usr/bin/firefox"),
+        ]
+    
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    
+    # 4. Return None - let Playwright use its bundled Chromium
+    return None
+
+
+# =============================================================================
 # Exports
 # =============================================================================
 
@@ -518,4 +590,5 @@ __all__ = [
     "settings",
     "get_settings",
     "get_embedding_function",
+    "get_browser_path",
 ]

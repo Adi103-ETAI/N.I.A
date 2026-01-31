@@ -451,7 +451,7 @@ def get_nola_manager(config: Optional[NOLAConfig] = None) -> NOLAManager:
     Returns:
         The NOLAManager instance.
     """
-    from core.services import ServiceRegistry
+    from core.registry import ServiceRegistry
     
     manager = ServiceRegistry.get("voice")
     if manager is None:

@@ -547,7 +547,7 @@ def get_memory_manager(**kwargs) -> MemoryManager:
     If not yet registered, it will be created and registered automatically.
     This provides backward compatibility while enabling centralized lifecycle management.
     """
-    from core.services import ServiceRegistry
+    from core.registry import ServiceRegistry
     
     memory = ServiceRegistry.get("memory")
     if memory is None:

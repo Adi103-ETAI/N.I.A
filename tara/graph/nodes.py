@@ -300,7 +300,7 @@ def _get_llm():
 # Node 1: Reasoner
 # =============================================================================
 
-def reasoner(state: TaraState) -> TaraStateUpdate:
+async def reasoner(state: TaraState) -> TaraStateUpdate:
     """
     Main reasoning node - generates tool calls using dynamic context.
     
@@ -308,7 +308,7 @@ def reasoner(state: TaraState) -> TaraStateUpdate:
         1. Builds dynamic context from current state
         2. Injects context into system prompt
         3. Binds TARA tools to LLM
-        4. Invokes LLM to decide next action
+        4. Invokes LLM to decide next action (ASYNC)
     
     Args:
         state: Current TaraState with conversation history and context.
@@ -347,8 +347,8 @@ def reasoner(state: TaraState) -> TaraStateUpdate:
         llm = _get_llm()
         llm_with_tools = llm.bind_tools(tools)
         
-        # Invoke LLM
-        response = llm_with_tools.invoke(full_messages)
+        # 🚀 ASYNC INVOKE: Non-blocking LLM call
+        response = await llm_with_tools.ainvoke(full_messages)
         
         # Check if tool calls were made
         has_tool_calls = hasattr(response, "tool_calls") and len(response.tool_calls) > 0
@@ -440,6 +440,27 @@ async def tool_executor(state: TaraState) -> TaraStateUpdate:
             return ToolMessage(content=error_msg, tool_call_id=t_id, name=t_name)
         
         try:
+            # 🛡️ SECURITY GATEKEEPER (Operation Iron Cage)
+            # Check tool metadata for security level
+            sec_level = tool.metadata.get("security_level", "host_standard")
+            
+            if sec_level == "high_risk":
+                logger.warning(f"🛡️ Warden Intercept: Forwarding '{t_name}' to Security Service.")
+                
+                # Emit to Event Bus for Warden handling
+                from core.event_bus import get_event_bus
+                bus = get_event_bus()
+                await bus.emit("security:escalation", {
+                    "tool": t_name,
+                    "args": t_args
+                })
+                
+                return ToolMessage(
+                    content="🛡️ Request forwarded to Warden for secure execution. Check logs for status.",
+                    tool_call_id=t_id,
+                    name=t_name
+                )
+            
             # Polymorphic Dispatch (Async or ThreadPool for Sync)
             # LangChain's ainvoke handles this automatically
             result = await tool.ainvoke(t_args)
@@ -468,7 +489,7 @@ async def tool_executor(state: TaraState) -> TaraStateUpdate:
     if tool_messages and all("❌" not in getattr(m, 'content', '') for m in tool_messages):
         try:
             # RIPPLE FIX: Local import to avoid circular dependency issues
-            from core.services import ServiceRegistry
+            from core.registry import ServiceRegistry
             from langchain_core.messages import HumanMessage  # RIPPLE: For type check
 
             memory_svc = ServiceRegistry.get("memory")

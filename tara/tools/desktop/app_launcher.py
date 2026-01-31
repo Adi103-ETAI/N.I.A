@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -147,9 +148,13 @@ def _get_window_title(hwnd: int) -> str:
 
 
 # =============================================================================
+from ..decorators import security_level
+
+# =============================================================================
 # Atomic Tool: launch_app
 # =============================================================================
 
+@security_level("high_risk")
 async def launch_app(app_name: str) -> str:
     """
     Launch an application by name with verification.
@@ -202,132 +207,120 @@ async def launch_app(app_name: str) -> str:
     launched_pid: Optional[int] = None
     launched = False
     
+    logger.info(f"🚀 Launching '{launch_cmd}'...")
+    
+    # === SECURE PATH RESOLUTION ===
+    # Step 1: Resolve executable path using shutil.which()
+    executable_path: Optional[str] = None
+    
+    # Check if it's an absolute path first
+    if os.path.isabs(launch_cmd) and os.path.isfile(launch_cmd):
+        executable_path = launch_cmd
+        logger.debug(f"Using absolute path: {executable_path}")
+    else:
+        # Try resolving with shutil.which()
+        exe_name = f"{launch_cmd}.exe" if not launch_cmd.endswith(".exe") else launch_cmd
+        
+        # First try with .exe extension
+        executable_path = shutil.which(exe_name)
+        
+        # If not found, try without .exe (for commands like 'notepad')
+        if not executable_path:
+            executable_path = shutil.which(launch_cmd)
+        
+        # Also check custom aliases path
+        if not executable_path and launch_cmd in CUSTOM_ALIASES:
+            alias_path = CUSTOM_ALIASES[launch_cmd]
+            if os.path.isfile(alias_path):
+                executable_path = alias_path
+            else:
+                # Try shutil.which on the alias
+                executable_path = shutil.which(alias_path)
+    
+    # === FAIL FAST: No executable found ===
+    if not executable_path:
+        logger.warning(f"❌ Executable not found in PATH: '{launch_cmd}'")
+        return f"❌ Application not found: '{app_name}' (not in PATH or custom aliases)"
+    
+    logger.debug(f"Resolved executable: {executable_path}")
+    
+    # === SECURE EXECUTION (shell=False ONLY) ===
     try:
-        logger.info(f"🚀 Launching '{launch_cmd}'...")
-        
-        # Direct execution for system apps (get real PID)
-        if app_lower in SYSTEM_APPS or app_lower.endswith(".exe"):
-            try:
-                exe_name = f"{app_lower}.exe" if not app_lower.endswith(".exe") else app_lower
-                
-                def _run_popen():
-                    return subprocess.Popen(
-                        [exe_name],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        shell=False
-                    )
-                
-                proc = await asyncio.to_thread(_run_popen)
-                
-                launched_pid = proc.pid
-                launched = True
-                launch_method = "direct"
-                logger.debug(f"Direct launch PID: {launched_pid}")
-            except FileNotFoundError:
-                logger.debug("Direct launch failed, falling back to shell...")
-        
-        # Fallback: Shell execution
-        if not launched:
-            await asyncio.to_thread(
-                subprocess.Popen,
-                f'start "" "{launch_cmd}"',
-                shell=True,
+        def _run_popen():
+            return subprocess.Popen(
+                [executable_path],  # Always list, never string
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                shell=False  # 🛡️ THE IRON BAR - NEVER TRUE
             )
-            launched = True
-            launch_method = "shell"
-            
-    except Exception as e1:
-        logger.warning(f"Subprocess failed: {e1}, trying os.startfile...")
-        try:
-            # os.startfile is blocking on Windows
-            await asyncio.to_thread(os.startfile, launch_cmd)
-            launched = True
-            launch_method = "startfile"
-        except FileNotFoundError:
-            return f"❌ Application not found: '{app_name}'"
-        except OSError as e2:
-            return f"❌ Failed to launch '{app_name}': {e2}"
+        
+        proc = await asyncio.to_thread(_run_popen)
+        launched_pid = proc.pid
+        launched = True
+        logger.debug(f"Direct launch PID: {launched_pid}")
+        
+        # === FIX 1 (The Pause) ===
+        # Give the UI time to render before any verification
+        time.sleep(2)
+        
+    except PermissionError as e:
+        logger.error(f"Permission denied launching '{executable_path}': {e}")
+        return f"❌ Permission denied: '{app_name}'"
+    except OSError as e:
+        logger.error(f"OS error launching '{executable_path}': {e}")
+        return f"❌ Failed to launch '{app_name}': {e}"
     
     if not launched:
         return f"❌ Launch failed: {app_name}"
     
-    # Verification loop: Wait for visible window
-    max_retries = settings.LAUNCH_MAX_RETRIES
-    poll_interval = settings.LAUNCH_POLL_INTERVAL
+    # === FIX 2 (Blind Faith) ===
+    # If subprocess.Popen did not raise, assume success.
+    # Don't aggressively verify PID/window immediately - apps need time.
+    
+    # Try to detect a window for registration (best effort, not required for success)
     visible_hwnd: Optional[int] = None
     window_title = ""
     
-    logger.debug(f"⏳ Verifying launch (PID={launched_pid}, retries={max_retries})...")
-    
-    for attempt in range(1, max_retries + 1):
-        # Method 1: PID-based verification
-        if launched_pid and _HAS_WIN32:
+    if launched_pid and _HAS_WIN32:
+        try:
             hwnds = await asyncio.to_thread(_get_hwnds_from_pid, launched_pid)
             for hwnd in hwnds:
                 is_visible = await asyncio.to_thread(_is_window_visible, hwnd)
                 if is_visible:
                     visible_hwnd = hwnd
                     window_title = await asyncio.to_thread(_get_window_title, hwnd)
-                    logger.debug(f"✅ PID {launched_pid} -> HWND {hwnd} (attempt {attempt})")
                     break
-            if visible_hwnd:
-                break
-        
-        # Method 2: New window detection
-        if not visible_hwnd and _HAS_PYGETWINDOW:
-            try:
-                def _scan_new_windows():
-                    current = [
-                        w for w in gw.getAllWindows()
-                        if app_lower in w.title.lower() and w.title.strip()
-                    ]
-                    for win in current:
-                        win_key = (win.title, win._hWnd)
-                        if win_key not in pre_launch_windows and win.visible:
-                            return win._hWnd, win.title
-                    return None, None
-                
-                h, t = await asyncio.to_thread(_scan_new_windows)
-                if h:
-                    visible_hwnd = h
-                    window_title = t
-                    logger.debug(f"✅ NEW window detected: '{t}'")
-                    break
-            except Exception as e:
-                logger.debug(f"Window check error: {e}")
-        
-        if visible_hwnd:
-            break
-        
-        await asyncio.sleep(poll_interval)
+        except Exception:
+            pass
     
-    # Final result
+    # Register if we found a window
     if visible_hwnd:
-        # Register in window registry
         alias = registry.register(
             app_name=app_name,
             hwnd=visible_hwnd,
             pid=launched_pid,
             title=window_title,
         )
+        
+        # === FIX 3 (Focus) ===
+        # Try to focus the window so it's ready for interaction
+        try:
+            from .window_ops import focus_window
+            focus_window(alias)
+        except Exception:
+            pass  # Focus is best-effort
+        
         return f"✅ Launched: {app_name} [alias: {alias}]"
     else:
-        # Kill zombie process if we have PID
-        if launched_pid:
-            try:
-                await asyncio.create_subprocess_exec(
-                    "taskkill", "/F", "/PID", str(launched_pid),
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                logger.warning(f"💀 Killed zombie PID {launched_pid}")
-            except Exception:
-                pass
-        
-        return f"❌ {app_name} started but window never appeared"
+        # No window found yet, but app was launched successfully
+        # Register with PID only (no HWND yet)
+        alias = registry.register(
+            app_name=app_name,
+            hwnd=None,
+            pid=launched_pid,
+            title=f"{app_name} (pending)",
+        )
+        return f"✅ Launched: {app_name} [alias: {alias}]. Window may still be loading."
 
 
 # =============================================================================

@@ -32,9 +32,10 @@ LLM Usage Tips:
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import time
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 from core.logger import setup_logger
 
@@ -59,12 +60,56 @@ except ImportError:
 
 
 # =============================================================================
+# Input Parsing Helpers (LLM Robustness)
+# =============================================================================
+
+def _parse_int(value: Union[int, str, float], name: str = "value") -> int:
+    """Safely parse an integer from various input types.
+    
+    Handles stringified inputs like '500' or '500.0' from LLM.
+    """
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            # Try to parse as float first (handles '500.0')
+            return int(float(value.strip()))
+        except (ValueError, AttributeError):
+            raise ValueError(f"Cannot parse {name}: '{value}' is not a valid integer")
+    raise ValueError(f"Cannot parse {name}: expected int, got {type(value).__name__}")
+
+
+def _parse_keys(keys: Union[List[str], Tuple[str, ...], str]) -> Tuple[str, ...]:
+    """Safely parse keys from various input types.
+    
+    Handles stringified lists like "['ctrl', 's']" from LLM.
+    """
+    if isinstance(keys, tuple):
+        return keys
+    if isinstance(keys, list):
+        return tuple(keys)
+    if isinstance(keys, str):
+        try:
+            parsed = ast.literal_eval(keys)
+            if isinstance(parsed, (list, tuple)):
+                return tuple(parsed)
+            else:
+                return (keys,)
+        except (ValueError, SyntaxError):
+            # Plain string key like "enter"
+            return (keys,)
+    return (str(keys),)
+
+
+# =============================================================================
 # Atomic Tool: mouse_click
 # =============================================================================
 
 async def mouse_click(
-    x: int,
-    y: int,
+    x: Union[int, str],
+    y: Union[int, str],
     button: str = "left",
     double: bool = False,
 ) -> str:
@@ -75,7 +120,9 @@ async def mouse_click(
     
     Args:
         x: Horizontal pixel coordinate from the left edge of the screen.
+           Accepts string like '500' for LLM compatibility.
         y: Vertical pixel coordinate from the top edge of the screen.
+           Accepts string like '300' for LLM compatibility.
         button: Mouse button to click. Options: "left", "right", "middle".
                 Default is "left".
         double: If True, performs a double-click instead of single-click.
@@ -91,7 +138,7 @@ async def mouse_click(
         >>> await mouse_click(500, 300)
         "✅ Clicked at (500, 300)"
         
-        >>> await mouse_click(100, 200, button="right")
+        >>> await mouse_click("100", "200", button="right")
         "✅ Clicked (right) at (100, 200)"
         
         >>> await mouse_click(400, 400, double=True)
@@ -104,6 +151,13 @@ async def mouse_click(
     """
     if not _HAS_PYAUTOGUI:
         return "❌ pyautogui not installed. Run: pip install pyautogui"
+    
+    # === ROBUST PARSING (LLM Compatibility) ===
+    try:
+        x = _parse_int(x, "x")
+        y = _parse_int(y, "y")
+    except ValueError as e:
+        return f"❌ {e}"
     
     def _do_click():
         try:
@@ -126,11 +180,11 @@ async def mouse_click(
 # =============================================================================
 
 async def mouse_drag(
-    start_x: int,
-    start_y: int,
-    end_x: int,
-    end_y: int,
-    duration: float = 0.5,
+    start_x: Union[int, str],
+    start_y: Union[int, str],
+    end_x: Union[int, str],
+    end_y: Union[int, str],
+    duration: Union[float, str] = 0.5,
 ) -> str:
     """
     Drag the mouse from one point to another (Async).
@@ -138,10 +192,10 @@ async def mouse_drag(
     ONE ACTION: Click-hold at start position, move to end position, release.
     
     Args:
-        start_x: Starting horizontal pixel coordinate.
-        start_y: Starting vertical pixel coordinate.
-        end_x: Ending horizontal pixel coordinate.
-        end_y: Ending vertical pixel coordinate.
+        start_x: Starting horizontal pixel coordinate. Accepts string for LLM.
+        start_y: Starting vertical pixel coordinate. Accepts string for LLM.
+        end_x: Ending horizontal pixel coordinate. Accepts string for LLM.
+        end_y: Ending vertical pixel coordinate. Accepts string for LLM.
         duration: Time in seconds for the drag motion. Default is 0.5 seconds.
                   Slower drags (higher duration) are more reliable.
     
@@ -155,7 +209,7 @@ async def mouse_drag(
         >>> await mouse_drag(100, 100, 500, 500)
         "✅ Dragged from (100, 100) to (500, 500)"
         
-        >>> await mouse_drag(0, 0, 200, 200, duration=1.0)
+        >>> await mouse_drag("0", "0", "200", "200", duration=1.0)
         "✅ Dragged from (0, 0) to (200, 200)"
     
     LLM Usage Tip:
@@ -167,6 +221,17 @@ async def mouse_drag(
     """
     if not _HAS_PYAUTOGUI:
         return "❌ pyautogui not installed. Run: pip install pyautogui"
+    
+    # === ROBUST PARSING (LLM Compatibility) ===
+    try:
+        start_x = _parse_int(start_x, "start_x")
+        start_y = _parse_int(start_y, "start_y")
+        end_x = _parse_int(end_x, "end_x")
+        end_y = _parse_int(end_y, "end_y")
+        if isinstance(duration, str):
+            duration = float(duration.strip())
+    except ValueError as e:
+        return f"❌ {e}"
     
     def _do_drag():
         try:
@@ -302,18 +367,19 @@ async def keyboard_type(text: str, interval: float = 0.05) -> str:
 # Atomic Tool: keyboard_hotkey
 # =============================================================================
 
-async def keyboard_hotkey(*keys: str) -> str:
+async def keyboard_hotkey(keys: Union[List[str], Tuple[str, ...], str]) -> str:
     """
     Press a keyboard shortcut combination (Async).
     
     ONE ACTION: Press and release multiple keys simultaneously as a hotkey.
     
     Args:
-        *keys: Variable number of key names to press together.
-               Common modifiers: "ctrl", "alt", "shift", "win"
-               Common keys: "a"-"z", "0"-"9", "enter", "tab", "escape", "space"
-               Function keys: "f1"-"f12"
-               Navigation: "up", "down", "left", "right", "home", "end"
+        keys: List, Tuple, or string of key names to press together.
+              Accepts stringified lists like "['ctrl', 's']" for LLM compatibility.
+              Common modifiers: "ctrl", "alt", "shift", "win"
+              Common keys: "a"-"z", "0"-"9", "enter", "tab", "escape", "space"
+              Function keys: "f1"-"f12"
+              Navigation: "up", "down", "left", "right", "home", "end"
     
     Returns:
         Success message showing the key combination, or error message if failed.
@@ -322,34 +388,38 @@ async def keyboard_hotkey(*keys: str) -> str:
         No exceptions raised - errors are returned as strings.
     
     Example:
-        >>> await keyboard_hotkey("ctrl", "c")
+        >>> await keyboard_hotkey(["ctrl", "c"])
         "⌨️ Pressed: Ctrl+C"
         
-        >>> await keyboard_hotkey("ctrl", "shift", "escape")
+        >>> await keyboard_hotkey("['ctrl', 'shift', 'escape']")
         "⌨️ Pressed: Ctrl+Shift+Escape"
         
-        >>> await keyboard_hotkey("alt", "f4")
-        "⌨️ Pressed: Alt+F4"
-        
-        >>> await keyboard_hotkey("win", "d")
-        "⌨️ Pressed: Win+D"
+        >>> await keyboard_hotkey("enter")
+        "⌨️ Pressed: Enter"
     
     LLM Usage Tip:
         Common hotkeys:
-        - Copy: ("ctrl", "c")
-        - Paste: ("ctrl", "v")
-        - Undo: ("ctrl", "z")
-        - Save: ("ctrl", "s")
-        - Select All: ("ctrl", "a")
-        - Close Window: ("alt", "f4")
-        - Task Manager: ("ctrl", "shift", "escape")
-        - Show Desktop: ("win", "d")
+        - Copy: ["ctrl", "c"]
+        - Paste: ["ctrl", "v"]
+        - Undo: ["ctrl", "z"]
+        - Save: ["ctrl", "s"]
+        - Select All: ["ctrl", "a"]
+        - Close Window: ["alt", "f4"]
+        - Task Manager: ["ctrl", "shift", "escape"]
+        - Show Desktop: ["win", "d"]
     """
     if not _HAS_PYAUTOGUI:
         return "❌ pyautogui not installed. Run: pip install pyautogui"
     
     if not keys:
         return "❌ No keys provided"
+    
+    # === ROBUST PARSING (LLM Compatibility) ===
+    keys = _parse_keys(keys)
+    
+    # Final validation
+    if not keys or not all(isinstance(k, str) for k in keys):
+        return "❌ Invalid keys format. Expected list/tuple of strings."
     
     def _do_hotkey():
         try:

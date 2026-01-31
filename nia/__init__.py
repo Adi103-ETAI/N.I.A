@@ -41,6 +41,10 @@ LAZY LOADING:
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from core.logger import setup_logger
+
+# Module logger
+logger = setup_logger("NIA")
 
 # =============================================================================
 # Lightweight Imports (loaded immediately - no heavy dependencies)
@@ -80,7 +84,7 @@ if TYPE_CHECKING:
 # Package Metadata
 # =============================================================================
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 __author__ = "NIA Team"
 
 __all__ = [
@@ -214,32 +218,28 @@ def check_dependencies() -> dict:
 
 
 def print_status() -> None:
-    """Print NIA system status."""
+    """Print NIA system status (v3.1: Uses logger instead of print)."""
     deps = check_dependencies()
     
-    print("\n" + "=" * 50)
-    print("  N.I.A. System Status")
-    print("=" * 50)
+    logger.info("\n" + "=" * 50)
+    logger.info("  N.I.A. System Status")
+    logger.info("=" * 50)
     
     for name, available in deps.items():
         status = "✓ Available" if available else "✗ Missing"
-        print(f"  {name}: {status}")
-    
-    print()
+        logger.info(f"  {name}: {status}")
     
     if all(deps.values()):
-        print("  ✅ All dependencies installed. NIA is ready!")
+        logger.info("  ✅ All dependencies installed. NIA is ready!")
     else:
         missing = [k for k, v in deps.items() if not v]
-        print(f"  ⚠️  Missing: {', '.join(missing)}")
+        logger.warning(f"  ⚠️  Missing: {', '.join(missing)}")
         api_keys = [k for k in missing if "API_KEY" in k]
         if api_keys:
-            print(f"     Set {', '.join(api_keys)} in .env file")
+            logger.warning(f"     Set {', '.join(api_keys)} in .env file")
         pkg_missing = [k for k in missing if "API_KEY" not in k]
         if pkg_missing:
-            print(f"     Install packages: pip install {' '.join(pkg_missing)}")
-    
-    print()
+            logger.warning(f"     Install packages: pip install {' '.join(pkg_missing)}")
 
 
 # =============================================================================
@@ -247,10 +247,10 @@ def print_status() -> None:
 # =============================================================================
 
 def demo():
-    """Run a quick demo of the NIA system."""
+    """Run a quick demo of the NIA system (v3.1: Uses logger)."""
     print_status()
     
-    print("NIA Demo - Type 'exit' to quit\n")
+    logger.info("NIA Demo - Type 'exit' to quit\n")
     
     while True:
         try:
@@ -258,18 +258,18 @@ def demo():
             if not user_input:
                 continue
             if user_input.lower() in ("exit", "quit"):
-                print("Goodbye!")
+                logger.info("Goodbye!")
                 break
             
             # This triggers lazy loading of the graph module
             response = process_input(user_input)
-            print(f"\nNIA: {response}\n")
+            logger.info(f"\nNIA: {response}\n")
             
         except KeyboardInterrupt:
-            print("\nGoodbye!")
+            logger.info("\nGoodbye!")
             break
         except Exception as exc:
-            print(f"\nError: {exc}\n")
+            logger.error(f"\nError: {exc}\n")
 
 
 if __name__ == "__main__":

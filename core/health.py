@@ -1,6 +1,23 @@
 """N.I.A. Health Check Module.
 
-Handles dependency checking and system status reporting.
+Provides dependency verification and system status reporting for the N.I.A. system.
+
+Components:
+    - check_dependencies(): Returns dict of all module availability
+    - print_system_status(): Prints formatted status with banner
+
+Usage:
+    from core.health import check_dependencies, print_system_status
+    
+    # Quick check
+    deps = check_dependencies()
+    if deps["nia"] and deps["nola"]:
+        print("Core systems ready!")
+    
+    # Full status display
+    print_system_status()  # Shows banner + detailed status
+
+Version: 3.0.0
 """
 from __future__ import annotations
 
@@ -82,7 +99,7 @@ def print_system_status() -> None:
     """Print detailed system status with banner."""
     # Import banner
     try:
-        from interface.banner import BANNER
+        from interface.cli.banner import BANNER
     except ImportError:
         BANNER = "N.I.A. - Neural Intelligence Assistant"
     

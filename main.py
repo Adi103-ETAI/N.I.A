@@ -92,8 +92,12 @@ async def main() -> int:
     
     # Initialize global logging BEFORE any other imports
     # This ensures all modules pick up the correct debug level
-    from core.logger import init_logging, setup_logger
+    from core.logger import init_logging, setup_logger, set_debug_mode
     init_logging(debug=args.debug)
+    
+    if args.debug:
+        set_debug_mode(True)
+        print(">> [SYSTEM] Debug Mode Enabled: Showing all internal logs.")
     
     # Get logger for this module
     logger = setup_logger("MAIN")
@@ -112,7 +116,7 @@ async def main() -> int:
     
     # Import and run engine
     # Import components for Dependency Injection
-    from core.services import ServiceRegistry
+    from core.registry import ServiceRegistry
     from core.engine import NIAAssistant
     from nola.manager import get_nola_manager, NOLAConfig
     from iris.agent import IrisAgent
@@ -152,14 +156,66 @@ async def main() -> int:
         # Initialize IrisAgent
         iris = IrisAgent()
         if iris.is_ready:
-            ServiceRegistry.register("vision", iris)
+            ServiceRegistry.register("vision", iris, description="Screen analysis and OCR")
             logger.info("👁️ Registered Service: 'vision' -> IrisAgent")
         else:
              logger.warning("Vision Service not ready (check API key)")
     except Exception as e:
         logger.warning(f"Failed to load Vision Service: {e}")
 
+    # 3. Security Service (Warden) - v3.1 Decoupled
+    try:
+        from tara.security.warden import start_warden_service
+        
+        # Create a wrapper that matches the ServiceRegistry pattern
+        class WardenServiceWrapper:
+            """Wrapper to adapt Warden to ServiceRegistry lifecycle."""
+            def __init__(self):
+                self._started = False
+            
+            def start(self):
+                if not self._started:
+                    start_warden_service()
+                    self._started = True
+            
+            def stop(self):
+                # Warden doesn't need explicit stop
+                self._started = False
+        
+        warden = WardenServiceWrapper()
+        ServiceRegistry.register("security", warden, description="Security escalation handler", priority=10)
+        logger.info("🛡️ Registered Service: 'security' -> WardenService")
+    except ImportError as e:
+        logger.debug(f"Warden not available (optional): {e}")
+
+    # 4. Plugin System (Hot-Reload Watcher) - v3.1 Decoupled
+    try:
+        from tara.plugin_system.watcher import start_plugin_watcher, stop_plugin_watcher
+        
+        class PluginWatcherWrapper:
+            """Wrapper to adapt Plugin Watcher to ServiceRegistry lifecycle."""
+            def __init__(self):
+                self._observer = None
+            
+            def start(self):
+                if not self._observer:
+                    self._observer = start_plugin_watcher()
+            
+            def stop(self):
+                if self._observer:
+                    stop_plugin_watcher(self._observer)
+                    self._observer = None
+        
+        plugins = PluginWatcherWrapper()
+        ServiceRegistry.register("plugins", plugins, description="Plugin hot-reload watcher", priority=50)
+        logger.info("🔌 Registered Service: 'plugins' -> PluginWatcher")
+    except ImportError as e:
+        logger.debug(f"Plugin watcher not available (optional): {e}")
+
     # --- END WIRING ---
+    
+    # Log service status
+    logger.debug(f"Services registered: {ServiceRegistry.list_services()}")
     
     assistant = NIAAssistant(
         voice_mode=args.voice,

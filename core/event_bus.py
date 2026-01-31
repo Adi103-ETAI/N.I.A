@@ -22,7 +22,7 @@ import asyncio
 import inspect
 from typing import Any, Callable, Dict, List, Coroutine, Optional
 from core.logger import setup_logger
-from core.services import ServiceRegistry
+from core.registry import ServiceRegistry
 
 logger = setup_logger("EVENTS")
 
@@ -105,18 +105,20 @@ class AsyncEventBus:
             logger.error(f"Error in sync listener {callback.__name__}: {e}", exc_info=True)
 
     def emit_threadsafe(self, event_name: str, data: Any = None):
-        """Emit, but safe to call from background threads (like NOLA)."""
+        """Emit, but safe to call from background threads (like NOLA).
+        
+        v3.1: Fixed deprecated asyncio.get_event_loop() for Python 3.10+ compatibility.
+        """
         if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self.emit(event_name, data), self._loop)
         else:
-            # Fallback if loop not captured or running?
-            # Could check if there is a running loop in current thread (unlikely)
+            # Fallback: Try to get the running loop (Python 3.10+ safe)
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.run_coroutine_threadsafe(self.emit(event_name, data), loop)
-                else:
-                    logger.warning("EventBus: No running loop for threadsafe emit")
+                loop = asyncio.get_running_loop()
+                asyncio.run_coroutine_threadsafe(self.emit(event_name, data), loop)
+            except RuntimeError:
+                # No running loop - this is a non-async context
+                logger.warning("EventBus: No running loop for threadsafe emit")
             except Exception as e:
                 logger.error(f"EventBus emit_threadsafe failed: {e}")
 

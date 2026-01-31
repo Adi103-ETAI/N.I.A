@@ -8,7 +8,7 @@ Usage:
     remember_preference("user_name", "Aditya")
     remember_preference("coding_style", "prefers concise code")
 """
-from core.services import ServiceRegistry
+from core.registry import ServiceRegistry
 from core.logger import setup_logger
 
 logger = setup_logger("TARA.Memory")

@@ -62,4 +62,4 @@ __all__ = [
     "reset_plugin_loader",
 ]
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"

@@ -157,7 +157,7 @@ print("-" * 40)
 
 try:
     from core.config import settings
-    from interface.banner import VERSION
+    from interface.cli.banner import VERSION
     
     print(f"   Settings VERSION: {settings.VERSION}")
     print(f"   Banner VERSION: {VERSION}")
