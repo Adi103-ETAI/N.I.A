@@ -6,7 +6,7 @@ Tests MemoryManager including:
 - Collection statistics
 - Vacuum database hygiene
 """
-from core.memory import MemoryManager, InMemoryMemory
+from src.core.memory import MemoryManager, InMemoryMemory
 import tempfile
 import os
 import time

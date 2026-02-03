@@ -5,8 +5,8 @@ import os
 # Add project root to path to ensure imports work
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.event_bus import get_event_bus
-from core.logger import start_log_listener, setup_logger
+from src.core.events import get_event_bus
+from src.core.logger import start_log_listener, setup_logger
 
 async def main():
     # Setup basic logging to see the output

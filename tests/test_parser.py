@@ -1,5 +1,5 @@
 """Quick test for the robust parser."""
-from tara.graph.nodes import _parse_llama_tool_calls
+from src.agents.tara.graph.nodes import _parse_llama_tool_calls
 
 # Test 1: <function> format
 test1 = '<|python_tag|><function>launch_app</function>{"app_name": "notepad"}'
