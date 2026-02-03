@@ -41,7 +41,7 @@ LAZY LOADING:
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 # Module logger
 logger = setup_logger("NIA")

@@ -30,13 +30,13 @@ if TYPE_CHECKING:
 def cmd_toggle_debug(engine: 'NIAAssistant', text: str) -> bool:
     """Handle debug on/off."""
     if "on" in text:
-        from core.logger import set_console_level
+        from src.core.logger import set_console_level
         import logging
         set_console_level(logging.DEBUG)
         engine.debug = True
         print("🐞 Debug Mode: ON")
     elif "off" in text:
-        from core.logger import set_console_level
+        from src.core.logger import set_console_level
         import logging
         set_console_level(logging.WARNING)
         engine.debug = False
@@ -61,7 +61,7 @@ def cmd_reload(engine: 'NIAAssistant', text: str) -> bool:
 
 def cmd_ghost_control(engine: 'NIAAssistant', text: str) -> bool:
     """Handle ghost mode on/off."""
-    from core.config import settings
+    from src.core.config import settings
     state_file = settings.GHOST_STATE_FILE
     try:
         # Default to False
@@ -99,7 +99,7 @@ def cmd_ghost_control(engine: 'NIAAssistant', text: str) -> bool:
 
 def cmd_mic_control(engine: 'NIAAssistant', text: str) -> bool:
     """Handle mic on/off."""
-    from core.registry import ServiceRegistry
+    from src.core.registry import ServiceRegistry
     
     if "off" in text or "mute" in text:
         nola = ServiceRegistry.get("voice")
@@ -289,7 +289,7 @@ def print_status(engine: 'NIAAssistant') -> None:
     """Displays the Precision Aligned Dashboard (Strict Grid Layout)."""
     import psutil
     from datetime import datetime
-    from core.registry import ServiceRegistry
+    from src.core.registry import ServiceRegistry
     
     # 1. Gather Data
     cpu_p = psutil.cpu_percent(interval=0.1)

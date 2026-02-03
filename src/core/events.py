@@ -10,9 +10,9 @@ Features:
 - Error handling isolation (one subscriber doesn't crash the bus).
 
 Usage:
-    from core.event_bus import ServiceRegistry  # Via registry
+    from src.core.events import ServiceRegistry  # Via registry
     # or
-    from core.event_bus import get_event_bus
+    from src.core.events import get_event_bus
     
     bus = get_event_bus()
     bus.subscribe("voice_command", my_callback)
@@ -21,8 +21,8 @@ Usage:
 import asyncio
 import inspect
 from typing import Any, Callable, Dict, List, Coroutine, Optional
-from core.logger import setup_logger
-from core.registry import ServiceRegistry
+from src.core.logger import setup_logger
+from src.core.registry import ServiceRegistry
 
 logger = setup_logger("EVENTS")
 

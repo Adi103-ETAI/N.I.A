@@ -11,7 +11,7 @@ Pattern:
     - Services implement start()/stop() for lifecycle management.
 
 Usage:
-    from core.registry import ServiceRegistry
+    from src.core.registry import ServiceRegistry
     
     # Registration
     ServiceRegistry.register("voice", nola_manager)
@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 logger = setup_logger("REGISTRY")
 

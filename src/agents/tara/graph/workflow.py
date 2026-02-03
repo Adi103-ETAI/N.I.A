@@ -20,7 +20,7 @@ Architecture:
     └─────────────────────────────────────────────────────────────┘
 
 Usage:
-    from tara.graph import tara_app, create_initial_tara_state
+    from src.agents.tara.graph import tara_app, create_initial_tara_state
     
     state = create_initial_tara_state("Open Notepad and type hello")
     result = tara_app.invoke(state)
@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 logger = setup_logger("TARA.Workflow")
 

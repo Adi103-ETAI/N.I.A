@@ -20,9 +20,9 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Any, List
 
-from core.logger import setup_logger
-from core.event_bus import get_event_bus
-from core.context import get_os_context
+from src.core.logger import setup_logger
+from src.core.events import get_event_bus
+from src.core.context import get_os_context
 
 try:
     from send2trash import send2trash

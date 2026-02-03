@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import sys
 import importlib.util
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 logger = setup_logger("NOLA")
 

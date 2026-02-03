@@ -11,11 +11,11 @@ Key Architecture Changes:
 
 Usage:
     # In main.py (BEFORE any other imports):
-    from core.logger import init_logging
+    from src.core.logger import init_logging
     init_logging(debug=args.debug)
     
     # In any module:
-    from core.logger import setup_logger
+    from src.core.logger import setup_logger
     logger = setup_logger("BRAIN")
     logger.info("System initialized")
 """
@@ -203,11 +203,11 @@ def init_logging(debug: bool = False) -> None:
     
     Example:
         # In main.py, at the very start:
-        from core.logger import init_logging
+        from src.core.logger import init_logging
         init_logging(debug=args.debug)
         
         # Then import other modules...
-        from core.engine import NIAAssistant
+        from src.core.engine import NIAAssistant
     """
     global _debug_mode, _initialized
     
@@ -396,7 +396,7 @@ def start_log_listener() -> None:
     Must be called after EventBus is ready.
     """
     # Local import prevents circular dependency
-    from core.event_bus import get_event_bus
+    from src.core.events import get_event_bus
     
     try:
         bus = get_event_bus()

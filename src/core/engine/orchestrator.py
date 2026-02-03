@@ -36,32 +36,32 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Tuple
 
 # Centralized Logging (lightweight - loads quickly)
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 import asyncio
 import aioconsole
-from core.registry import ServiceRegistry
-from core.event_bus import get_event_bus
+from src.core.registry import ServiceRegistry
+from src.core.events import get_event_bus
 
 # =============================================================================
 # TYPE_CHECKING Block: IDE-only imports (no runtime cost)
 # =============================================================================
 if TYPE_CHECKING:
     # 🌊 RIPPLE SAFE: These imports are for type hints only, not loaded at runtime
-    from core.memory import MemoryManager
+    from src.core.memory import MemoryManager
 
     # 🌊 LAZY LOAD: core.logger functions (for runtime switching)
-    from core.logger import set_console_level, logging
+    from src.core.logger import set_console_level, logging
 
 # =============================================================================
 # Lazy Import Markers (actual imports happen in _init_nia)
 # =============================================================================
 # The following were previously top-level imports that blocked startup:
-# - from core.memory import get_memory_manager  (ChromaDB, SQLite, NetworkX)
+# - from src.core.memory import get_memory_manager  (ChromaDB, SQLite, NetworkX)
 # Now deferred to: _init_nia()
 
 # Import Terminal UI (lazy-ish - only UI components)
 try:
-    from interface.chat import TerminalUI
+    from src.interface.chat import TerminalUI
 except ImportError:
     TerminalUI = None
 
@@ -185,7 +185,7 @@ class NIAAssistant:
         self.bus.subscribe("voice_command", self._handle_voice_command)
         
         # 🌊 Event-Driven Logger Init
-        from core.logger import start_log_listener
+        from src.core.logger import start_log_listener
         start_log_listener()
         
         # NOTE: Warden init moved to start() - fixes core→tara coupling
@@ -240,7 +240,7 @@ class NIAAssistant:
             
             # 🌊 LAZY LOAD: 4-Layer Memory System (ChromaDB, SQLite, NetworkX)
             try:
-                from core.memory import get_memory_manager
+                from src.core.memory import get_memory_manager
                 self.memory = get_memory_manager()
                 
                 # Register in ServiceRegistry for centralized access
@@ -293,7 +293,7 @@ class NIAAssistant:
             return self._ghost_cache
             
         try:
-            from core.config import settings
+            from src.core.config import settings
             state_file = settings.GHOST_STATE_FILE
             if not os.path.exists(state_file):
                 self._update_ghost_cache((False, 0))
@@ -551,7 +551,7 @@ class NIAAssistant:
         print("\033[0m", end="", flush=True) # Reset terminal colors
         
         # Show Splash Screen (High-Quality ASCII)
-        from interface.cli.banner import BANNER
+        from src.interface.cli.banner import BANNER
         print("\n" + BANNER + "\n")
         
         if not await self.start():

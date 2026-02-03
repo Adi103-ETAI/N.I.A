@@ -8,7 +8,7 @@ v2.5.2: Centralized Circuit Breaker Pattern with Multi-Provider Fallback.
 
 Usage:
     # Typically applied automatically by ModelManager
-    from models.safe_llm import SafeLLM
+    from src.models.safe_llm import SafeLLM
     
     safe_model = SafeLLM(raw_model, manager=model_manager)
     response = safe_model.invoke(messages)  # Auto-retry on 429
@@ -18,10 +18,10 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any, List, Optional, Sequence
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 if TYPE_CHECKING:
-    from models.model_manager import ModelManager
+    from src.models.manager import ModelManager
 
 logger = setup_logger("SafeLLM")
 
@@ -371,7 +371,7 @@ class SafeLLM:
         """
         try:
             # Import here to avoid circular imports
-            from models.model_manager import get_smart_model
+            from src.models.manager import get_smart_model
             
             # Get a fresh model (will use the new active provider)
             # Return the raw model, not wrapped (to avoid infinite recursion)

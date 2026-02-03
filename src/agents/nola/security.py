@@ -23,7 +23,7 @@ Classes:
 """
 from __future__ import annotations
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 import re
 import threading
 import time

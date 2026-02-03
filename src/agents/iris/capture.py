@@ -4,7 +4,7 @@ Handles raw image capture from screen and webcam.
 Does NOT include analysis, OCR, or face recognition - just capture and save.
 
 Usage:
-    from iris.tools import capture_screen, capture_webcam
+    from src.agents.iris.capture import capture_screen, capture_webcam
     
     # Take a screenshot
     path = capture_screen(delay=1.0)
@@ -18,7 +18,7 @@ import os
 import time
 from datetime import datetime
 
-from tara.protocols import tara_tool
+from src.agents.tara.protocols import tara_tool
 
 # Optional imports with graceful fallback
 try:

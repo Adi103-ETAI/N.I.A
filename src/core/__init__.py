@@ -32,7 +32,7 @@ def __getattr__(name: str):
     """Lazy loading of heavy modules on first access.
     
     This enables:
-    - Fast `from core.logger import setup_logger` (no memory/engine loaded)
+    - Fast `from src.core.logger import setup_logger` (no memory/engine loaded)
     - `from core import MemoryManager` still works (loads on access)
     """
     if name == "MemoryManager":

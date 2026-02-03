@@ -9,7 +9,7 @@ Public API:
     aprocess_input: Async version
 
 Example:
-    from nia.graph import process_input
+    from src.agents.nia.graph import process_input
     response = process_input("Hello!", thread_id="user_123")
 """
 from .builder import (

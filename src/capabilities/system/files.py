@@ -37,7 +37,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 logger = setup_logger("TARA.Tools.FileOps")
 
@@ -243,7 +243,7 @@ def write_file(path: str, content: str, overwrite: bool = False) -> str:
     """
     # 🔒 LAYER 4: Security Audit Log
     try:
-        from core.registry import ServiceRegistry  # RIPPLE FIX
+        from src.core.registry import ServiceRegistry  # RIPPLE FIX
         mem = ServiceRegistry.get("memory")
         if mem:
             mem.log_security_event("file_write", f"Writing to: {path}")
@@ -365,7 +365,7 @@ def move_file(src: str, dst: str) -> str:
     """
     # 🔒 LAYER 4: Security Audit Log
     try:
-        from core.registry import ServiceRegistry  # RIPPLE FIX
+        from src.core.registry import ServiceRegistry  # RIPPLE FIX
         mem = ServiceRegistry.get("memory")
         if mem:
             mem.log_security_event("file_move", f"Moving: {src} -> {dst}")
@@ -457,7 +457,7 @@ def delete_file(path: str, confirm: bool = False) -> str:
     
     # 🔒 LAYER 4: Security Audit Log
     try:
-        from core.registry import ServiceRegistry  # RIPPLE FIX
+        from src.core.registry import ServiceRegistry  # RIPPLE FIX
         mem = ServiceRegistry.get("memory")
         if mem:
             mem.log_security_event("file_delete", f"Deleting: {path}")

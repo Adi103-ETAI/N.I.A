@@ -1,5 +1,5 @@
 import re
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 logger = setup_logger("NIA.Gatekeeper")
 

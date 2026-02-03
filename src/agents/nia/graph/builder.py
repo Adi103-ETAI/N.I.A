@@ -5,7 +5,7 @@ the LangGraph state machine for the NIA supervisor architecture.
 """
 from __future__ import annotations
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 import sqlite3
 from pathlib import Path
 from typing import Any, Optional, List
@@ -13,7 +13,7 @@ from typing import Any, Optional, List
 logger = setup_logger("NIA.Graph")
 
 # Import state and nodes
-from nia.state import (
+from src.agents.nia.state import (
     AgentState,
     AGENT_SUPERVISOR,
     AGENT_IRIS,
@@ -22,7 +22,7 @@ from nia.state import (
     create_initial_state,
     extract_response,
 )
-from nia.agent import SupervisorAgent
+from src.agents.nia.agent import SupervisorAgent
 from .nodes import (
     supervisor_node,
     iris_node,
@@ -36,7 +36,7 @@ from .nodes import (
 
 # Try to import real IrisAgent
 try:
-    from iris.agent import IrisAgent
+    from src.agents.iris.agent import IrisAgent
     _HAS_IRIS = True
 except ImportError:
     _HAS_IRIS = False
@@ -117,11 +117,11 @@ class NIAGraph:
         self.enable_persistence = enable_persistence and _HAS_CHECKPOINTER
         
         try:
-            from core.registry import ServiceRegistry
+            from src.core.registry import ServiceRegistry
             self.memory = ServiceRegistry.get("memory")
             if self.memory is None:
                 # Fallback: create and register if engine hasn't done it yet
-                from core.memory import get_memory_manager
+                from src.core.memory import get_memory_manager
                 self.memory = get_memory_manager()
         except Exception:
             self.memory = None
@@ -396,7 +396,7 @@ def get_graph(
     Returns:
         NIAGraph instance.
     """
-    from core.registry import ServiceRegistry
+    from src.core.registry import ServiceRegistry
     
     graph = ServiceRegistry.get("graph")
     

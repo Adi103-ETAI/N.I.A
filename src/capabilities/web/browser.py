@@ -38,8 +38,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core.logger import setup_logger
-from core.config import get_settings
+from src.core.logger import setup_logger
+from src.core.config import get_settings
 
 logger = setup_logger("TARA.Tools.BrowserOps")
 
@@ -227,7 +227,7 @@ def get_browser_manager() -> AsyncBrowserManager:
     This ensures only one instance exists per session while enabling 
     centralized lifecycle management.
     """
-    from core.registry import ServiceRegistry
+    from src.core.registry import ServiceRegistry
     
     manager = ServiceRegistry.get("browser")
     if manager is None:

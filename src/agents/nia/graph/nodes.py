@@ -8,14 +8,14 @@ This module contains the node functions that operate on AgentState:
 """
 from __future__ import annotations
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 from typing import TYPE_CHECKING, List, Optional
 import asyncio
 
 logger = setup_logger("NIA.Nodes")
 
 # Import state types
-from nia.state import (
+from src.agents.nia.state import (
     AgentState,
     AGENT_SUPERVISOR,
     AGENT_IRIS,
@@ -33,7 +33,7 @@ except ImportError:
     HumanMessage = None  # type: ignore
     AIMessage = None  # type: ignore
 
-from core.config import settings
+from src.core.config import settings
 
 import json
 from pathlib import Path
@@ -200,7 +200,7 @@ def summarize_oldest(messages: List, llm=None) -> List:
     if not llm:
         try:
             # Lazy import to prevent circular dependency
-            from models.model_manager import ModelManager
+            from src.models.manager import ModelManager
             manager = ModelManager()
             # Try fast model first (cheaper/faster), fallback to smart
             llm = manager.get_fast_model()
@@ -307,7 +307,7 @@ async def general_assistant(state: AgentState) -> AgentState:
     
     try:
         # Get LLM for chat response
-        from models.model_manager import ModelManager
+        from src.models.manager import ModelManager
         manager = ModelManager()
         llm = manager.get_smart_model()
         
@@ -322,7 +322,7 @@ async def general_assistant(state: AgentState) -> AgentState:
         
         # === IDENTITY INJECTION (UNIFIED PERSONA) ===
         # Use PersonaProfile for consistent identity across all nodes
-        from persona.profile import get_system_prompt
+        from src.persona.profile import get_system_prompt
         system_prompt_text = get_system_prompt()
         
         # Handle message list updates similar to sync...
@@ -372,7 +372,7 @@ async def general_assistant(state: AgentState) -> AgentState:
 
 # Try to import TARA 2.0 compiled graph
 try:
-    from tara.graph import tara_app, create_initial_tara_state
+    from src.agents.tara.graph import tara_app, create_initial_tara_state
     _HAS_TARA_2 = True
     logger.debug("✅ TARA 2.0 graph imported successfully")
 except ImportError as e:

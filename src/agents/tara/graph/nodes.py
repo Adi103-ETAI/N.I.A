@@ -37,8 +37,8 @@ import json
 import re
 from typing import Any, Dict, List, Literal, Sequence, TypedDict
 
-from core.logger import setup_logger
-from core.config import get_settings
+from src.core.logger import setup_logger
+from src.core.config import get_settings
 
 from .state import TaraState, TaraNextStep
 from .prompts import TARA_SYSTEM_PROMPT, build_tara_context
@@ -93,7 +93,7 @@ except ImportError as e:
     ) from e
 
 # v3.0: ModelManager for dynamic provider switching
-from models.model_manager import get_smart_model
+from src.models.manager import get_smart_model
 
 # LangGraph tool node - REQUIRED for tool execution
 try:
@@ -112,7 +112,7 @@ except ImportError as e:
     ) from e
 
 # TARA tools
-from tara.tools.interface import get_tara_tools
+from src.capabilities.interface import get_tara_tools
 
 logger = setup_logger("TARA.Nodes")
 settings = get_settings()
@@ -448,7 +448,7 @@ async def tool_executor(state: TaraState) -> TaraStateUpdate:
                 logger.warning(f"🛡️ Warden Intercept: Forwarding '{t_name}' to Security Service.")
                 
                 # Emit to Event Bus for Warden handling
-                from core.event_bus import get_event_bus
+                from src.core.events import get_event_bus
                 bus = get_event_bus()
                 await bus.emit("security:escalation", {
                     "tool": t_name,
@@ -489,7 +489,7 @@ async def tool_executor(state: TaraState) -> TaraStateUpdate:
     if tool_messages and all("❌" not in getattr(m, 'content', '') for m in tool_messages):
         try:
             # RIPPLE FIX: Local import to avoid circular dependency issues
-            from core.registry import ServiceRegistry
+            from src.core.registry import ServiceRegistry
             from langchain_core.messages import HumanMessage  # RIPPLE: For type check
 
             memory_svc = ServiceRegistry.get("memory")

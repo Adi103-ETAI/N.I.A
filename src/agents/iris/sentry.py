@@ -4,7 +4,7 @@ Uses Windows Native OCR to passively monitor screen for errors.
 Runs in a background thread and alerts when danger keywords are detected.
 
 Usage:
-    from iris.sentry import start_sentry, stop_sentry
+    from src.agents.iris.sentry import start_sentry, stop_sentry
     
     # Start monitoring in background
     start_sentry(callback=lambda msg: print(msg))
@@ -22,7 +22,7 @@ import io
 import threading
 from typing import Callable, List, Optional, Tuple
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 logger = setup_logger("IRIS.Sentry")
 

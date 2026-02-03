@@ -37,7 +37,7 @@ import asyncio
 import time
 from typing import List, Optional, Tuple, Union
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 logger = setup_logger("TARA.Tools.InputOps")
 

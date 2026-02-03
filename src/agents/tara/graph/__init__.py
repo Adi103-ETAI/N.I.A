@@ -13,16 +13,16 @@ Architecture:
 
 Usage:
     # Quick run
-    from tara.graph import run_tara
+    from src.agents.tara.graph import run_tara
     response = run_tara("Open Notepad and type hello")
     
     # With compiled app
-    from tara.graph import tara_app, create_initial_tara_state
+    from src.agents.tara.graph import tara_app, create_initial_tara_state
     state = create_initial_tara_state("My goal")
     result = tara_app.invoke(state)
     
     # Build custom graph
-    from tara.graph import build_tara_graph
+    from src.agents.tara.graph import build_tara_graph
     app = build_tara_graph(with_memory=True)
 """
 from __future__ import annotations

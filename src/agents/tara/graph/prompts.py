@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 logger = setup_logger("TARA.Prompts")
 

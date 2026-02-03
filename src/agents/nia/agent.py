@@ -11,21 +11,21 @@ import time
 import random
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 # --- CRITICAL IMPORTS ---
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
-from models.model_manager import get_smart_model
-from nia.gatekeeper import RoutingGatekeeper
+from src.models.manager import get_smart_model
+from src.agents.nia.gatekeeper import RoutingGatekeeper
 # ADAPTED: import settings as config to match user variable name but use correct source
-from core.config import settings as config
+from src.core.config import settings as config
 
 # =============================================================================
 # TYPE_CHECKING Block (IDE-only, no runtime cost)
 # =============================================================================
 
 if TYPE_CHECKING:
-    from iris.agent import IrisAgent
+    from src.agents.iris.agent import IrisAgent
     from typing import Optional
 
 
@@ -109,7 +109,7 @@ class SupervisorAgent:
         
         # System Prompt: Prefer Persona module, fallback to text file
         try:
-            from persona.profile import get_system_prompt
+            from src.persona.profile import get_system_prompt
             prompt_text = get_system_prompt()
             logger.debug("System prompt loaded from Persona module")
         except Exception as persona_err:
@@ -203,7 +203,7 @@ class SupervisorAgent:
             - retry_buffer: Empty list for retry attempts.
         """
         # 🎲 DYNAMIC PERSONA: Regenerate system prompt each call for fresh 80/20 roll
-        from persona.profile import get_system_prompt
+        from src.persona.profile import get_system_prompt
         fresh_system_prompt = get_system_prompt()
         
         current_messages: List[BaseMessage] = [SystemMessage(content=fresh_system_prompt)]
@@ -235,7 +235,7 @@ class SupervisorAgent:
             Formatted memory context string, or None if unavailable.
         """
         # Get memory from ServiceRegistry
-        from core.registry import ServiceRegistry
+        from src.core.registry import ServiceRegistry
         memory = ServiceRegistry.get("memory")
         
         if memory is None:
@@ -341,7 +341,7 @@ class SupervisorAgent:
             user_query: The user's input message (may be None).
             ai_response: The AI's response content.
         """
-        from core.registry import ServiceRegistry
+        from src.core.registry import ServiceRegistry
         memory = ServiceRegistry.get("memory")
         
         if memory is None:

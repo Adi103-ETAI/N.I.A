@@ -12,7 +12,7 @@ Storage (all in data/ directory):
     - data/memory.db  : SQLite for preferences and security
 
 Usage:
-    from core.memory import MemoryManager, get_memory_manager
+    from src.core.memory import MemoryManager, get_memory_manager
     
     memory = get_memory_manager()
     
@@ -37,8 +37,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.logger import setup_logger
-from core.config import get_settings, get_embedding_function
+from src.core.logger import setup_logger
+from src.core.config import get_settings, get_embedding_function
 
 # Get cached settings singleton
 settings = get_settings()
@@ -547,7 +547,7 @@ def get_memory_manager(**kwargs) -> MemoryManager:
     If not yet registered, it will be created and registered automatically.
     This provides backward compatibility while enabling centralized lifecycle management.
     """
-    from core.registry import ServiceRegistry
+    from src.core.registry import ServiceRegistry
     
     memory = ServiceRegistry.get("memory")
     if memory is None:

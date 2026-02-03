@@ -5,7 +5,7 @@ Uses pydantic-settings to provide type-safe configuration with automatic
 global `settings` instance.
 
 Usage:
-    from core.config import settings
+    from src.core.config import settings
     
     # Access configuration values
     api_key = settings.NVIDIA_API_KEY.get_secret_value()

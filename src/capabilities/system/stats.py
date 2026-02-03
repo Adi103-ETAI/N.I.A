@@ -17,7 +17,7 @@ import platform
 from datetime import datetime
 from typing import Dict, Optional
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 logger = setup_logger("TARA.Tools.SystemOps")
 

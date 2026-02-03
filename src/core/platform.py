@@ -5,7 +5,7 @@ Provides a singleton OSContext class that abstracts OS-specific logic,
 enabling N.I.A. to run on Windows, Linux, and macOS.
 
 Usage:
-    from core.context import get_os_context
+    from src.core.context import get_os_context
     
     ctx = get_os_context()
     print(ctx.os_name)           # "windows", "linux", or "darwin"
@@ -20,7 +20,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 logger = setup_logger("OS_CONTEXT")
 

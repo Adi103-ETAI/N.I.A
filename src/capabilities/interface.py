@@ -12,7 +12,7 @@ Architecture:
     4. Wrap as StructuredTool using docstrings
     
 Usage:
-    from tara.tools.interface import get_tara_tools
+    from src.capabilities.interface import get_tara_tools
     
     tools = get_tara_tools()  # Auto-discovers all tool functions
     llm_with_tools = llm.bind_tools(tools)
@@ -31,7 +31,7 @@ from typing import Callable, Dict, List, Optional, Set
 
 from langchain_core.tools import StructuredTool
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 
 logger = setup_logger("TARA.Interface")
 
@@ -223,7 +223,7 @@ def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
     
     # Get the tara.tools package path
     try:
-        import tara.tools as tools_package
+        import src.agents.tara.tools as tools_package
         package_path = tools_package.__path__
     except (ImportError, AttributeError) as e:
         logger.error(f"Cannot access tara.tools package: {e}")
@@ -268,7 +268,7 @@ def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
     
     plugin_count = 0
     try:
-        from tara.plugin_system.loader import get_plugin_loader
+        from src.agents.tara.plugin_system.loader import get_plugin_loader
         
         plugin_loader = get_plugin_loader()
         
@@ -331,7 +331,7 @@ def get_tools_by_category() -> Dict[str, List[str]]:
     categories: Dict[str, List[str]] = {}
     
     try:
-        import tara.tools as tools_package
+        import src.agents.tara.tools as tools_package
         package_path = tools_package.__path__
     except (ImportError, AttributeError):
         return {}

@@ -4,7 +4,7 @@ Defines the standardized structure of a "Tool" and provides
 the @tara_tool decorator for automatic metadata generation.
 
 Usage:
-    from tara.protocols import tara_tool, TaraTool
+    from src.agents.tara.protocols import tara_tool, TaraTool
     
     @tara_tool(name="get_cpu", category="system", description="Get CPU usage")
     def get_cpu_usage() -> str:

@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 from .base import DesktopDriver
 
 logger = setup_logger("DRIVER.Universal")

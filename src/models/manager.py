@@ -63,8 +63,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from dotenv import load_dotenv
-from core.logger import setup_logger
-from core.config import settings
+from src.core.logger import setup_logger
+from src.core.config import settings
 
 # v2.5.2: SafeLLM import (deferred to avoid circular import)
 # SafeLLM is imported lazily in _wrap_with_safety()
@@ -156,7 +156,7 @@ def _load_catalog() -> Dict[str, ModelSpec]:
     for key, spec_dict in raw_catalog.items():
         catalog[key] = _spec_from_dict(spec_dict)
     
-    logger.debug("Loaded %d models from models.json", len(catalog))
+    logger.debug("Loaded %d models from src.models.json", len(catalog))
     return catalog
 
 
@@ -813,7 +813,7 @@ class ModelManager:
             return model
         
         try:
-            from models.safe_llm import SafeLLM
+            from src.models.safe_llm import SafeLLM
             
             # Determine fallback based on current provider
             # If we're on NVIDIA, fallback to OpenAI; otherwise fallback to NVIDIA

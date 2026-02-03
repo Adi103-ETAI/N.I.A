@@ -32,8 +32,8 @@ import time
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
-from core.logger import setup_logger
-from core.config import get_settings
+from src.core.logger import setup_logger
+from src.core.config import get_settings
 
 from .window_manager import get_registry
 

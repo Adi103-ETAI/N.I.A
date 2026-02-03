@@ -20,7 +20,7 @@ Data Flow:
                              SafeLLM -> Vision LLM -> Analysis Result
 
 Usage:
-    from iris.agent import IrisAgent
+    from src.agents.iris.agent import IrisAgent
     
     agent = IrisAgent()
     
@@ -38,13 +38,13 @@ import base64
 import os
 from typing import Any, Dict, Optional, Union
 
-from core.logger import setup_logger
-from core.config import settings
+from src.core.logger import setup_logger
+from src.core.config import settings
 
 logger = setup_logger("IRIS")
 
 # v2.5.2: Import vision model from ModelManager (enables dynamic provider switching)
-from models.model_manager import get_vision_model
+from src.models.manager import get_vision_model
 
 # Import LangChain messages
 try:
@@ -57,7 +57,7 @@ except ImportError:
 
 # Import capture tools
 try:
-    from iris.tools import capture_screen, capture_webcam
+    from src.agents.iris.capture import capture_screen, capture_webcam
     _HAS_TOOLS = True
 except ImportError:
     _HAS_TOOLS = False
@@ -430,7 +430,7 @@ class IrisAgent:
     def start_sentry(self) -> bool:
         """Start the Sentry background monitoring thread."""
         try:
-            from iris.sentry import start_sentry
+            from src.agents.iris.sentry import start_sentry
         except ImportError:
             print("👁️ Sentry module not available")
             return False
@@ -455,7 +455,7 @@ class IrisAgent:
             return False
         
         try:
-            from iris.sentry import stop_sentry
+            from src.agents.iris.sentry import stop_sentry
             stop_sentry()
             self._sentry = None
             print("👁️ ❌ Sentry: DISABLED")

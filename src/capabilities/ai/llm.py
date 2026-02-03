@@ -6,8 +6,8 @@ v3.0 Feature: Multi-Provider LLM Switching.
 """
 from __future__ import annotations
 
-from core.logger import setup_logger
-from models.model_manager import get_model_manager, VALID_PROVIDERS
+from src.core.logger import setup_logger
+from src.models.manager import get_model_manager, VALID_PROVIDERS
 
 logger = setup_logger("TARA.Tools.LLMOps")
 

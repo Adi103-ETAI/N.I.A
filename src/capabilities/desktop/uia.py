@@ -18,7 +18,7 @@ Exports:
 """
 from __future__ import annotations
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 from .drivers import get_desktop_driver
 
 logger = setup_logger("TARA.Tools.UIAOps")

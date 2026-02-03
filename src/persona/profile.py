@@ -9,7 +9,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from core.context import OSContext
+from src.core.context import OSContext
 
 
 # =============================================================================
@@ -176,12 +176,12 @@ def get_system_prompt() -> str:
     
     try:
         # Try ServiceRegistry first (preferred - already instantiated)
-        from core.registry import ServiceRegistry
+        from src.core.registry import ServiceRegistry
         mem = ServiceRegistry.get("memory")
         
         if mem is None:
             # Fallback to direct import (may trigger lazy load)
-            from core.memory import get_memory_manager
+            from src.core.memory import get_memory_manager
             mem = get_memory_manager()
         
         if mem is not None:
@@ -224,7 +224,7 @@ def get_system_prompt() -> str:
     # Load dynamic skills
     skills_block = ""
     try:
-        from core.skills import load_skills
+        from src.core.skills import load_skills
         skills_block = load_skills()
     except ImportError:
         # Skills module not available
@@ -250,7 +250,7 @@ def get_persona_profile() -> PersonaProfile:
     ai_tone = DEFAULT_AI_TONE
     
     try:
-        from core.registry import ServiceRegistry
+        from src.core.registry import ServiceRegistry
         mem = ServiceRegistry.get("memory")
         
         if mem is not None:

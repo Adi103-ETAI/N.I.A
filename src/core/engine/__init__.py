@@ -3,7 +3,7 @@
 Modular package containing the NIAAssistant orchestrator.
 
 This package provides backward compatibility for existing imports:
-    from core.engine import NIAAssistant  # Works!
+    from src.core.engine import NIAAssistant  # Works!
 """
 from .system import NIAAssistant
 

@@ -4,7 +4,7 @@ Desktop Drivers Package - Cross-Platform Abstraction.
 Provides OS-specific desktop automation drivers via Factory pattern.
 
 Usage:
-    from tara.tools.desktop.drivers import get_desktop_driver
+    from src.capabilities.desktop.drivers import get_desktop_driver
     
     driver = get_desktop_driver()
     await driver.click_element("notepad_1", "Submit")

@@ -9,7 +9,7 @@ State Machine:
     AWAKE → (sleep command) → ASLEEP
 
 Singleton Pattern:
-    from nola.manager import get_nola_manager
+    from src.agents.nola.manager import get_nola_manager
     manager = get_nola_manager()
 """
 from __future__ import annotations
@@ -25,10 +25,10 @@ from .io.speech import HybridTTS, get_async_tts
 from .io.hearing import VoskSTT, get_async_ear
 
 # Event Bus (Decoupled Communication)
-from core.event_bus import get_event_bus
+from src.core.events import get_event_bus
 
 # Centralized logging
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 logger = setup_logger("NOLA")
 
 
@@ -451,7 +451,7 @@ def get_nola_manager(config: Optional[NOLAConfig] = None) -> NOLAManager:
     Returns:
         The NOLAManager instance.
     """
-    from core.registry import ServiceRegistry
+    from src.core.registry import ServiceRegistry
     
     manager = ServiceRegistry.get("voice")
     if manager is None:

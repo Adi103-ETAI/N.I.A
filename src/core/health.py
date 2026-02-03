@@ -7,7 +7,7 @@ Components:
     - print_system_status(): Prints formatted status with banner
 
 Usage:
-    from core.health import check_dependencies, print_system_status
+    from src.core.health import check_dependencies, print_system_status
     
     # Quick check
     deps = check_dependencies()
@@ -99,7 +99,7 @@ def print_system_status() -> None:
     """Print detailed system status with banner."""
     # Import banner
     try:
-        from interface.cli.banner import BANNER
+        from src.interface.cli.banner import BANNER
     except ImportError:
         BANNER = "N.I.A. - Neural Intelligence Assistant"
     

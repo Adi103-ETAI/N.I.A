@@ -8,7 +8,7 @@ v3.1 - Operation SkillLoader:
     Initial implementation for dynamic skill loading.
 
 Usage:
-    from core.skills import load_skills
+    from src.core.skills import load_skills
     
     skills_block = load_skills()  # Returns formatted text for System Prompt
 """
@@ -18,8 +18,8 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
-from core.logger import setup_logger
-from core.context import get_os_context
+from src.core.logger import setup_logger
+from src.core.context import get_os_context
 
 logger = setup_logger("SkillLoader")
 

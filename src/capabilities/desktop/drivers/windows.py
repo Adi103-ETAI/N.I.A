@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Optional, Tuple, TYPE_CHECKING
 
-from core.logger import setup_logger
+from src.core.logger import setup_logger
 from .base import DesktopDriver
 
 logger = setup_logger("DRIVER.Windows")
