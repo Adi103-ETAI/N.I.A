@@ -1,0 +1,21 @@
+# NOLA Voice Agent Configuration
+# v4.0.0 - Unified YAML format
+
+name: NOLA
+version: "4.0.0"
+debug_mode: false
+log_level: INFO
+
+# Wake word settings
+wake_word: hey nia
+tts_voice: af_sarah
+stt_model: whisper-large-v3
+
+# Speech (TTS) settings (migrated from voice.json)
+speech:
+  playback_poll_interval: 0.1
+  piper_timeout_sec: 30
+
+# Hearing (STT) settings
+hearing:
+  model_dir_name: vosk_model

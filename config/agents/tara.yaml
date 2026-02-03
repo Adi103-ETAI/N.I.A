@@ -1,0 +1,112 @@
+# TARA Tool Agent Configuration
+# v4.0.0 - Unified YAML format
+
+name: TARA
+version: "4.0.0"
+debug_mode: false
+log_level: INFO
+
+# Tool execution settings
+max_tool_retries: 3
+tool_timeout: 30
+
+# Command patterns (migrated from commands.json)
+commands:
+  mic_control:
+    mic_words:
+      - mic
+      - microphone
+      - voice
+    off_words:
+      - "off"
+      - mute
+      - stop
+      - kill
+      - disable
+      - pause
+      - silence
+    on_words:
+      - "on"
+      - unmute
+      - start
+      - enable
+      - resume
+      - activate
+      
+  iris_control:
+    "on":
+      - sentry on
+      - activate sentry
+      - enable sentry
+      - guard mode
+      - watch screen
+      - eyes on
+      - start sentry
+      - start watching
+    "off":
+      - sentry off
+      - disable sentry
+      - stop sentry
+      - standby
+      - eyes off
+      - stop watching
+      - sentry standby
+      
+  speaker_control:
+    mute:
+      - mute speakers
+      - mute system
+      - mute audio
+      - kill sound
+      - silence speakers
+      - speakers off
+      - sound off
+      - mute volume
+    unmute:
+      - unmute speakers
+      - unmute system
+      - sound on
+      - restore audio
+      - speakers on
+      - audio on
+      - turn on speakers
+      - enable sound
+      - unmute volume
+      - unmute audio
+      
+  tts_control:
+    stop:
+      - stop talking
+      - shh
+      - quiet
+      - shut up
+      - be quiet
+      - hush
+      
+  system_control:
+    status:
+      - status
+      - report
+      - system check
+      - diagnostics
+      - health
+      - stats
+      - specs
+      - performance
+      - usage
+      - sys stats
+      - system stats
+    clear:
+      - clear
+      - cls
+      - clean screen
+    exit:
+      - exit
+      - quit
+      - bye
+      - goodbye
+      - terminate
+    help:
+      - help
+      - commands
+      - what can you do

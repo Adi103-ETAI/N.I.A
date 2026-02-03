@@ -1,0 +1,26 @@
+{
+    "ACTIONABLE_TYPES": [
+        "ButtonControl",
+        "EditControl",
+        "TextControl",
+        "DocumentControl",
+        "MenuItemControl",
+        "ListControl",
+        "ListItemControl",
+        "TabItemControl",
+        "HyperlinkControl",
+        "CheckBoxControl",
+        "RadioButtonControl",
+        "ComboBoxControl",
+        "TreeItemControl"
+    ],
+    "SKIP_TYPES": [
+        "PaneControl",
+        "GroupControl",
+        "WindowControl",
+        "ScrollBarControl",
+        "ThumbControl",
+        "SeparatorControl"
+    ],
+    "MAX_ELEMENTS": 100
+}

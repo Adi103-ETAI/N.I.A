@@ -1,0 +1,57 @@
+# Desktop Capability Configuration
+# v4.0.0 - Unified YAML format
+
+# System apps (migrated from apps.json)
+system_apps:
+  - notepad
+  - calc
+  - cmd
+  - explorer
+  - powershell
+  - chrome
+  - firefox
+  - code
+
+# Custom app aliases (name -> path)
+custom_aliases: {}
+
+# UI Automation settings (migrated from uia.json)
+uia:
+  actionable_types:
+    - ButtonControl
+    - EditControl
+    - TextControl
+    - DocumentControl
+    - MenuItemControl
+    - ListControl
+    - ListItemControl
+    - TabItemControl
+    - HyperlinkControl
+    - CheckBoxControl
+    - RadioButtonControl
+    - ComboBoxControl
+    - TreeItemControl
+    
+  skip_types:
+    - PaneControl
+    - GroupControl
+    - WindowControl
+    - ScrollBarControl
+    - ThumbControl
+    - SeparatorControl
+    
+  max_elements: 100
+
+# Window management settings
+window_management:
+  default_snap_positions:
+    - left
+    - right
+    - top
+    - bottom
+    - center
+
+# Input settings
+input:
+  typing_delay: 0.05
+  click_delay: 0.1

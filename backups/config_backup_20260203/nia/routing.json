@@ -1,0 +1,64 @@
+{
+    "version": "1.0.0",
+    "description": "Routing keyword configuration for NIA Supervisor agent",
+    "tara_keywords": {
+        "description": "Keywords that route to TARA (automation/tools)",
+        "categories": {
+            "app_control": [
+                "open",
+                "launch",
+                "run",
+                "start",
+                "execute",
+                "close",
+                "kill",
+                "terminate",
+                "exit",
+                "quit",
+                "stop"
+            ],
+            "interaction": [
+                "click",
+                "type",
+                "press",
+                "select"
+            ],
+            "navigation": [
+                "search",
+                "browse",
+                "google",
+                "navigate"
+            ],
+            "verification": [
+                "check",
+                "verify",
+                "test"
+            ]
+        }
+    },
+    "iris_keywords": {
+        "description": "Keywords that route to IRIS (vision)",
+        "categories": {
+            "perception": [
+                "look",
+                "see",
+                "watch",
+                "describe"
+            ],
+            "screen": [
+                "screen",
+                "screenshot",
+                "monitor"
+            ],
+            "phrase": [
+                "what is on",
+                "what's on",
+                "show me"
+            ]
+        }
+    },
+    "general_fallback": {
+        "description": "If no keywords match, route to general assistant",
+        "default_route": "general"
+    }
+}

@@ -1,0 +1,9 @@
+{
+  "system_apps": [
+    "notepad",
+    "calc",
+    "cmd",
+    "explorer"
+  ],
+  "custom_aliases": {}
+}
