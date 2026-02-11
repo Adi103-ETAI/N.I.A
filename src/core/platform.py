@@ -198,9 +198,13 @@ class OSContext:
         Returns:
             List of Path objects representing safe zones.
         """
+        # Import here to avoid circular dependencies (config -> logger -> platform)
+        from src.core.config import settings
+
         safe_zones = [
             self.downloads_dir,
             self.temp_dir,
+            settings.BASE_DIR,  # Project root is now a safe zone (sandboxed workspace)
         ]
         
         # Add OS-specific safe zones

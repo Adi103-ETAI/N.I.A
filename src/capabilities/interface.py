@@ -45,6 +45,8 @@ SKIP_MODULES: Set[str] = {
     "interface",      # This file
     "__init__",       # Package init
     "registry",       # Shared state (not tools)
+    "decorators",     # Metadata decorators
+    "drivers",        # Internal drivers
 }
 
 # Functions to skip (common helpers that shouldn't be tools)
@@ -144,13 +146,18 @@ def _discover_module_tools(module_name: str) -> List[StructuredTool]:
     Dynamically import a module and extract its tool functions.
     
     Args:
-        module_name: Name of module to import (e.g., "app_launcher")
+        module_name: Name of module to import (e.g., "system.files")
         
     Returns:
         List of StructuredTools from the module.
     """
     tools: List[StructuredTool] = []
-    full_module_name = f"tara.tools.{module_name}"
+    # full_module_name is passed directly or constructed correctly by caller?
+    # The caller (discover_from_path) passes "system.files" (via prefix).
+    # But here we were prepending "tara.tools.".
+    # Let's change this to use the passed module_name relative to src.capabilities
+
+    full_module_name = f"src.capabilities.{module_name}"
     
     try:
         # Dynamic import
@@ -218,15 +225,15 @@ def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
     all_tools: List[StructuredTool] = []
     
     # =========================================================================
-    # Phase 1: Core Tools (tara/tools/*.py and tara/tools/**/*.py)
+    # Phase 1: Core Tools (src/capabilities/**/*.py)
     # =========================================================================
     
-    # Get the tara.tools package path
+    # Get the capabilities package path
     try:
-        import src.agents.tara.tools as tools_package
+        import src.capabilities as tools_package
         package_path = tools_package.__path__
     except (ImportError, AttributeError) as e:
-        logger.error(f"Cannot access tara.tools package: {e}")
+        logger.error(f"Cannot access src.capabilities package: {e}")
         return []
     
     # Helper function to discover tools from a module path
@@ -243,7 +250,7 @@ def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
             if is_pkg:
                 # Recursively scan sub-packages (desktop/, system/, etc.)
                 try:
-                    subpkg_name = f"tara.tools.{full_module_name}"
+                    subpkg_name = f"src.capabilities.{full_module_name}"
                     subpkg = importlib.import_module(subpkg_name)
                     if hasattr(subpkg, "__path__"):
                         sub_tools = discover_from_path(subpkg.__path__, f"{full_module_name}.")
@@ -330,34 +337,26 @@ def get_tools_by_category() -> Dict[str, List[str]]:
     """
     categories: Dict[str, List[str]] = {}
     
-    try:
-        import src.agents.tara.tools as tools_package
-        package_path = tools_package.__path__
-    except (ImportError, AttributeError):
-        return {}
+    # Needs recursive implementation similar to get_tara_tools
+    # For now, simplistic implementation not fully recursive or just omitted
+    # But since it's used for listing, we should try to support it.
     
-    for importer, module_name, is_pkg in pkgutil.iter_modules(package_path):
-        if module_name in SKIP_MODULES or is_pkg:
-            continue
-        
-        full_name = f"tara.tools.{module_name}"
-        try:
-            module = importlib.import_module(full_name)
-            tool_names = []
+    # Simplification: We iterate over cached tools if available
+    tools = get_tara_tools()
+    for tool in tools:
+        # tool.func.__module__ gives e.g. "src.capabilities.system.files"
+        # We want "system.files"
+        if tool.func:
+            mod_name = tool.func.__module__.replace("src.capabilities.", "")
+            if mod_name not in categories:
+                categories[mod_name] = []
+            categories[mod_name].append(tool.name)
+        elif tool.coroutine:
+            mod_name = tool.coroutine.__module__.replace("src.capabilities.", "")
+            if mod_name not in categories:
+                categories[mod_name] = []
+            categories[mod_name].append(tool.name)
             
-            for attr_name in dir(module):
-                if attr_name.startswith("_"):
-                    continue
-                attr = getattr(module, attr_name)
-                if _is_valid_tool_function(attr, module_name):
-                    tool_names.append(attr_name)
-            
-            if tool_names:
-                categories[module_name] = sorted(tool_names)
-                
-        except Exception:
-            pass
-    
     return categories
 
 

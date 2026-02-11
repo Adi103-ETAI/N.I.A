@@ -113,6 +113,7 @@ except ImportError as e:
 
 # TARA tools
 from src.capabilities.interface import get_tara_tools
+from src.agents.tara.security import get_warden, SecurityError
 
 logger = setup_logger("TARA.Nodes")
 settings = get_settings()
@@ -445,21 +446,14 @@ async def tool_executor(state: TaraState) -> TaraStateUpdate:
             sec_level = tool.metadata.get("security_level", "host_standard")
             
             if sec_level == "high_risk":
-                logger.warning(f"🛡️ Warden Intercept: Forwarding '{t_name}' to Security Service.")
+                logger.warning(f"🛡️ Warden Intercept: Validating '{t_name}' permission...")
                 
-                # Emit to Event Bus for Warden handling
-                from src.core.events import get_event_bus
-                bus = get_event_bus()
-                await bus.emit("security:escalation", {
-                    "tool": t_name,
-                    "args": t_args
-                })
+                # BLOCKING CHECK: Query Warden for permission
+                warden = get_warden()
+                warden.check_permission(t_name, t_args)
                 
-                return ToolMessage(
-                    content="🛡️ Request forwarded to Warden for secure execution. Check logs for status.",
-                    tool_call_id=t_id,
-                    name=t_name
-                )
+                # If check_permission doesn't raise, we are APPROVED.
+                logger.info(f"🛡️ Warden Approved: Proceeding with '{t_name}'")
             
             # Polymorphic Dispatch (Async or ThreadPool for Sync)
             # LangChain's ainvoke handles this automatically
@@ -469,6 +463,12 @@ async def tool_executor(state: TaraState) -> TaraStateUpdate:
             logger.info(f"[TOOL_EXECUTOR] ✅ {t_name}: {result_str[:80]}...")
             
             return ToolMessage(content=result_str, tool_call_id=t_id, name=t_name)
+
+        except SecurityError as se:
+            # Explicitly catch security denials
+            error_msg = f"🚫 SECURITY DENIED: {se}"
+            logger.warning(f"[TOOL_EXECUTOR] {error_msg}")
+            return ToolMessage(content=error_msg, tool_call_id=t_id, name=t_name)
             
         except Exception as e:
             error_msg = f"❌ {t_name} failed: {e}"
