@@ -155,14 +155,14 @@ print("-" * 40)
 
 try:
     from src.core.config import settings
-    from src.interface.cli.banner import VERSION
+    from src.interface.banner import VERSION
     
     print(f"   Settings VERSION: {settings.VERSION}")
     print(f"   Banner VERSION: {VERSION}")
     
-    assert settings.VERSION == "2.5.2", f"Expected 2.5.2, got {settings.VERSION}"
-    assert VERSION == "2.5.2", f"Expected 2.5.2, got {VERSION}"
-    print("   ✅ Version is 2.5.2")
+    assert settings.VERSION == "4.0.0", f"Expected 4.0.0, got {settings.VERSION}"
+    assert VERSION == "4.0.0", f"Expected 4.0.0, got {VERSION}"
+    print("   ✅ Version is 4.0.0")
     
 except Exception as e:
     print(f"   ❌ FAILED: {e}")

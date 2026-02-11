@@ -551,7 +551,7 @@ class NIAAssistant:
         print("\033[0m", end="", flush=True) # Reset terminal colors
         
         # Show Splash Screen (High-Quality ASCII)
-        from src.interface.cli.banner import BANNER
+        from src.interface.banner import BANNER
         print("\n" + BANNER + "\n")
         
         if not await self.start():
