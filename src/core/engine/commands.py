@@ -188,7 +188,12 @@ def handle_status(engine: 'NIAAssistant', text: str) -> bool:
 def handle_prefs(engine: 'NIAAssistant', text: str) -> bool:
     """Display user preferences."""
     try:
-        prefs = engine.memory.get_all_preferences() if engine.memory else {}
+        # Use sync wrapper for CLI command
+        if engine.memory:
+            prefs = engine.memory.get_all_preferences_sync()
+        else:
+            prefs = {}
+
         if prefs:
             print(f"\n📋 [User Preferences]:\n{json.dumps(prefs, indent=2)}\n")
         else:

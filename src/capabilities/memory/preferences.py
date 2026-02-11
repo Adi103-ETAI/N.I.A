@@ -14,7 +14,7 @@ from src.core.logger import setup_logger
 logger = setup_logger("TARA.Memory")
 
 
-def remember_preference(key: str, value: str) -> str:
+async def remember_preference(key: str, value: str) -> str:
     """
     Save a user preference or fact permanently.
     
@@ -39,7 +39,8 @@ def remember_preference(key: str, value: str) -> str:
             logger.error("Memory service not available")
             return "❌ Memory service not available. Preference not saved."
         
-        success = memory.set_preference(key, value, category="user")
+        # Async call to MemoryManager
+        success = await memory.set_preference(key, value, category="user")
         
         if success:
             logger.info(f"Saved preference: {key} = {value}")
@@ -53,7 +54,7 @@ def remember_preference(key: str, value: str) -> str:
         return f"❌ Error saving preference: {e}"
 
 
-def recall_preference(key: str) -> str:
+async def recall_preference(key: str) -> str:
     """
     Recall a previously saved user preference.
     
@@ -71,7 +72,7 @@ def recall_preference(key: str) -> str:
         if memory is None:
             return "❌ Memory service not available."
         
-        value = memory.get_preference(key)
+        value = await memory.get_preference(key)
         
         if value:
             return f"{key} = {value}"
@@ -83,7 +84,7 @@ def recall_preference(key: str) -> str:
         return f"❌ Error recalling preference: {e}"
 
 
-def list_preferences() -> str:
+async def list_preferences() -> str:
     """
     List all saved user preferences.
     
@@ -98,7 +99,7 @@ def list_preferences() -> str:
         if memory is None:
             return "❌ Memory service not available."
         
-        prefs = memory.get_all_preferences()
+        prefs = await memory.get_all_preferences()
         
         if not prefs:
             return "No preferences saved yet."

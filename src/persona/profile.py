@@ -186,9 +186,14 @@ def get_system_prompt() -> str:
         
         if mem is not None:
             # Fetch preferences with safe defaults
-            user_name = mem.get_preference("username") or DEFAULT_USER_NAME
-            user_title = mem.get_preference("user_title") or DEFAULT_USER_TITLE
-            ai_tone = mem.get_preference("ai_tone") or DEFAULT_AI_TONE
+            # Use sync wrapper since get_system_prompt is synchronous
+            try:
+                user_name = mem.get_preference_sync("username") or DEFAULT_USER_NAME
+                user_title = mem.get_preference_sync("user_title") or DEFAULT_USER_TITLE
+                ai_tone = mem.get_preference_sync("ai_tone") or DEFAULT_AI_TONE
+            except AttributeError:
+                # Fallback if running with old memory manager or mock
+                user_name = DEFAULT_USER_NAME
             
     except ImportError:
         # Memory module not available
@@ -254,9 +259,12 @@ def get_persona_profile() -> PersonaProfile:
         mem = ServiceRegistry.get("memory")
         
         if mem is not None:
-            user_name = mem.get_preference("username") or DEFAULT_USER_NAME
-            user_title = mem.get_preference("user_title") or DEFAULT_USER_TITLE
-            ai_tone = mem.get_preference("ai_tone") or DEFAULT_AI_TONE
+            try:
+                user_name = mem.get_preference_sync("username") or DEFAULT_USER_NAME
+                user_title = mem.get_preference_sync("user_title") or DEFAULT_USER_TITLE
+                ai_tone = mem.get_preference_sync("ai_tone") or DEFAULT_AI_TONE
+            except AttributeError:
+                user_name = DEFAULT_USER_NAME
     except Exception:
         pass
     
