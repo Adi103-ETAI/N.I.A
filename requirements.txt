@@ -9,16 +9,16 @@
 # -------------------------------------------------------------------------------
 
 # --- CORE: The Brain (LangChain + LangGraph) ---
-langgraph>=0.0.10           # Agent orchestration graph
-langchain>=0.1.0            # LLM framework core
-langchain-core>=0.1.0       # Core abstractions
-langchain-community>=0.0.10 # Community integrations
+langgraph~=0.1.0            # Agent orchestration graph
+langchain~=0.1.0            # LLM framework core
+langchain-core~=0.1.0       # Core abstractions
+langchain-community~=0.0.10 # Community integrations
 
 # --- Multi-Provider LLM Support (v2.5.2 Hot-Swap) ---
-langchain-nvidia-ai-endpoints>=0.0.1  # NVIDIA NIM (Primary)
-langchain-openai>=0.0.5               # OpenAI GPT-4o (Fallback)
-langchain-groq>=0.0.1                 # Groq (Fast inference)
-langchain-ollama>=0.0.1               # Ollama (Local/Offline)
+langchain-nvidia-ai-endpoints~=0.0.1  # NVIDIA NIM (Primary)
+langchain-openai~=0.0.5               # OpenAI GPT-4o (Fallback)
+langchain-groq~=0.0.1                 # Groq (Fast inference)
+langchain-ollama~=0.0.1               # Ollama (Local/Offline)
 
 # --- Configuration ---
 python-dotenv>=1.0.0        # Environment variable loading

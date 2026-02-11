@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import asyncio
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -106,6 +107,7 @@ class MemoryManager:
         self._vectors_dir = Path(vectors_dir) if vectors_dir else VECTORS_DIR
         self._skills_file = Path(skills_file) if skills_file else SKILLS_FILE
         self._db_path = Path(db_path) if db_path else MEMORY_DB
+        self._lock = threading.Lock()  # Protect shared state (graph)
         
         # Ensure data directory exists
         os.makedirs(str(DATA_DIR), exist_ok=True)
@@ -234,6 +236,10 @@ class MemoryManager:
         if not self._graph:
             return False
         try:
+            # Graph writes already protected by callers using the lock
+            # but if called directly, we assume the caller holds the lock or doesn't need it?
+            # Better to be safe: caller (add_skill_path) should hold lock.
+            # But let's assume this is internal.
             nx.write_gml(self._graph, str(self._skills_file))
             return True
         except Exception as exc:
@@ -245,21 +251,22 @@ class MemoryManager:
         if not self._graph:
             return False
         
-        try:
-            self._graph.add_node(goal, type="goal")
-            prev = goal
-            for i, step in enumerate(steps):
-                step_id = f"{goal}__step_{i}"
-                self._graph.add_node(step_id, type="step", label=step)
-                self._graph.add_edge(prev, step_id)
-                prev = step_id
-            
-            self._save_graph()
-            logger.debug("Added skill: %s (%d steps)", goal, len(steps))
-            return True
-        except Exception as exc:
-            logger.error("add_skill_path failed: %s", exc, exc_info=True)
-            return False
+        with self._lock:  # Thread-safe mutation
+            try:
+                self._graph.add_node(goal, type="goal")
+                prev = goal
+                for i, step in enumerate(steps):
+                    step_id = f"{goal}__step_{i}"
+                    self._graph.add_node(step_id, type="step", label=step)
+                    self._graph.add_edge(prev, step_id)
+                    prev = step_id
+
+                self._save_graph()
+                logger.debug("Added skill: %s (%d steps)", goal, len(steps))
+                return True
+            except Exception as exc:
+                logger.error("add_skill_path failed: %s", exc, exc_info=True)
+                return False
     
     def get_skill_path(self, goal: str) -> List[str]:
         """Get ordered steps for a goal."""
@@ -540,8 +547,10 @@ class MemoryManager:
 # ServiceRegistry Integration
 # =============================================================================
 
+_factory_lock = threading.Lock()
+
 def get_memory_manager(**kwargs) -> MemoryManager:
-    """Get or create the MemoryManager via ServiceRegistry.
+    """Get or create the MemoryManager via ServiceRegistry (Thread-Safe).
     
     The MemoryManager is registered as "memory" in the ServiceRegistry.
     If not yet registered, it will be created and registered automatically.
@@ -549,12 +558,19 @@ def get_memory_manager(**kwargs) -> MemoryManager:
     """
     from src.core.registry import ServiceRegistry
     
+    # Fast path check
     memory = ServiceRegistry.get("memory")
-    if memory is None:
-        memory = MemoryManager(**kwargs)
-        ServiceRegistry.register("memory", memory)
-        logger.info("MemoryManager registered in ServiceRegistry")
-    return memory
+    if memory:
+        return memory
+
+    # Slow path with lock to prevent race conditions during init
+    with _factory_lock:
+        memory = ServiceRegistry.get("memory")
+        if memory is None:
+            memory = MemoryManager(**kwargs)
+            ServiceRegistry.register("memory", memory)
+            logger.info("MemoryManager registered in ServiceRegistry")
+        return memory
 
 
 __all__ = ["MemoryManager", "get_memory_manager"]

@@ -163,7 +163,19 @@ def handle_help(engine: 'NIAAssistant', text: str) -> bool:
 
 def handle_clear(engine: 'NIAAssistant', text: str) -> bool:
     """Clear the terminal screen."""
-    subprocess.run(['cls' if os.name == 'nt' else 'clear'], shell=True, check=False)
+    # Use shell=False for safety where possible, but 'cls' is a shell built-in on Windows.
+    # On Linux/macOS, 'clear' is usually an executable in /usr/bin/clear.
+    cmd = 'cls' if os.name == 'nt' else 'clear'
+    try:
+        # Popen with shell=False is safer. On Windows, cls requires shell=True.
+        # But we can use os.system for simple clear which is standard practice for this specific command.
+        # Or better: use a cross-platform clear that doesn't spawn a shell if possible.
+        if os.name == 'nt':
+            os.system('cls')
+        else:
+            subprocess.run(['clear'], shell=False, check=False)
+    except Exception:
+        pass
     return True
 
 

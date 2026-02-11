@@ -194,13 +194,13 @@ MODEL_CATALOG: Dict[str, ModelSpec] = _load_catalog()
 class ModelConfig:
     """Configuration for model providers and settings.
     
-    Loads API keys and endpoints from environment variables.
+    Loads API keys from centralized settings (secure SecretStr).
     """
-    # API Keys
-    nvidia_api_key: Optional[str] = field(default_factory=lambda: os.environ.get("NVIDIA_API_KEY"))
-    openai_api_key: Optional[str] = field(default_factory=lambda: os.environ.get("OPENAI_API_KEY"))
-    groq_api_key: Optional[str] = field(default_factory=lambda: os.environ.get("GROQ_API_KEY"))
-    huggingface_api_key: Optional[str] = field(default_factory=lambda: os.environ.get("HUGGINGFACE_API_KEY"))
+    # API Keys (Securely fetched from settings)
+    nvidia_api_key: Optional[str] = field(default_factory=lambda: settings.NVIDIA_API_KEY.get_secret_value() if settings.NVIDIA_API_KEY else None)
+    openai_api_key: Optional[str] = field(default_factory=lambda: settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else None)
+    groq_api_key: Optional[str] = field(default_factory=lambda: settings.GROQ_API_KEY.get_secret_value() if settings.GROQ_API_KEY else None)
+    huggingface_api_key: Optional[str] = field(default_factory=lambda: settings.HUGGINGFACE_API_KEY.get_secret_value() if settings.HUGGINGFACE_API_KEY else None)
     
     # Endpoints
     ollama_base_url: str = field(default_factory=lambda: os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
