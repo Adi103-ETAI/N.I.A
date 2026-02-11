@@ -1,4 +1,0 @@
-Scanned: 52 modules
-OK: 52
-ERRORS: 0
----

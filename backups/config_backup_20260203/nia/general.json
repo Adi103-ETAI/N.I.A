@@ -1,9 +1,0 @@
-{
-    "DEFAULT_PROVIDER": "nvidia",
-    "VALID_PROVIDERS": [
-        "nvidia",
-        "openai",
-        "groq",
-        "ollama"
-    ]
-}
