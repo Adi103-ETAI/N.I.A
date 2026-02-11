@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from src.core.logger import setup_logger
+from src.core.context import get_os_context
+from src.capabilities.decorators import security_level
 
 logger = setup_logger("TARA.Tools.FileOps")
 
@@ -59,7 +61,7 @@ except ImportError:
 
 def _validate_path(path: str, must_exist: bool = False) -> Path:
     """
-    Validate and normalize a file path.
+    Validate and normalize a file path with SANDBOX ENFORCEMENT.
     
     Args:
         path: Path string to validate.
@@ -69,7 +71,7 @@ def _validate_path(path: str, must_exist: bool = False) -> Path:
         Normalized Path object.
         
     Raises:
-        ValueError: If path is invalid.
+        ValueError: If path is invalid or OUTSIDE SAFE ZONES.
         FileNotFoundError: If must_exist and path doesn't exist.
     """
     if not path or not path.strip():
@@ -84,6 +86,28 @@ def _validate_path(path: str, must_exist: bool = False) -> Path:
     except ValueError:
         raise ValueError(f"Invalid path: {path}")
     
+    # SANDBOX CHECK: Ensure path is within a Safe Zone
+    ctx = get_os_context()
+    safe_zones = ctx.get_safe_zones()
+
+    is_safe = False
+    for zone in safe_zones:
+        try:
+            # Check if p is inside zone (or is the zone itself)
+            p.relative_to(zone)
+            is_safe = True
+            break
+        except ValueError:
+            continue
+
+    if not is_safe:
+        # Construct helpful error message
+        zone_list = "\n".join([f"  - {z}" for z in safe_zones])
+        raise ValueError(
+            f"🚫 Security Access Denied: Path '{path}' is outside the allowed workspace.\n"
+            f"Allowed locations:\n{zone_list}"
+        )
+
     if must_exist and not p.exists():
         raise FileNotFoundError(f"Path does not exist: {path}")
     
@@ -350,6 +374,7 @@ def create_dir(path: str) -> str:
         return f"❌ Error creating directory: {e}"
 
 
+@security_level("high_risk")
 def move_file(src: str, dst: str) -> str:
     """
     Move a file or directory.
@@ -426,6 +451,7 @@ def copy_file(src: str, dst: str) -> str:
         return f"❌ Error copying: {e}"
 
 
+@security_level("high_risk")
 def delete_file(path: str, confirm: bool = False) -> str:
     """
     Delete a file or directory.
