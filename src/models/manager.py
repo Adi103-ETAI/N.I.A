@@ -33,7 +33,7 @@ Architecture:
     └─────────────────────────────────────────────────────────────────┘
 
 Usage:
-    from models import ModelManager
+    from src.models import ModelManager
     
     manager = ModelManager()
     
@@ -76,7 +76,7 @@ load_dotenv()
 logger = setup_logger("Models")
 
 def _load_general_config() -> dict:
-    config_path = Path(__file__).parent.parent / "config" / "nia" / "general.json"
+    config_path = Path(__file__).resolve().parents[2] / "config" / "nia" / "general.json"
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -142,7 +142,7 @@ def _load_catalog() -> Dict[str, ModelSpec]:
         FileNotFoundError: If catalog.json is missing.
         json.JSONDecodeError: If catalog.json has invalid JSON.
     """
-    catalog_path = Path(__file__).parent.parent / "config" / "nia" / "models.json"
+    catalog_path = Path(__file__).resolve().parents[2] / "config" / "nia" / "models.json"
     
     if not catalog_path.exists():
         logger.warning("models.json not found, using empty catalog")

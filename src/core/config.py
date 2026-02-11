@@ -247,7 +247,7 @@ class Settings(BaseSettings):
     # =========================================================================
     
     VERSION: str = Field(
-        default="3.0.0",
+        default="4.0.0",
         description="N.I.A. version string",
     )
     
@@ -454,7 +454,7 @@ class Settings(BaseSettings):
     @property
     def SUPERVISOR_PROMPT_FILE(self) -> Path:
         """Path to supervisor system prompt."""
-        return self.BASE_DIR / "nia/config/supervisor_prompt.txt"
+        return self.BASE_DIR / "config" / "nia" / "prompts.json"
 
 
 # =============================================================================

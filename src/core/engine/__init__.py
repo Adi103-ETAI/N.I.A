@@ -5,15 +5,8 @@ Modular package containing the NIAAssistant orchestrator.
 This package provides backward compatibility for existing imports:
     from src.core.engine import NIAAssistant  # Works!
 """
-from .system import NIAAssistant
-
-# Re-export module-level items for backward compatibility
-from .system import _load_engine_config, _ENGINE_CONFIG, _COMMANDS, _HELP_TEXT
+from .orchestrator import NIAAssistant
 
 __all__ = [
     "NIAAssistant",
-    "_load_engine_config",
-    "_ENGINE_CONFIG", 
-    "_COMMANDS",
-    "_HELP_TEXT",
 ]

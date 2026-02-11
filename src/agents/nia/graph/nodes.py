@@ -40,7 +40,7 @@ from pathlib import Path
 
 def _load_vision_config() -> dict:
     """Load vision configuration from JSON file."""
-    config_path = Path(__file__).parent.parent.parent / "config" / "iris" / "triggers.json"
+    config_path = Path(__file__).resolve().parents[4] / "config" / "iris" / "triggers.json"
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -87,7 +87,7 @@ def _load_routing_config() -> dict:
     Returns:
         Dict with tara_keywords, iris_keywords, and general_fallback.
     """
-    config_path = Path(__file__).parent.parent.parent / "config" / "nia" / "routing.json"
+    config_path = Path(__file__).resolve().parents[4] / "config" / "nia" / "routing.json"
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -148,7 +148,7 @@ _PROMPTS_CONFIG: Optional[dict] = None
 
 def _load_prompts_config() -> dict:
     """Load prompts configuration from JSON file."""
-    config_path = Path(__file__).parent.parent.parent / "config" / "nia" / "prompts.json"
+    config_path = Path(__file__).resolve().parents[4] / "config" / "nia" / "prompts.json"
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)

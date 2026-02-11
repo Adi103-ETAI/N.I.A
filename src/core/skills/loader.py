@@ -140,7 +140,7 @@ class SkillLoader:
         """
         if skills_dir is None:
             # Default: PROJECT_ROOT/skills/
-            skills_dir = Path(__file__).resolve().parents[2] / "skills"
+            skills_dir = Path(__file__).resolve().parents[2] / "capabilities"
         
         self.skills_dir = Path(skills_dir)
         self.skills: List[Skill] = []

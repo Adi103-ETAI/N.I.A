@@ -86,13 +86,13 @@ async def main() -> int:
     parser.add_argument("--status", "-s", action="store_true", help="Print system status and exit")
     parser.add_argument("--debug", "-d", action="store_true", help="Enable debug logging")
     parser.add_argument("--thread-id", "-t", type=str, default="root", help="Conversation thread ID")
-    parser.add_argument("--version", action="version", version="N.I.A. v3.0.0")
+    parser.add_argument("--version", action="version", version="N.I.A. v4.0.0")
     
     args = parser.parse_args()
     
     # Initialize global logging BEFORE any other imports
     # This ensures all modules pick up the correct debug level
-    from core.logger import init_logging, setup_logger, set_debug_mode
+    from src.core.logger import init_logging, setup_logger, set_debug_mode
     init_logging(debug=args.debug)
     
     if args.debug:
@@ -104,27 +104,27 @@ async def main() -> int:
     
     # Status check mode
     if args.status:
-        from core.health import print_system_status
+        from src.core.health import print_system_status
         print_system_status()
         return 0
     
     # Log startup configuration
-    logger.debug("N.I.A. v3.0.0 starting (Async Native)...")
+    logger.debug("N.I.A. v4.0.0 starting (Async Native)...")
     logger.debug(f"Mode: {'Voice' if args.voice else 'Text'} | Debug: {args.debug} | Thread: {args.thread_id}")
     if args.voice:
         logger.debug(f"Wake words: {args.wake_words} | Wake required: {not args.no_wake}")
     
     # Import and run engine
     # Import components for Dependency Injection
-    from core.registry import ServiceRegistry
-    from core.engine import NIAAssistant
-    from nola.manager import get_nola_manager, NOLAConfig
-    from iris.agent import IrisAgent
+    from src.core.registry import ServiceRegistry
+    from src.core.engine import NIAAssistant
+    from src.agents.nola.manager import get_nola_manager, NOLAConfig
+    from src.agents.iris.agent import IrisAgent
     
     wake_words = [w.strip() for w in args.wake_words.split(",") if w.strip()]
     
     # 0. Event Bus (The Spine)
-    from core.event_bus import get_event_bus
+    from src.core.events import get_event_bus
     ServiceRegistry.register("events", get_event_bus())
     
     # --- SERVICE REGISTRY WIRING ---
@@ -165,7 +165,7 @@ async def main() -> int:
 
     # 3. Security Service (Warden) - v3.1 Decoupled
     try:
-        from tara.security.warden import start_warden_service
+        from src.agents.tara.security import start_warden_service
         
         # Create a wrapper that matches the ServiceRegistry pattern
         class WardenServiceWrapper:
@@ -190,7 +190,7 @@ async def main() -> int:
 
     # 4. Plugin System (Hot-Reload Watcher) - v3.1 Decoupled
     try:
-        from tara.plugin_system.watcher import start_plugin_watcher, stop_plugin_watcher
+        from src.extensions.loader import start_plugin_watcher, stop_plugin_watcher
         
         class PluginWatcherWrapper:
             """Wrapper to adapt Plugin Watcher to ServiceRegistry lifecycle."""

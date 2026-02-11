@@ -79,7 +79,7 @@ def _load_iris_config() -> dict:
         Dictionary with intent keywords and vision prompt.
     """
     # Centralized config path: iris -> ROOT (1 level up via .parents[1])
-    config_dir = Path(__file__).resolve().parents[1] / "config" / "iris"
+    config_dir = Path(__file__).resolve().parents[3] / "config" / "iris"
     config = {}
     
     vision_config_path = config_dir / "triggers.json"

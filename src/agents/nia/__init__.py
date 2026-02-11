@@ -26,7 +26,7 @@ Components:
     - TaraAgent: Tool execution specialist
 
 Quick Start:
-    from nia import process_input
+    from src.agents.nia import process_input
     
     response = process_input("Hello, who are you?")
     print(response)  # "Hello! I'm N.I.A., your Neural Intelligence Assistant..."

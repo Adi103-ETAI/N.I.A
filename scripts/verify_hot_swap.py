@@ -35,10 +35,8 @@ print("📋 Test 1: ModelManager Dynamic Access")
 print("-" * 40)
 
 try:
-    from models.model_manager import get_model_manager, ModelManager
-    
-    # Get singleton manager
-    mm = get_model_manager()
+    from src.models.manager import ModelManager
+    mm = ModelManager()
     initial_provider = mm.get_active_provider()
     print(f"   ✅ Initial provider: {initial_provider}")
     
@@ -58,7 +56,7 @@ print("\n📋 Test 2: NIA SupervisorAgent Dynamic LLM")
 print("-" * 40)
 
 try:
-    from nia.agent import SupervisorAgent
+    from src.agents.nia.agent import SupervisorAgent
     
     # Verify SupervisorAgent has llm as a property
     assert hasattr(SupervisorAgent, 'llm'), "SupervisorAgent missing llm attribute"
@@ -81,7 +79,7 @@ print("\n📋 Test 3: IRIS Agent Dynamic LLM")
 print("-" * 40)
 
 try:
-    from iris.agent import IrisAgent
+    from src.agents.iris.agent import IrisAgent
     
     # Verify IrisAgent has llm as a property
     assert hasattr(IrisAgent, 'llm'), "IrisAgent missing llm attribute"
@@ -104,7 +102,7 @@ print("\n📋 Test 4: TARA Reasoner Dynamic LLM")
 print("-" * 40)
 
 try:
-    from tara.graph.nodes import _get_llm
+    from src.agents.tara.graph.nodes import _get_llm
     
     # TARA uses a function, not a class - that's inherently dynamic
     print("   ✅ TARA uses _get_llm() function (inherently dynamic)")
@@ -156,8 +154,8 @@ print("\n📋 Test 6: Version Check")
 print("-" * 40)
 
 try:
-    from core.config import settings
-    from interface.cli.banner import VERSION
+    from src.core.config import settings
+    from src.interface.cli.banner import VERSION
     
     print(f"   Settings VERSION: {settings.VERSION}")
     print(f"   Banner VERSION: {VERSION}")

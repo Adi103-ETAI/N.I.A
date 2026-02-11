@@ -228,7 +228,7 @@ class NIAAssistant:
             t0 = time.perf_counter()
             
             # 🌊 LAZY LOAD: NIA brain (LangGraph, LangChain, NVIDIA API)
-            from nia import aprocess_input
+            from src.agents.nia import aprocess_input
             
             t1 = time.perf_counter()
             self.logger.debug(f"Step 2: NIA import complete ({t1-t0:.2f}s)")

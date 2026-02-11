@@ -17,7 +17,7 @@ Usage:
     # Full status display
     print_system_status()  # Shows banner + detailed status
 
-Version: 3.0.0
+Version: 4.0.0
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def check_dependencies() -> dict:
     
     # NIA brain (Core LLM Agent)
     try:
-        import nia
+        import src.agents.nia as nia
         deps["nia"] = True
     except ImportError as e:
         deps["nia"] = False
@@ -42,7 +42,7 @@ def check_dependencies() -> dict:
     
     # NOLA voice I/O (TTS + STT)
     try:
-        import nola
+        import src.agents.nola as nola
         deps["nola"] = True
     except ImportError as e:
         deps["nola"] = False
@@ -50,7 +50,7 @@ def check_dependencies() -> dict:
     
     # IRIS vision agent
     try:
-        import iris
+        import src.agents.iris as iris
         deps["iris"] = True
     except ImportError as e:
         deps["iris"] = False
@@ -58,7 +58,7 @@ def check_dependencies() -> dict:
     
     # TARA tool agent
     try:
-        import tara
+        import src.agents.tara as tara
         deps["tara"] = True
     except ImportError as e:
         deps["tara"] = False

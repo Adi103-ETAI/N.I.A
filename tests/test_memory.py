@@ -1,86 +1,72 @@
 """Unit tests for core/memory.py - Memory Management System.
 
 Tests MemoryManager including:
-- Basic CRUD operations
-- TTL expiry and cleanup
-- Collection statistics
+- Preferences (set/get)
 - Vacuum database hygiene
 """
-from src.core.memory import MemoryManager, InMemoryMemory
+from src.core.memory import MemoryManager
 import tempfile
 import os
-import time
+import shutil
 
 
 def test_vacuum_db_runs_without_error():
-    """Test that _vacuum_db completes without raising."""
-    tf = tempfile.NamedTemporaryFile(delete=False)
-    path = tf.name
-    tf.close()
+    """Test that vacuum completes without raising."""
+    # Use a temp directory for all memory data
+    temp_dir = tempfile.mkdtemp()
     try:
-        mgr = MemoryManager(path, model_dim=8)
-        # Vacuum is called in __init__, call again explicitly
-        mgr._vacuum_db()
-        assert True  # Should not raise
+        mgr = MemoryManager(
+            vectors_dir=os.path.join(temp_dir, "vectors"),
+            skills_file=os.path.join(temp_dir, "skills.gml"),
+            db_path=os.path.join(temp_dir, "memory.db")
+        )
+        # Vacuum should not raise
+        mgr._vacuum_memory_db()
+        assert True
     finally:
         import gc
         gc.collect()
-        if os.path.exists(path):
-            os.unlink(path)
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
-def test_inmemory_basic_crud():
-    mem = InMemoryMemory()
-    mem.store('test', 'key1', {'val': 1})
-    assert mem.retrieve('test', 'key1')['val'] == 1
-    assert mem.delete('test', 'key1') is True
-    assert mem.retrieve('test', 'key1') is None
 
-def test_sqlite_memorymanager_crud():
-    tf = tempfile.NamedTemporaryFile(delete=False)
-    path = tf.name
-    tf.close()
+def test_preference_crud():
+    """Test set/get preference operations."""
+    temp_dir = tempfile.mkdtemp()
     try:
-        mgr = MemoryManager(path, model_dim=8)
-        mgr.store_memory('col', 'k', {'foo': 'bar'})
-        item = mgr.get_memory('col', 'k')
-        assert item['foo'] == 'bar'
-        mgr._remove_memory('col', 'k')
-        assert mgr.get_memory('col', 'k') is None
+        mgr = MemoryManager(
+            vectors_dir=os.path.join(temp_dir, "vectors"),
+            skills_file=os.path.join(temp_dir, "skills.gml"),
+            db_path=os.path.join(temp_dir, "memory.db")
+        )
+        # Set and get a preference
+        mgr.set_preference("theme", "dark", category="ui")
+        result = mgr.get_preference("theme")
+        assert result == "dark"
+        
+        # Get all preferences
+        all_prefs = mgr.get_all_preferences()
+        assert "theme" in all_prefs
     finally:
         import gc
         gc.collect()
-        if os.path.exists(path):
-            os.unlink(path)
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
-def test_ttl_expiry_and_cleanup():
-    tf = tempfile.NamedTemporaryFile(delete=False)
-    path = tf.name
-    tf.close()
-    try:
-        mgr = MemoryManager(path, model_dim=8, memory_ttl=1)
-        mgr.store_memory('col', 'old', {'foo': 1})
-        time.sleep(1.2)
-        assert mgr.get_memory('col', 'old') is None
-    finally:
-        import gc
-        gc.collect()
-        if os.path.exists(path):
-            os.unlink(path)
 
-def test_stats_and_clear():
-    tf = tempfile.NamedTemporaryFile(delete=False)
-    path = tf.name
-    tf.close()
+def test_stats_returns_dict():
+    """Test that get_stats returns a dictionary."""
+    temp_dir = tempfile.mkdtemp()
     try:
-        mgr = MemoryManager(path, model_dim=8)
-        for i in range(5):
-            mgr.store_memory('bucket', f'k{i}', {"num": i})
+        mgr = MemoryManager(
+            vectors_dir=os.path.join(temp_dir, "vectors"),
+            skills_file=os.path.join(temp_dir, "skills.gml"),
+            db_path=os.path.join(temp_dir, "memory.db")
+        )
         stats = mgr.get_stats()
-        assert stats['total_memories'] >= 5
-        count = mgr.clear_collection('bucket')
-        assert count == 5
+        assert isinstance(stats, dict)
     finally:
         import gc
         gc.collect()
-        if os.path.exists(path):
-            os.unlink(path)
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)

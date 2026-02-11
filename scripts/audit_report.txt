@@ -1,0 +1,140 @@
+============================================================
+1. IMPORT PATH AUDIT
+============================================================
+Scanned: 125 modules
+Errors: 0
+============================================================
+2. MISSING __init__.py FILES
+============================================================
+  All directories have __init__.py ✓
+
+============================================================
+3. HARDCODED PATH REFERENCES vs ACTUAL FILES
+============================================================
+  ✗ MISSING: Loaded %d models from src.models.json
+           ← src\models\manager.py
+           ← src\models\manager.py
+  ✗ MISSING: Loaded keywords from centralized triggers.json
+           ← src\agents\iris\agent.py
+           ← src\agents\iris\agent.py
+  ✓ FOUND: general.json
+           ← src\models\manager.py
+           ← src\models\manager.py
+  ✗ MISSING: ghost_state.json
+           ← src\core\config.py
+  ✓ FOUND: models.json
+           ← src\models\manager.py
+           ← src\models\manager.py
+  ✓ FOUND: sentry.json
+           ← src\agents\iris\sentry.py
+           ← src\agents\iris\sentry.py
+  ✓ FOUND: triggers.json
+           ← src\agents\iris\agent.py
+           ← src\agents\iris\agent.py
+           ← src\agents\nia\graph\nodes.py
+
+============================================================
+4. CRITICAL FILE EXISTENCE CHECKS
+============================================================
+  ✗ MISSING  config/general.json
+  ✗ MISSING  config/general.yaml
+  ✗ MISSING  config/triggers.json
+  ✗ MISSING  config/triggers.yaml
+  ✗ MISSING  config/sentry.json
+  ✗ MISSING  config/sentry.yaml
+  ✗ MISSING  config/models.json
+  ✓  config/models.yaml
+  ✓  config/nola/voice.json
+  ✗ MISSING  config/nola/voice.yaml
+  ✗ MISSING  config/engine.yaml
+  ✓  src/interface/__init__.py
+  ✓  src/interface/cli/__init__.py
+  ✓  src/interface/cli/banner.py
+  ✓  src/models/__init__.py
+  ✓  src/models/manager.py
+  ✓  src/agents/iris/__init__.py
+  ✓  src/agents/iris/agent.py
+  ✓  src/core/engine/__init__.py
+  ✓  src/core/engine/orchestrator.py
+
+============================================================
+5. INTERFACE & CLI MODULE CHECK
+============================================================
+  src/interface/ exists
+    📄 interface\__init__.py
+    📁 interface\api
+    📄 interface\banner.py
+    📁 interface\cli
+    📄 interface\cli\__init__.py
+    📄 interface\cli\banner.py
+    📁 interface\gui
+
+  ✓ src.interface.cli.banner imports OK
+
+============================================================
+6. MODEL MANAGER ANALYSIS
+============================================================
+  Config references in manager.py: ['general.json', 'models.json', 'Loaded %d models from src.models.json']
+  Path() calls: 2
+    Path(__file__)
+    Path(__file__)
+
+  Provider-related lines (121):
+    """Model Manager for NIA - Multi-Provider LLM Factory.
+    LLM providers (NVIDIA NIM, OpenAI, Ollama, Groq) through a unified API.
+    - Hot-Swap Provider Switching: Change active provider at runtime via
+    `set_active_provider()`. All agents automatically use the new provider.
+    and fallback logic. If Provider A fails (429), switches to Provider B.
+    │  │ (API Keys)  │  │ (Providers) │  │ smart/fast/vision/embed │  │
+    manager.set_active_provider("openai")  # All agents now use OpenAI
+    DEFAULT_PROVIDER = _GENERAL_CONFIG.get("DEFAULT_PROVIDER", "nvidia")
+    VALID_PROVIDERS = frozenset(_GENERAL_CONFIG.get("VALID_PROVIDERS", ["nvidia", "openai", "groq", "ollama"]))
+    class Provider(str, Enum):
+    """Supported LLM providers."""
+    provider: Provider
+    provider=Provider(data["provider"]),
+    """Configuration for model providers and settings.
+    preferred_providers: List[str] = field(default_factory=lambda: ["nvidia", "openai", "ollama"])
+
+============================================================
+7. ACTUAL CONFIG DIRECTORY TREE
+============================================================
+  📁 config\agents 
+  📄 config\agents\iris.yaml (1205B)
+  📄 config\agents\nia.yaml (1305B)
+  📄 config\agents\nola.yaml (415B)
+  📄 config\agents\tara.yaml (1978B)
+  📄 config\apps.json (111B)
+  📁 config\base 
+  📄 config\base\__init__.py (415B)
+  📄 config\base\settings.py (8393B)
+  📁 config\capabilities 
+  📄 config\capabilities\desktop.yaml (1038B)
+  📁 config\iris 
+  📄 config\iris\prompt.txt (278B)
+  📄 config\iris\sentry.json (563B)
+  📄 config\iris\triggers.json (816B)
+  📄 config\loader.py (9095B)
+  📄 config\models.yaml (5824B)
+  📁 config\nia 
+  📄 config\nia\general.json (145B)
+  📄 config\nia\models.json (6224B)
+  📄 config\nia\prompts.json (412B)
+  📄 config\nia\responses.json (849B)
+  📄 config\nia\routing.json (1686B)
+  📁 config\nola 
+  📄 config\nola\voice.json (167B)
+  📁 config\tara 
+  📄 config\tara\apps.json (111B)
+  📄 config\tara\commands.json (2509B)
+  📄 config\tara\help.txt (252B)
+  📄 config\tara\plugins.json (104B)
+  📄 config\tara\uia.json (602B)
+
+============================================================
+AUDIT SUMMARY
+============================================================
+  Import errors:      0
+  Missing __init__.py: 0
+  Missing config files: 3
+  Missing critical files: 9

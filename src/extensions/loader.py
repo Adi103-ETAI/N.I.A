@@ -129,3 +129,27 @@ class ExtensionLoader:
                 logger.error(f"Error shutting down extension {ext.name}: {e}")
         
         self.loaded_extensions.clear()
+
+
+# =============================================================================
+# Plugin Watcher Compatibility (for main.py backward compat)
+# =============================================================================
+
+_loader_instance = None
+
+def start_plugin_watcher() -> Optional[ExtensionLoader]:
+    """Start the extension loader (backward compat for old plugin watcher)."""
+    global _loader_instance
+    if _loader_instance is None:
+        _loader_instance = ExtensionLoader()
+        _loader_instance.load_all()
+    return _loader_instance
+
+
+def stop_plugin_watcher(loader: Optional[ExtensionLoader] = None) -> None:
+    """Stop the extension loader (backward compat for old plugin watcher)."""
+    global _loader_instance
+    target = loader or _loader_instance
+    if target:
+        target.shutdown_all()
+    _loader_instance = None

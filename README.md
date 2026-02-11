@@ -8,7 +8,7 @@
 ║    ██╔██╗ ██║   ██║   ███████║     ─────────────────────────────          ║
 ║    ██║╚██╗██║   ██║   ██╔══██║     CLASSIFICATION: DIRECTOR_LEVEL_ACCESS  ║
 ║    ██║ ╚████║██╗██║██╗██║  ██║     DEVELOPER: SentArc Labs                ║
-║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 3.1.0 (Unknown Edition)       ║
+║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: 4.0.0 (Velocity Edition)      ║
 ║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 ```
@@ -29,33 +29,68 @@
 
 **N.I.A.** (Neural Intelligence Assistant) is a privacy-first, modular AI assistant designed for power users. It combines offline voice recognition, vision-based analysis, and automated desktop control into a unified system.
 
-**v3.0.0 Release Highlights:**
-- 🧹 **Codebase Hygiene** — Massive dead code removal & architectural cleanup
-- 🔄 **TTS Optimization** — Persistent background loop for zero-latency speech
-- 🛡️ **Error Hardening** — Comprehensive try/catch blocks & silent failure elimination
-- 🎭 **Centralized Identity Engine** — Single source of truth for prompts
-- 👁️ **Vision Hardening** — Robust initialization and explicit API key validation
-- 🔥 **Multi-Provider LLM Hot-Swap** — Switch between NVIDIA, OpenAI, Groq, Ollama
-- 🏛️ **ServiceContainer DI** — Clean dependency injection (Legacy container removed)
-- 🛡️ **Diamond Security** — 3-Tier File System Protection with Path Traversal Locks
-- 🔇 **Silent Core** — "Zero-Print" policy with Global Debug Mode (-d)
-- 🧩 **Plugin Architecture** — Hot-loadable external tools support (ROOT/plugins/)
-- 🏛️ **Unified Config** — Centralized configuration management (ROOT/config/)
+**v4.0.0 Release Highlights:**
+- 🏗️ **Clean Architecture** — Complete restructuring with Domain-Driven Design
+- 📁 **Unified `src/` Structure** — All code organized under `src/` with clear domains
+- ⚙️ **YAML Configuration** — Human-readable configs with Pydantic validation
+- 🧩 **Unified Capabilities** — Tools and skills merged into capability domains
+- 🔌 **Extension System** — New extension architecture with v3.1.0 compatibility
+- 🧪 **Improved Testing** — Test structure mirrors source (unit/integration/e2e)
+- 📦 **Dependency Injection** — Enhanced ServiceRegistry with circular dependency detection
 
 ---
 
 ## 🏗️ Architecture
 
-N.I.A. uses a **LangGraph-based Supervisor Pattern** with four specialized units:
+N.I.A. uses a **LangGraph-based Supervisor Pattern** with four specialized agents:
 
 | Unit | Name     | Role                       | Technology                           |
 |------|----------|--------------------------- |--------------------------------------|
 | 🧠  | **NIA**  | Core Brain & Supervisor    | LangGraph + Multi-Provider LLM       |
 | 🎤  | **NOLA** | Voice I/O (STT/TTS)        | Vosk (Offline) + Edge TTS            |
 | 👁️  | **IRIS** | Vision & Screen Analysis   | Llama 3.2 Vision + mss               |
-| 🛠️  | **TARA** | Tool Execution (v2.0)      | Unified Async Bridge + 50 Tools      |
+| 🛠️  | **TARA** | Tool Execution             | Unified Capabilities + 50+ Tools     |
 
-### System Architecture (v3.0.0)
+### Directory Structure (v4.0.0)
+
+```
+N.I.A/
+├── 📁 src/                          # All source code
+│   ├── core/                        # Infrastructure (events, registry, platform)
+│   ├── agents/                      # All agents unified
+│   │   ├── nia/                     # Supervisor agent
+│   │   ├── tara/                    # Tool execution agent
+│   │   ├── iris/                    # Vision agent
+│   │   └── nola/                    # Voice agent
+│   ├── capabilities/                # Unified tool system
+│   │   ├── desktop/                 # Apps, windows, input, screen
+│   │   ├── system/                  # Files, clipboard, stats
+│   │   ├── web/                     # Browser automation
+│   │   ├── memory/                  # User preferences
+│   │   ├── vision/                  # Image analysis
+│   │   └── ai/                      # LLM operations
+│   ├── models/                      # LLM management
+│   ├── persona/                     # Identity & personality
+│   ├── interface/                   # CLI, API, GUI
+│   └── extensions/                  # Extension system
+│       └── compat/                  # v3.1.0 compatibility layer
+│
+├── 📁 config/                       # Centralized YAML configs
+│   ├── base/                        # Pydantic settings models
+│   ├── agents/                      # Agent configs (nia.yaml, tara.yaml, etc.)
+│   ├── capabilities/                # Capability configs
+│   └── models.yaml                  # LLM provider configs
+│
+├── 📁 extensions/                   # User extensions (hot-loadable)
+├── 📁 data/                         # Runtime data (memory, cache, logs)
+├── 📁 tests/                        # Mirrors src/ structure
+│   ├── unit/
+│   ├── integration/
+│   └── e2e/
+└── main.py                          # Entry point
+```
+
+### System Flow
 
 ```
                     ┌──────────────────┐
@@ -69,11 +104,11 @@ N.I.A. uses a **LangGraph-based Supervisor Pattern** with four specialized units
               └──────────────┬──────────────┘
                              │
      ┌───────────────────────▼───────────────────────┐
-     │              🧠 SUPERVISOR (CEO)              │
+     │              🧠 SUPERVISOR (NIA)              │
      │  ┌─────────────────────────────────────────┐  │
-     │  │         Protocol-based Routing          │  │
-     │  │     + RoutingGatekeeper Validation      │  │
-     │  │     + Identity Injection System         │  │
+     │  │   ServiceRegistry (Dependency Injection) │  │
+     │  │   + RoutingGatekeeper Validation         │  │
+     │  │   + Identity Injection System            │  │
      │  └───────────────────┬─────────────────────┘  │
      │                      │                        │
      │  ┌───────────────────▼─────────────────────┐  │
@@ -83,83 +118,85 @@ N.I.A. uses a **LangGraph-based Supervisor Pattern** with four specialized units
      │  └───────────────────┬─────────────────────┘  │
      │                      │                        │
      │  ┌───────────────────▼─────────────────────┐  │
-     │  │   🏭 MODEL FACTORY (ModelManager)       │  │
-     │  │   ┌──────┬──────┬──────┬──────┐         │  │
-     │  │   │NVIDIA│OpenAI│ Groq │Ollama│         │  │
-     │  │   └──────┴──────┴──────┴──────┘         │  │
-     │  └───────────────────┬─────────────────────┘  │
-     │                      │                        │
-     │  ┌───────────────────▼─────────────────────┐  │
      │  │          AGENT ROUTING                  │  │
      │  │ ╔════════╗  ╔════════╗  ╔═══════════╗   │  │
      │  │ ║  TARA  ║  ║  IRIS  ║  ║   CHAT    ║   │  │
      │  │ ║(Tools) ║  ║(Vision)║  ║ (General) ║   │  │
-     │  │ ╚════╤═══╝  ╚════════╝  ╚═══════════╝   │  │
+     │  │ ╚════════╝  ╚════════╝  ╚═══════════╝   │  │
      │  │      │                                  │  │
      │  │ ┌────▼────────────────────────────┐     │  │
-     │  │ │   🌊 UNIFIED ASYNC BRIDGE       │     │  │
-     │  │ │  ThreadPool ↔ asyncio.run()     │     │  │
+     │  │ │   🧩 CAPABILITIES (Unified)     │     │  │
+     │  │ │  desktop • system • web • ai    │     │  │
      │  │ └─────────────────────────────────┘     │  │
      └───────────────────────────────────────────────┘
 ```
 
-### Key Design Patterns
+---
 
-1. **CEO → Circuit Breaker → Factory Flow**
-   ```
-   Supervisor.llm (property) → SafeLLM.invoke() → ModelManager.get_model() → Provider
-                                    │
-                                    └─> On 429: Switch provider, inject notice, retry
-   ```
+## ⚙️ Configuration (v4.0.0 - YAML)
 
-2. **Dynamic Provider Access** — Agents use `@property` for LLM access, not stored references
-3. **Hot-Swap Capability** — Call `ModelManager.set_active_provider("openai")` at runtime
+Configuration has been migrated from scattered JSON files to unified YAML:
+
+### Agent Configuration
+
+```yaml
+# config/agents/nia.yaml
+name: NIA
+version: 4.0.0
+debug_mode: false
+log_level: INFO
+
+routing_mode: hybrid
+confidence_threshold: 0.7
+
+gatekeeper:
+  enabled: true
+  fallback_agent: chat
+
+memory:
+  enabled: true
+  max_conversation_length: 50
+```
+
+### Model Configuration
+
+```yaml
+# config/models.yaml
+default_provider: nvidia
+
+providers:
+  nvidia:
+    api_key: ${NVIDIA_API_KEY}
+    model: meta/llama-3.1-70b-instruct
+    temperature: 0.7
+    max_tokens: 2000
+  
+  openai:
+    api_key: ${OPENAI_API_KEY}
+    model: gpt-4
+    temperature: 0.7
+    max_tokens: 2000
+
+fallback_chain:
+  - nvidia
+  - openai
+  - ollama
+```
 
 ---
 
-## ⚡ What's New in v3.0.0
+## 🧩 Capabilities (Unified Tool System)
 
-### 🎭 Centralized Identity Engine
-- Prompts are now loaded from `config/nia/prompts.json` rather than hardcoded.
-- Ensures consistent persona across all interaction points (Chat, Supervisor).
-- Supports instant personality updates without code changes.
+The v4.0.0 capabilities system unifies tools and skills:
 
-### 👁️ Vision Hardening (IRIS)
-- **Robust Initialization**: Explicitly validates `NVIDIA_API_KEY` on startup.
-- **Fail-Safe**: If vision services are unavailable, IRIS gracefully degrades instead of crashing the graph.
-- **Clear Feedback**: Returns specialized error messages helping users fix env config.
-
-### 🔥 Multi-Provider LLM Support (Hot-Swap)
-```python
-from models.model_manager import get_model_manager
-
-manager = get_model_manager()
-manager.set_active_provider("openai")  # All agents now use OpenAI
-manager.set_active_provider("groq")    # Switch to Groq for speed
-```
-
-Supported providers:
-| Provider | Model | Use Case |
-|----------|-------|----------|
-| **nvidia** | Llama 3.1 70B | Primary (highest quality) |
-| **openai** | GPT-4o | Fallback (widely available) |
-| **groq** | Llama 3.1 70B | Speed (fastest inference) |
-| **ollama** | Local models | Privacy (100% offline) |
-
-### ⚡ Self-Healing Circuit Breaker (SafeLLM)
-- **Auto-retry** with exponential backoff on rate limits
-- **Auto-fallback** to alternative provider on 429/503 errors
-- **Notice injection** — Agent knows when provider switched
-- **Zero code changes** — Wrapped transparently by ModelManager
-
-### 🏛️ ServiceContainer (Dependency Injection)
-```python
-from core.container import get_container
-
-container = get_container()
-memory = container.memory        # 4-Layer Memory
-browser = container.browser_manager  # Playwright
-```
+| Domain | Capabilities |
+|--------|-------------|
+| **Desktop** | `launch_app`, `kill_app`, `focus_window`, `minimize_window`, `maximize_window`, `snap_window`, `close_window`, `mouse_click`, `keyboard_type`, `keyboard_hotkey`, `take_screenshot` |
+| **System** | `list_dir`, `read_file`, `write_file`, `delete_file`, `move_file`, `copy_file`, `search_files`, `system_stats`, `battery_status` |
+| **Web** | `browser_open_url`, `browser_click`, `browser_type`, `browser_scroll`, `browser_screenshot`, `browser_close` |
+| **Memory** | `save_user_preference`, `get_user_preference`, `list_user_preferences` |
+| **Vision** | `analyze_screen`, `extract_text` |
+| **AI** | `llm_switch_provider`, `llm_get_status` |
 
 ---
 
@@ -171,21 +208,6 @@ browser = container.browser_manager  # Playwright
 | **Procedural** | NetworkX | Skill chains and tool sequences |
 | **Preferences** | SQLite | User facts and settings |
 | **Security** | SQLite | Audit logs and command history |
-
----
-
-## 🛠️ TARA 2.0 Toolset (50+ Tools)
-
-| Category | Tools |
-|----------|-------|
-| **Browser** | `browser_open_url`, `browser_click`, `browser_type`, `browser_scroll`, `browser_screenshot`, `browser_close`, `browser_new_tab`, `browser_get_content` |
-| **Apps** | `launch_app`, `kill_app`, `list_processes` |
-| **Windows** | `focus_window`, `minimize_window`, `maximize_window`, `snap_window`, `close_window`, `list_open_windows` |
-| **File Ops** | `list_dir`, `read_file`, `write_file`, `delete_file`, `move_file`, `copy_file`, `search_files`, `get_file_info` |
-| **System** | `system_power`, `set_volume`, `get_volume`, `system_stats`, `battery_status` |
-| **Input** | `mouse_click`, `keyboard_type`, `keyboard_hotkey`, `mouse_scroll` |
-| **Screen** | `take_screenshot`, `get_screen_resolution`, `get_mouse_position` |
-| **Memory** | `save_user_preference`, `get_user_preference`, `list_user_preferences` |
 
 ---
 
@@ -230,8 +252,8 @@ GROQ_API_KEY=gsk_xxxx
 OLLAMA_HOST=http://localhost:11434
 
 # Runtime Configuration
-ACTIVE_LLM_PROVIDER=nvidia    # Default provider on startup
-DEBUG=false                   # Enable debug logging
+ACTIVE_LLM_PROVIDER=nvidia
+DEBUG=false
 ```
 
 ---
@@ -268,6 +290,42 @@ python main.py --version
 
 ---
 
+## 🔌 Extensions
+
+### Creating an Extension
+
+```python
+# extensions/custom/my_extension.py
+from src.extensions.base import BaseExtension
+from src.capabilities.decorators import capability
+
+class MyExtension(BaseExtension):
+    def initialize(self):
+        @capability(name="my_custom_tool")
+        def my_tool(param: str) -> str:
+            return f"Executed with: {param}"
+    
+    def cleanup(self):
+        pass
+```
+
+### v3.1.0 Plugin Compatibility
+
+Legacy plugins still work via the compatibility layer:
+
+```python
+# Your old v3.1.0 plugin - STILL WORKS
+from tara.tools.decorators import tool
+
+@tool(name="my_old_tool")
+def my_tool():
+    return "Works with compatibility mode!"
+```
+
+See [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md) for full migration details.
+
+---
+
 ## 🔧 Tech Stack
 
 | Component | Technology |
@@ -279,23 +337,27 @@ python main.py --version
 | **Browser** | Playwright (Chromium) |
 | **Desktop** | pyautogui, pywin32, pygetwindow |
 | **Memory** | ChromaDB, NetworkX, SQLite |
+| **Config** | Pydantic, PyYAML |
 
 ---
 
 ## 🗺️ Roadmap
 
-### v3.0.0 (Current)
-- ✅ **Codebase Hygiene** — Removed orphaned files (`core/container.py`) & unused imports
-- ✅ **TTS Latency Fix** — Implemented `run_coroutine_threadsafe` for NOLA
-- ✅ **Robust Error Handling** — Added `check_db_health` & full stack trace logging
-- ✅ Centralized Identity Engine & Prompts
-- ✅ Vision Initialization Hardening
+### v4.0.0 (Current)
+- ✅ **Clean Architecture** — Domain-Driven Design restructuring
+- ✅ **Unified src/ Structure** — All source under `src/`
+- ✅ **YAML Configuration** — Pydantic-validated YAML configs
+- ✅ **Unified Capabilities** — Tools and skills merged
+- ✅ **Extension System** — Hot-loadable with v3.1.0 compat
+- ✅ **Improved Testing** — unit/integration/e2e structure
+- ✅ **ServiceRegistry DI** — Circular dependency detection
 
-### v3.1 (Future)
-- 🚀 **Native Async Graph** — Full async-first LangGraph
-- 📦 **Poetry Migration** — Modern dependency management
-- 🔌 **Plugin Architecture** — Dynamic tool loading
-- 🧪 **Integration Tests** — End-to-end automation testing
+### v5.0.0 (Future)
+- 🚀 **Multi-Platform** — macOS and Linux support
+- 🌐 **REST API** — Remote control interface
+- 🖼️ **GUI Interface** — Desktop application
+- 🔐 **Enhanced Security** — Role-based permissions
+- 🧠 **Agent Plugins** — Custom agent development
 
 ---
 
@@ -309,6 +371,6 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 **Built with ❤️ by SentArc Labs**
 
-*"N.I.A. v3.1.0"*
+*"N.I.A. v4.0.0 — Velocity Edition"*
 
 </div>

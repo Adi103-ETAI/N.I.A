@@ -191,7 +191,7 @@ def handle_history(engine: 'NIAAssistant', text: str) -> bool:
     # "history clear" or "clear history"
     if "clear" in text:
         try:
-            from nia import clear_conversation
+            from src.agents.nia import clear_conversation
             if clear_conversation(engine.thread_id):
                 print("✅ History cleared")
             else:
@@ -202,7 +202,7 @@ def handle_history(engine: 'NIAAssistant', text: str) -> bool:
         
     # Default: View history
     try:
-        from nia import get_conversation_history
+        from src.agents.nia import get_conversation_history
         history = get_conversation_history(engine.thread_id)
         if history:
             print(f"📜 History ({len(history)} messages):")

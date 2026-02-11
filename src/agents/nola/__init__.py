@@ -10,7 +10,7 @@ Package Structure:
     └── io.py            # HybridTTS (Edge+Piper) & VoskSTT implementations
 
 Quick Start:
-    from nola import get_nola_manager
+    from src.agents.nola import get_nola_manager
     
     manager = get_nola_manager()
     manager.start()

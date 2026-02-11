@@ -25,7 +25,7 @@ Usage:
     NIA routes vision queries to IRIS automatically
     
     # Direct usage:
-    from iris import IrisAgent, capture_screen
+    from src.agents.iris import IrisAgent, capture_screen
     
     agent = IrisAgent()
     if agent.is_ready:
