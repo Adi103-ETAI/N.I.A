@@ -17,16 +17,16 @@ Usage:
     memory = get_memory_manager()
     
     # Store a conversation episode
-    memory.store_episode("What's the weather?", role="user")
+    await memory.store_episode("What's the weather?", role="user")
     
     # Recall relevant episodes
-    episodes = memory.recall_episodes("weather forecast", n=5)
+    episodes = await memory.recall_episodes("weather forecast", n=5)
     
     # Store a skill path
     memory.add_skill_path("open browser", ["launch app", "navigate to url"])
     
     # Get full context for LLM
-    context = memory.get_full_context("open chrome")
+    context = await memory.get_full_context("open chrome")
 """
 from __future__ import annotations
 
@@ -37,6 +37,8 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import aiosqlite
 
 from src.core.logger import setup_logger
 from src.core.config import get_settings, get_embedding_function
@@ -116,7 +118,7 @@ class MemoryManager:
         # Initialize all layers
         self._init_episodic()
         self._init_procedural()
-        self._init_sql()
+        self._init_sql_sync() # Initial setup needs to be sync or run in loop
         
         logger.debug(f"MemoryManager initialized (Root: {self.root_dir})")
     
@@ -125,12 +127,7 @@ class MemoryManager:
     # =========================================================================
     
     def _init_episodic(self) -> None:
-        """Initialize ChromaDB with embeddings from centralized config.
-        
-        Uses get_embedding_function() which returns:
-        - OpenAI embeddings if key available
-        - None for default local embeddings (all-MiniLM-L6-v2)
-        """
+        """Initialize ChromaDB with embeddings from centralized config."""
         self._chroma_client = None
         self._episodes = None
         
@@ -237,9 +234,6 @@ class MemoryManager:
             return False
         try:
             # Graph writes already protected by callers using the lock
-            # but if called directly, we assume the caller holds the lock or doesn't need it?
-            # Better to be safe: caller (add_skill_path) should hold lock.
-            # But let's assume this is internal.
             nx.write_gml(self._graph, str(self._skills_file))
             return True
         except Exception as exc:
@@ -296,11 +290,11 @@ class MemoryManager:
         return None
     
     # =========================================================================
-    # Layer 3: Preferences (SQLite)
+    # Layer 3: Preferences & Layer 4: Security (Async SQLite)
     # =========================================================================
     
-    def _init_sql(self) -> None:
-        """Initialize SQLite tables."""
+    def _init_sql_sync(self) -> None:
+        """Initialize SQLite tables (Sync for startup)."""
         try:
             with sqlite3.connect(str(self._db_path)) as conn:
                 conn.execute("""
@@ -328,9 +322,23 @@ class MemoryManager:
             logger.debug("SQL tables ready: %s", self._db_path)
         except Exception as exc:
             logger.error("SQL init failed: %s", exc)
+
+    async def set_preference(self, key: str, value: str, category: str = "general") -> bool:
+        """Set a user preference (Async)."""
+        try:
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute(
+                    "INSERT OR REPLACE INTO preferences (key, value, category) VALUES (?, ?, ?)",
+                    (key, value, category),
+                )
+                await db.commit()
+            return True
+        except Exception as e:
+            logger.error("set_preference failed: %s", e, exc_info=True)
+            return False
     
-    def set_preference(self, key: str, value: str, category: str = "general") -> bool:
-        """Set a user preference."""
+    def set_preference_sync(self, key: str, value: str, category: str = "general") -> bool:
+        """Set a user preference (Sync wrapper)."""
         try:
             with sqlite3.connect(str(self._db_path)) as conn:
                 conn.execute(
@@ -339,11 +347,22 @@ class MemoryManager:
                 )
             return True
         except Exception as e:
-            logger.error("set_preference failed: %s", e, exc_info=True)
+            logger.error("set_preference_sync failed: %s", e, exc_info=True)
             return False
     
-    def get_preference(self, key: str) -> Optional[str]:
-        """Get a user preference."""
+    async def get_preference(self, key: str) -> Optional[str]:
+        """Get a user preference (Async)."""
+        try:
+            async with aiosqlite.connect(self._db_path) as db:
+                async with db.execute("SELECT value FROM preferences WHERE key = ?", (key,)) as cursor:
+                    row = await cursor.fetchone()
+                    return row[0] if row else None
+        except Exception as e:
+            logger.error("get_preference failed: %s", e, exc_info=True)
+            return None
+
+    def get_preference_sync(self, key: str) -> Optional[str]:
+        """Get a user preference (Sync wrapper)."""
         try:
             with sqlite3.connect(str(self._db_path)) as conn:
                 row = conn.execute(
@@ -351,71 +370,72 @@ class MemoryManager:
                 ).fetchone()
                 return row[0] if row else None
         except Exception as e:
-            logger.error("get_preference failed: %s", e, exc_info=True)
+            logger.error("get_preference_sync failed: %s", e, exc_info=True)
             return None
     
-    def get_all_preferences(self) -> Dict[str, str]:
-        """Get all preferences as key-value dict."""
+    async def get_all_preferences(self) -> Dict[str, str]:
+        """Get all preferences as key-value dict (Async)."""
+        try:
+            async with aiosqlite.connect(self._db_path) as db:
+                async with db.execute("SELECT key, value FROM preferences") as cursor:
+                    rows = await cursor.fetchall()
+                    return {r[0]: r[1] for r in rows}
+        except Exception as e:
+            logger.error("get_all_preferences failed: %s", e, exc_info=True)
+            return {}
+
+    def get_all_preferences_sync(self) -> Dict[str, str]:
+        """Get all preferences (Sync wrapper)."""
         try:
             with sqlite3.connect(str(self._db_path)) as conn:
                 rows = conn.execute("SELECT key, value FROM preferences").fetchall()
                 return {r[0]: r[1] for r in rows}
         except Exception as e:
-            logger.error("get_all_preferences failed: %s", e, exc_info=True)
+            logger.error("get_all_preferences_sync failed: %s", e, exc_info=True)
             return {}
     
-    def record_skill_usage(self, tool_name: str) -> bool:
-        """Increment usage count for a successful tool execution.
-        
-        Uses SQLite upsert to create or increment the counter.
-        
-        Args:
-            tool_name: Name of the tool that was executed.
-            
-        Returns:
-            True if recorded successfully, False otherwise.
-        """
+    async def record_skill_usage(self, tool_name: str) -> bool:
+        """Increment usage count for a successful tool execution (Async)."""
         try:
-            with sqlite3.connect(str(self._db_path)) as conn:
-                timestamp = datetime.now().isoformat()
-                conn.execute("""
+            timestamp = datetime.now().isoformat()
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute("""
                     INSERT INTO skill_stats (tool_name, usage_count, last_used)
                     VALUES (?, 1, ?)
                     ON CONFLICT(tool_name) DO UPDATE SET
                     usage_count = usage_count + 1,
                     last_used = ?
                 """, (tool_name, timestamp, timestamp))
+                await db.commit()
             logger.debug("📈 Skill Reinforced: %s", tool_name)
             return True
         except Exception as e:
             logger.error("Failed to record skill: %s", e, exc_info=True)
             return False
     
-    def get_skill_stats(self) -> Dict[str, Any]:
-        """Get all skill usage statistics.
-        
-        Returns:
-            Dict mapping tool_name to {usage_count, last_used}.
-        """
+    async def get_skill_stats(self) -> Dict[str, Any]:
+        """Get all skill usage statistics (Async)."""
         try:
-            with sqlite3.connect(str(self._db_path)) as conn:
-                rows = conn.execute(
+            async with aiosqlite.connect(self._db_path) as db:
+                async with db.execute(
                     "SELECT tool_name, usage_count, last_used FROM skill_stats ORDER BY usage_count DESC"
-                ).fetchall()
-                return {
-                    r[0]: {"usage_count": r[1], "last_used": r[2]} 
-                    for r in rows
-                }
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    return {
+                        r[0]: {"usage_count": r[1], "last_used": r[2]}
+                        for r in rows
+                    }
         except Exception as e:
             logger.error("get_skill_stats failed: %s", e, exc_info=True)
             return {}
     
-    # =========================================================================
-    # Layer 4: Security (SQLite)
-    # =========================================================================
-    
     def log_security_event(self, trigger: str, action: str) -> bool:
-        """Log a security event."""
+        """Log a security event (Sync - Fire and Forget).
+
+        Security logging often happens in sync contexts (e.g., Warden).
+        For async, wrap in asyncio.to_thread if needed, or use aiosqlite.
+        Given it's a log, sync is acceptable for safety/reliability.
+        """
         try:
             with sqlite3.connect(str(self._db_path)) as conn:
                 conn.execute(
@@ -429,7 +449,7 @@ class MemoryManager:
             return False
     
     def is_blocked(self, trigger: str) -> bool:
-        """Check if a trigger is blocked."""
+        """Check if a trigger is blocked (Sync)."""
         try:
             with sqlite3.connect(str(self._db_path)) as conn:
                 row = conn.execute(
@@ -451,20 +471,24 @@ class MemoryManager:
         Returns:
             Dict with preferences, relevant_episodes, relevant_skills, is_blocked.
         """
-        # Prefetch parallelizable data?
-        # For now, just await recall_episodes since it's the heaviest.
-        # SQLite calls are fast enough to keep sync or can be wrapped later.
+        # Fetch parallelizable data
+        # Note: ChromaDB recall is heaviest
+        episodes_task = self.recall_episodes(query, n=5)
+        prefs_task = self.get_all_preferences()
         
-        episodes = await self.recall_episodes(query, n=5)
+        episodes, prefs = await asyncio.gather(episodes_task, prefs_task)
+
+        # Sync check for blocking (fast enough)
+        blocked = self.is_blocked(query)
         
         context = {
-            "preferences": self.get_all_preferences(),
+            "preferences": prefs,
             "relevant_episodes": episodes,
             "relevant_skills": [],
-            "is_blocked": self.is_blocked(query),
+            "is_blocked": blocked,
         }
         
-        # Check for matching skill
+        # Check for matching skill (in-memory graph check, fast)
         goal = self.find_similar_goal(query)
         if goal:
             context["relevant_skills"] = self.get_skill_path(goal)
@@ -476,17 +500,17 @@ class MemoryManager:
     # Stats
     # =========================================================================
     
-    def _vacuum_memory_db(self) -> None:
+    async def vacuum_memory_db(self) -> None:
         """Vacuum SQLite database to reclaim space and optimize."""
         try:
-            with sqlite3.connect(str(self._db_path)) as conn:
-                conn.execute("VACUUM")
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute("VACUUM")
             logger.debug("Memory database vacuumed")
         except Exception as exc:
             logger.debug("Vacuum failed: %s", exc)
     
     def get_stats(self) -> Dict[str, int]:
-        """Get memory statistics."""
+        """Get memory statistics (Sync for dashboard)."""
         stats = {"episodic": 0, "skills": 0, "preferences": 0, "security": 0}
         
         if self._episodes:
@@ -508,19 +532,13 @@ class MemoryManager:
         return stats
 
     def check_db_health(self) -> Dict[str, bool]:
-        """Check health of all memory layers.
-        
-        Returns:
-            Dict with status for 'episodic', 'procedural', 'sql'.
-            Values are True (healthy) or False (unhealthy).
-        """
+        """Check health of all memory layers."""
         health = {
             "episodic": False,
             "procedural": False,
             "sql": False
         }
         
-        # Check Episodic (Chroma)
         if self._episodes:
             try:
                 self._episodes.count()
@@ -528,11 +546,9 @@ class MemoryManager:
             except Exception:
                 pass
                 
-        # Check Procedural (NetworkX)
         if self._graph is not None:
              health["procedural"] = True
              
-        # Check SQL
         try:
             with sqlite3.connect(str(self._db_path)) as conn:
                 conn.execute("SELECT 1").fetchone()
@@ -550,20 +566,13 @@ class MemoryManager:
 _factory_lock = threading.Lock()
 
 def get_memory_manager(**kwargs) -> MemoryManager:
-    """Get or create the MemoryManager via ServiceRegistry (Thread-Safe).
-    
-    The MemoryManager is registered as "memory" in the ServiceRegistry.
-    If not yet registered, it will be created and registered automatically.
-    This provides backward compatibility while enabling centralized lifecycle management.
-    """
+    """Get or create the MemoryManager via ServiceRegistry (Thread-Safe)."""
     from src.core.registry import ServiceRegistry
     
-    # Fast path check
     memory = ServiceRegistry.get("memory")
     if memory:
         return memory
 
-    # Slow path with lock to prevent race conditions during init
     with _factory_lock:
         memory = ServiceRegistry.get("memory")
         if memory is None:
@@ -574,4 +583,3 @@ def get_memory_manager(**kwargs) -> MemoryManager:
 
 
 __all__ = ["MemoryManager", "get_memory_manager"]
-
