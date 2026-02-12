@@ -31,7 +31,8 @@ except ImportError:
 try:
     import pyautogui
     _HAS_PYAUTOGUI = True
-except ImportError:
+except (ImportError, KeyError, Exception):
+    # KeyError: 'DISPLAY' can happen on headless systems
     _HAS_PYAUTOGUI = False
     pyautogui = None  # type: ignore
 

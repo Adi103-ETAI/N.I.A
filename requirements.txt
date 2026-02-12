@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------
-# N.I.A. v2.5.2 "Velocity" - Requirements
+# N.I.A. v4.0.0 "Velocity" - Requirements
 # -------------------------------------------------------------------------------
 # 
 # This file lists all external dependencies required to run N.I.A.
@@ -10,15 +10,15 @@
 
 # --- CORE: The Brain (LangChain + LangGraph) ---
 langgraph~=0.1.0            # Agent orchestration graph
-langchain~=0.1.0            # LLM framework core
-langchain-core~=0.1.0       # Core abstractions
-langchain-community~=0.0.10 # Community integrations
+langchain~=0.2.0            # LLM framework core
+langchain-core~=0.2.0       # Core abstractions
+langchain-community~=0.2.0  # Community integrations
 
 # --- Multi-Provider LLM Support (v2.5.2 Hot-Swap) ---
-langchain-nvidia-ai-endpoints~=0.0.1  # NVIDIA NIM (Primary)
-langchain-openai~=0.0.5               # OpenAI GPT-4o (Fallback)
-langchain-groq~=0.0.1                 # Groq (Fast inference)
-langchain-ollama~=0.0.1               # Ollama (Local/Offline)
+langchain-nvidia-ai-endpoints>=0.1.0  # NVIDIA NIM (Primary)
+langchain-openai>=0.1.0               # OpenAI GPT-4o (Fallback)
+langchain-groq>=0.1.0                 # Groq (Fast inference)
+langchain-ollama>=0.1.0               # Ollama (Local/Offline)
 
 # --- Configuration ---
 python-dotenv>=1.0.0        # Environment variable loading
@@ -30,14 +30,14 @@ vosk>=0.3.45                # Offline Speech Recognition
 sounddevice>=0.4.6          # Audio Input/Output
 edge-tts>=6.1.0             # Microsoft Edge Neural TTS
 pygame>=2.5.0               # Audio Playback
-pycaw>=2024.0               # Windows Audio Control
-comtypes>=1.2.0             # Required for Pycaw
+pycaw>=2024.0; sys_platform == 'win32' # Windows Audio Control
+comtypes>=1.2.0; sys_platform == 'win32' # Required for Pycaw
 
 # --- IRIS: The Vision ---
 mss>=9.0.0                  # Fast Screen Capture
 Pillow>=10.0.0              # Image Processing
 opencv-python>=4.8.0        # Webcam capture (cv2)
-winsdk>=1.0.0b1               # Windows OCR for Sentry
+winsdk>=1.0.0b1; sys_platform == 'win32' # Windows OCR for Sentry
 
 # --- TARA: The Tools ---
 # Browser Automation
@@ -46,14 +46,14 @@ playwright>=1.40.0          # Chromium browser automation
 # Desktop Automation
 pyautogui>=0.9.54           # Mouse/Keyboard simulation
 pygetwindow>=0.0.9          # Window management
-pywin32>=306                # Win32 API (win32gui, win32con)
+pywin32>=306; sys_platform == 'win32' # Win32 API (win32gui, win32con)
 
 # File & System Operations
 psutil>=5.9.0               # System monitoring
 send2trash>=1.8.0           # Safe file deletion (recycle bin)
 
 # App Control
-AppOpener>=1.7              # App launching by name
+AppOpener>=1.7; sys_platform == 'win32' # App launching by name
 
 # Web & Clipboard
 pyperclip>=1.8.0            # Clipboard access
@@ -64,6 +64,7 @@ chromadb>=0.4.0             # Episodic memory (vector store)
 networkx>=3.0               # Procedural memory (skill graphs)
 
 # --- UI/CLI ---
+aioconsole>=0.6.0           # Async console input
 prompt_toolkit>=3.0.0       # Terminal UI enhancements
 numpy>=1.23.0               # Numerical operations
 requests>=2.28.0            # HTTP requests
