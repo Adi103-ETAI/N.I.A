@@ -36,7 +36,7 @@ def check_dependencies() -> dict:
     try:
         import src.agents.nia as nia
         deps["nia"] = True
-    except ImportError as e:
+    except (ImportError, Exception) as e:
         deps["nia"] = False
         deps["nia_error"] = str(e)
     
@@ -44,7 +44,7 @@ def check_dependencies() -> dict:
     try:
         import src.agents.nola as nola
         deps["nola"] = True
-    except ImportError as e:
+    except (ImportError, Exception) as e:
         deps["nola"] = False
         deps["nola_error"] = str(e)
     
@@ -52,7 +52,7 @@ def check_dependencies() -> dict:
     try:
         import src.agents.iris as iris
         deps["iris"] = True
-    except ImportError as e:
+    except (ImportError, Exception) as e:
         deps["iris"] = False
         deps["iris_error"] = str(e)
     
@@ -60,7 +60,7 @@ def check_dependencies() -> dict:
     try:
         import src.agents.tara as tara
         deps["tara"] = True
-    except ImportError as e:
+    except (ImportError, Exception) as e:
         deps["tara"] = False
         deps["tara_error"] = str(e)
     
@@ -82,7 +82,7 @@ def check_dependencies() -> dict:
     try:
         import sounddevice
         deps["sounddevice"] = True
-    except ImportError:
+    except (ImportError, OSError):
         deps["sounddevice"] = False
     
     # psutil (system monitoring)
