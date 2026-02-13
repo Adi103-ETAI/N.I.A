@@ -229,11 +229,11 @@ cd N.I.A
 python -m venv .venv
 .venv\Scripts\activate
 
-# Install
-pip install -r requirements.txt
+# Install dependencies
+uv sync
 
 # Install Playwright browsers
-playwright install chromium
+uv run playwright install chromium
 ```
 
 ### Environment Setup

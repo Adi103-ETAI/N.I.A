@@ -362,7 +362,7 @@ class ModelFactory:
         if not self._available_providers.get("nvidia"):
             raise ImportError(
                 "langchain-nvidia-ai-endpoints not installed. "
-                "Install with: pip install langchain-nvidia-ai-endpoints"
+                "Install with: uv add langchain-nvidia-ai-endpoints"
             )
         
         api_key = self.config.nvidia_api_key
@@ -392,7 +392,7 @@ class ModelFactory:
         if not self._available_providers.get("openai"):
             raise ImportError(
                 "langchain-openai not installed. "
-                "Install with: pip install langchain-openai"
+                "Install with: uv add langchain-openai"
             )
         
         api_key = self.config.openai_api_key
@@ -421,7 +421,7 @@ class ModelFactory:
         if not self._available_providers.get("ollama"):
             raise ImportError(
                 "langchain-ollama not installed. "
-                "Install with: pip install langchain-ollama"
+                "Install with: uv add langchain-ollama"
             )
         
         # Try modern import first
@@ -450,7 +450,7 @@ class ModelFactory:
         if not self._available_providers.get("groq"):
             raise ImportError(
                 "langchain-groq not installed. "
-                "Install with: pip install langchain-groq"
+                "Install with: uv add langchain-groq"
             )
         
         api_key = self.config.groq_api_key
@@ -618,7 +618,7 @@ class ModelManager:
         if not self.factory.is_provider_available(provider):
             raise ValueError(
                 f"Provider '{provider}' is not installed. "
-                f"Install with: pip install langchain-{provider}-ai-endpoints"
+                f"Install with: uv add langchain-{provider}-ai-endpoints"
             )
         
         # Clear cached models (force rebuild on next access)
@@ -794,7 +794,7 @@ class ModelManager:
         error_summary = "\n".join(f"  - {e}" for e in errors)
         raise RuntimeError(
             f"No models available. Tried:\n{error_summary}\n\n"
-            f"Install providers with: pip install langchain-nvidia-ai-endpoints langchain-openai"
+            f"Install providers with: uv add langchain-nvidia-ai-endpoints langchain-openai"
         )
     
     def _wrap_with_safety(self, model: Any) -> Any:

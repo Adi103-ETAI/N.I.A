@@ -76,3 +76,22 @@ nola/models/
 
 *.onnx
 *.bin
+*.onnx
+
+# Temporary Scripts & Artifacts
+scripts/test_*.py
+scripts/verify_*.py
+scripts/manual_test.py
+*.bak
+*.tmp
+*.temp
+ghost_state.json
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Models Folder (if re-created)
+models/

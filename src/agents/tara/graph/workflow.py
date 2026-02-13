@@ -69,7 +69,7 @@ def build_tara_graph(with_memory: bool = False):
         Compiled LangGraph application.
     """
     if not _HAS_LANGGRAPH:
-        raise RuntimeError("langgraph not installed. Run: pip install langgraph")
+        raise RuntimeError("langgraph not installed. Run: uv add langgraph")
     
     logger.debug("Building TARA SubGraph...")
     

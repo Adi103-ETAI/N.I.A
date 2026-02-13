@@ -21,6 +21,7 @@ from src.agents.nia.state import (
     AGENT_IRIS,
     AGENT_TARA,
     AGENT_END,
+    safe_get_content,
 )
 
 # LangChain messages for summarization
@@ -243,7 +244,10 @@ def summarize_oldest(messages: List, llm=None) -> List:
             # Fallback
             response = llm(summary_request)
             
-        summary_text = response.content if hasattr(response, 'content') else str(response)
+            # Fallback
+            response = llm(summary_request)
+            
+        summary_text = safe_get_content(response)
         
         # 4. Create the Summary Message
         summary_msg = SystemMessage(content=f"📝 [PREVIOUS CONTEXT SUMMARY]: {summary_text}")
@@ -341,7 +345,7 @@ async def general_assistant(state: AgentState) -> AgentState:
         response = await llm.ainvoke(messages)
         
         # Extract content
-        response_content = response.content if hasattr(response, 'content') else str(response)
+        response_content = safe_get_content(response)
         
         logger.debug(f"Chat response: {response_content[:100]}...")
         
@@ -396,13 +400,15 @@ async def call_tara_2(state: AgentState) -> AgentState:
     try:
         # === STEP 1: RETRIEVE (Source of Truth Strategy) ===
         raw_content = ""
+        # === STEP 1: RETRIEVE (Source of Truth Strategy) ===
+        raw_content = ""
         for msg in reversed(state.get("messages", [])):
             if isinstance(msg, HumanMessage):
-                raw_content = msg.content
+                raw_content = safe_get_content(msg)
                 break
             # Handle dict-based messages (if serialization occurred)
             elif isinstance(msg, dict) and msg.get("type") == "human":
-                raw_content = msg.get("content", "")
+                raw_content = safe_get_content(msg)
                 break
         
         # Fallback: Use state input if history is empty
@@ -450,10 +456,10 @@ async def call_tara_2(state: AgentState) -> AgentState:
             result_messages = result.get("messages", [])
             for msg in reversed(result_messages):
                 if hasattr(msg, "type") and msg.type == "ai":
-                    final_response = msg.content
+                    final_response = safe_get_content(msg)
                     break
                 elif hasattr(msg, "__class__") and msg.__class__.__name__ == "AIMessage":
-                    final_response = msg.content
+                    final_response = safe_get_content(msg)
                     break
         
         if not final_response:
@@ -537,10 +543,10 @@ def route_from_supervisor(state: AgentState) -> str:
         for msg in reversed(messages):
             # Check for HumanMessage type (LangChain object or dict)
             if isinstance(msg, HumanMessage) or getattr(msg, "type", "") == "human":
-                user_text = msg.content
+                user_text = safe_get_content(msg)
                 break
             elif isinstance(msg, dict) and msg.get("type") == "human":
-                user_text = msg.get("content", "")
+                user_text = safe_get_content(msg)
                 break
     
     # Safety: If still empty, default to General

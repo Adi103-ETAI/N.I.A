@@ -239,7 +239,7 @@ def print_status() -> None:
             logger.warning(f"     Set {', '.join(api_keys)} in .env file")
         pkg_missing = [k for k in missing if "API_KEY" not in k]
         if pkg_missing:
-            logger.warning(f"     Install packages: pip install {' '.join(pkg_missing)}")
+            logger.warning(f"     Install packages: uv add {' '.join(pkg_missing)}")
 
 
 # =============================================================================

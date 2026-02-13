@@ -267,7 +267,7 @@ async def browser_open_url(url: str) -> str:
          [BUTTON] text='Google Search'"
     """
     if not _HAS_PLAYWRIGHT:
-        return "❌ Playwright not installed. Run: pip install playwright && playwright install chromium"
+        return "❌ Playwright not installed. Run: uv add playwright && uv run playwright install chromium"
     
     if not url:
         return "❌ URL is required"

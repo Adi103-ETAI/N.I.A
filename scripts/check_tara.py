@@ -218,6 +218,11 @@ def main():
     print("=" * 60)
     print()
     
+    import argparse
+    parser = argparse.ArgumentParser(description="TARA 2.0 Pre-Flight Check")
+    parser.add_argument("--check-only", action="store_true", help="Run static checks only, skip live test")
+    args = parser.parse_args()
+
     results = {}
     
     # Test 1: Tool Discovery
@@ -252,6 +257,11 @@ def main():
         logger.error("❌ Pre-flight checks failed. Aborting live test.")
         return 1
     
+    # Check for automated mode
+    if args.check_only:
+        logger.info("[INFO] Automated mode: Live test skipped.")
+        return 0
+
     # Ask before live test
     print("=" * 60)
     print("   READY FOR LIVE TEST")

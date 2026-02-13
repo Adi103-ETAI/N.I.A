@@ -158,7 +158,7 @@ def print_system_status() -> None:
         print("🚀 All systems nominal! Voice mode available.")
     elif all_core:
         print("⚠️  Core ready, but voice dependencies missing.")
-        print("    Install: pip install vosk sounddevice")
+        print("    Install: uv add vosk sounddevice")
     else:
         print("❌ System not ready. Check missing components above.")
         if not has_primary_key:

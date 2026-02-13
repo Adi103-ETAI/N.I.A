@@ -97,7 +97,7 @@ class UniversalDriver(DesktopDriver):
         Future: Could use image matching or OCR to find elements.
         """
         if not _HAS_PYAUTOGUI:
-            return "❌ pyautogui library not installed. Run: pip install pyautogui"
+            return "❌ pyautogui library not installed. Run: uv add pyautogui"
         
         # For now, log the limitation
         logger.warning(f"Universal driver cannot click by name: '{element_name}'")

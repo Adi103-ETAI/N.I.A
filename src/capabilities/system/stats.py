@@ -60,7 +60,7 @@ def get_clipboard_text() -> str:
         "📋 Clipboard: Hello, World!"
     """
     if not _HAS_CLIPBOARD:
-        return "❌ pyperclip not installed. Run: pip install pyperclip"
+        return "❌ pyperclip not installed. Run: uv add pyperclip"
     
     try:
         text = pyperclip.paste()
@@ -127,7 +127,7 @@ def get_system_stats() -> str:
         "💻 System Stats: CPU: 25%, RAM: 60% (8.5 GB / 16 GB)"
     """
     if not _HAS_PSUTIL:
-        return "❌ psutil not installed. Run: pip install psutil"
+        return "❌ psutil not installed. Run: uv add psutil"
     
     try:
         # CPU usage (1 second sample)

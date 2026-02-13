@@ -100,24 +100,28 @@ def _get_add_messages() -> Callable[[List, List], List]:
 # Agent State Definition (Uses Any as placeholder for lazy BaseMessage)
 # =============================================================================
 
-class AgentState(Dict[str, Any]):
-    """State shared across all agents in the NIA supervisor graph.
+# =============================================================================
+# Agent State Definition (TypedDict for LangGraph v1)
+# =============================================================================
+
+try:
+    from typing import TypedDict
+except ImportError:
+    from typing_extensions import TypedDict
+
+class AgentState(TypedDict, total=False):
+    """
+    State shared across all agents in the NIA supervisor graph.
     
-    This is a TypedDict-like class that defines the structure of state 
-    passed between nodes in the LangGraph execution.
+    Migrated to TypedDict for LangGraph v1 compatibility.
     
     Attributes:
-        messages: Conversation history (accumulated across turns).
-                  Uses LangGraph's add_messages reducer for proper merging.
-        next: Name of the next agent to execute. Set by supervisor routing.
+        messages: Conversation history (Sequence of BaseMessage).
+        next: Name of the next agent to execute.
         user_input: Original user input for the current turn.
         final_response: The response to return to the user.
-        route_reason: Why the supervisor chose this route (for debugging).
-        metadata: Additional context (timestamps, turn counts, etc.).
-    
-    Note:
-        We use a Dict subclass instead of TypedDict to allow dynamic
-        attribute access while maintaining type hints via TYPE_CHECKING.
+        route_reason: Why the supervisor chose this route.
+        metadata: Additional context.
     """
     messages: Sequence[Any]  # BaseMessage at runtime
     next: AgentName
@@ -125,25 +129,6 @@ class AgentState(Dict[str, Any]):
     final_response: Optional[str]
     route_reason: Optional[str]
     metadata: Dict[str, Any]
-
-
-# Also export as TypedDict for LangGraph compatibility
-try:
-    from typing import TypedDict
-    
-    class _AgentStateTypedDict(TypedDict, total=False):
-        """TypedDict version for LangGraph state channel definitions."""
-        messages: Sequence[Any]
-        next: str
-        user_input: str
-        final_response: Optional[str]
-        route_reason: Optional[str]
-        metadata: Dict[str, Any]
-    
-    # Use TypedDict for actual usage (LangGraph expects this)
-    AgentState = _AgentStateTypedDict  # type: ignore
-except ImportError:
-    pass  # Keep the Dict subclass as fallback
 
 
 # =============================================================================
@@ -180,6 +165,50 @@ def create_initial_state(user_input: str) -> dict:
     }
 
 
+def safe_get_content(msg: Any) -> str:
+    """
+    Robustly extract string content from a message.
+    
+    Handles LangChain v1 content blocks where msg.content 
+    can be a list of dicts (e.g. tool calls or multimodal).
+    
+    Args:
+        msg: Message object (BaseMessage, dict, or str)
+        
+    Returns:
+        Extracted string content or empty string.
+    """
+    if isinstance(msg, str):
+        return msg
+        
+    # Get raw content
+    content = getattr(msg, "content", None)
+    if content is None and isinstance(msg, dict):
+        content = msg.get("content")
+        
+    if content is None:
+        return ""
+        
+    # Case 1: Simple string
+    if isinstance(content, str):
+        return content
+        
+    # Case 2: List of content blocks (LangChain v1 / Anthropic / OpenAI)
+    if isinstance(content, list):
+        text_parts = []
+        for block in content:
+            if isinstance(block, str):
+                text_parts.append(block)
+            elif isinstance(block, dict):
+                # Extract 'text' from block types
+                if block.get("type") == "text":
+                    text_parts.append(str(block.get("text", "")))
+                # Ignore 'tool_use' or 'image' blocks for text extraction
+        return "".join(text_parts)
+        
+    return str(content)
+
+
 def extract_response(state: dict) -> str:
     """Extract the final response string from agent state.
     
@@ -197,11 +226,7 @@ def extract_response(state: dict) -> str:
     messages = state.get("messages", [])
     if messages:
         last_msg = messages[-1]
-        # Check if it's a LangChain message with content attribute
-        if hasattr(last_msg, "content"):
-            return last_msg.content
-        elif isinstance(last_msg, dict):
-            return last_msg.get("content", "")
+        return safe_get_content(last_msg)
     
     return "I'm sorry, I couldn't generate a response."
 
@@ -240,6 +265,7 @@ __all__ = [
     # Helpers
     "create_initial_state",
     "extract_response",
+    "safe_get_content",
     
     # Lazy-loaded re-exports for convenience
     "BaseMessage",

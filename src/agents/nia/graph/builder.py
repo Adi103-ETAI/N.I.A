@@ -6,9 +6,9 @@ the LangGraph state machine for the NIA supervisor architecture.
 from __future__ import annotations
 
 from src.core.logger import setup_logger
-import sqlite3
 from pathlib import Path
 from typing import Any, Optional, List
+import aiosqlite
 
 logger = setup_logger("NIA.Graph")
 
@@ -55,15 +55,20 @@ except ImportError:
     _HAS_LANGGRAPH = False
     StateGraph = None  # type: ignore
     END = "__end__"
-    logger.warning("langgraph not installed. Install with: pip install langgraph")
+    logger.warning("langgraph not installed. Install with: uv add langgraph")
 
+# Async Checkpointer Only
 try:
-    from langgraph.checkpoint.sqlite import SqliteSaver
-    _HAS_CHECKPOINTER = True
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    _HAS_ASYNC_CHECKPOINTER = True
 except ImportError:
-    _HAS_CHECKPOINTER = False
-    SqliteSaver = None  # type: ignore
-    logger.debug("langgraph-checkpoint-sqlite not available. Persistence disabled.")
+    try:
+        from langgraph_checkpoint_sqlite.aio import AsyncSqliteSaver
+        _HAS_ASYNC_CHECKPOINTER = True
+    except ImportError:
+        _HAS_ASYNC_CHECKPOINTER = False
+        AsyncSqliteSaver = None 
+        logger.debug("AsyncSqliteSaver not available.")
 
 
 # =============================================================================
@@ -114,7 +119,7 @@ class NIAGraph:
         """
         self.model_type = model_type
         self.temperature = temperature
-        self.enable_persistence = enable_persistence and _HAS_CHECKPOINTER
+        self.enable_persistence = enable_persistence and _HAS_ASYNC_CHECKPOINTER
         
         try:
             from src.core.registry import ServiceRegistry
@@ -145,8 +150,7 @@ class NIAGraph:
         
         # Persistence setup
         self._db_path = state_db_path or str(DEFAULT_STATE_DB)
-        self._conn: Optional[sqlite3.Connection] = None
-        self._checkpointer = None
+        # self._conn and self._checkpointer are not used in async mode (created on-demand)
         
         # Build the graph
         self._graph = None
@@ -157,27 +161,10 @@ class NIAGraph:
         else:
             logger.warning("LangGraph not available. Using fallback execution.")
     
-    def _init_checkpointer(self) -> Optional[Any]:
-        """Initialize the SQLite checkpointer for persistence."""
-        if not self.enable_persistence or not _HAS_CHECKPOINTER:
-            return None
-        
-        try:
-            # Ensure data directory exists
-            db_path = Path(self._db_path)
-            db_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Create SQLite connection
-            self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
-            
-            # Create checkpointer
-            checkpointer = SqliteSaver(self._conn)
-            logger.debug("SQLite checkpointer initialized: %s", db_path)
-            return checkpointer
-            
-        except Exception as exc:
-            logger.warning("Failed to initialize checkpointer: %s", exc)
-            return None
+    # No sync checkpointer initialization
+    def _init_checkpointer(self) -> None:
+        """Deprecated."""
+        return None
     
     def _build_graph(self) -> None:
         """Build the LangGraph state machine."""
@@ -240,16 +227,13 @@ class NIAGraph:
         )
         
         # Initialize checkpointer for persistence
-        self._checkpointer = self._init_checkpointer()
+        # In Async mode, we do NOT compile with a static checkpointer here.
+        # We compile ON-DEMAND in arun() with the async context manager.
         
-        # Compile the graph with or without checkpointer
+        # Compile the graph (without persistence for sync fallback/structure)
         self._graph = graph
-        if self._checkpointer:
-            self._compiled = graph.compile(checkpointer=self._checkpointer)
-            logger.info("NIA graph compiled with persistence")
-        else:
-            self._compiled = graph.compile()
-            logger.info("NIA graph compiled (no persistence)")
+        self._compiled = graph.compile()
+        logger.info("NIA graph structure compiled (persistence determined at runtime)")
     
     def run(
         self,
@@ -277,6 +261,8 @@ class NIAGraph:
         
         if self._compiled:
             try:
+                # Sync run does NOT support persistence in this async-first architecture
+                # It uses the stateless compiled graph
                 final_state = self._compiled.invoke(initial_state, config)
                 return extract_response(final_state)
             except Exception as exc:
@@ -302,6 +288,7 @@ class NIAGraph:
         """Async version of run (Native).
         
         Uses LangGraph's ainvoke for non-blocking execution.
+        Handles async persistence via AsyncSqliteSaver.
         """
         # Create initial state
         initial_state = create_initial_state(user_input)
@@ -313,61 +300,89 @@ class NIAGraph:
             }
         }
         
-        if self._compiled:
+        # 🌊 ASYNC PERSISTENCE IMPLEMENTATION
+        # Use AsyncSqliteSaver as a context manager to ensure non-blocking cleanup
+        if self.enable_persistence and _HAS_ASYNC_CHECKPOINTER:
             try:
-                # 🌊 ASYNC NATIVE CALL
+                # Ensure db directory exists
+                db_path = Path(self._db_path)
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # Use context manager for auto-closing connection
+                async with AsyncSqliteSaver.from_conn_string(self._db_path) as checkpointer:
+                    # Compile the graph structure with async checkpointer
+                    # This is lightweight as the graph definition is cached in self._graph
+                    app = self._graph.compile(checkpointer=checkpointer)
+                    
+                    # Invoke async
+                    final_state = await app.ainvoke(initial_state, config)
+                    return extract_response(final_state)
+            except Exception as exc:
+                logger.exception("Async graph execution failed: %s", exc)
+                return f"I encountered an error: {str(exc)}"
+                
+        # Fallback: Stateless execution
+        elif self._compiled:
+            try:
+                # Native async invoke on stateless graph
                 final_state = await self._compiled.ainvoke(initial_state, config)
                 return extract_response(final_state)
             except Exception as exc:
                 logger.exception("Graph execution failed: %s", exc)
                 return f"I encountered an error: {str(exc)}"
         else:
-            # Fallback for no LangGraph (unlikely in Phase 2)
-            # Use to_thread for the sync fallback
+            # Fallback for no LangGraph
             import asyncio
             return await asyncio.to_thread(self._fallback_run, initial_state)
     
-    def get_thread_history(self, thread_id: str) -> List:
-        """Get conversation history for a thread."""
-        if not self._checkpointer:
+    async def aget_thread_history(self, thread_id: str) -> List:
+        """Get conversation history for a thread (Async)."""
+        if not self.enable_persistence or not _HAS_ASYNC_CHECKPOINTER:
             return []
         
         try:
             config = {"configurable": {"thread_id": thread_id}}
-            checkpoint = self._checkpointer.get(config)
-            if checkpoint and "channel_values" in checkpoint:
-                return checkpoint["channel_values"].get("messages", [])
+            async with AsyncSqliteSaver.from_conn_string(self._db_path) as checkpointer:
+                checkpoint = await checkpointer.aget(config)
+                if checkpoint and "channel_values" in checkpoint:
+                    return checkpoint["channel_values"].get("messages", [])
         except Exception as exc:
             logger.error("Failed to get thread history: %s", exc)
         return []
     
-    def clear_thread(self, thread_id: str) -> bool:
-        """Clear conversation history for a thread."""
-        if not self._conn:
-            return False
-        
+    def get_thread_history(self, thread_id: str) -> List:
+        """Sync wrapper for aget_thread_history (Not recommended)."""
+        import asyncio
         try:
-            try:
-                cursor = self._conn.cursor()
-                cursor.execute(
-                    "DELETE FROM checkpoints WHERE thread_id = ?",
-                    (thread_id,)
-                )
-                self._conn.commit()
+             return asyncio.run(self.aget_thread_history(thread_id))
+        except RuntimeError:
+             # If loop already running, we can't use asyncio.run
+             logger.warning("get_thread_history called from async context - returning empty. Use aget_thread_history.")
+             return []
+
+    async def aclear_thread(self, thread_id: str) -> bool:
+        """Clear conversation history for a thread (Async)."""
+        try:
+            db_path = Path(self._db_path)
+            if not db_path.exists():
+                return False
+                
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
+                await db.commit()
                 logger.info("Cleared thread: %s", thread_id)
                 return True
-            except sqlite3.OperationalError as e:
-                logger.warning("⚠️ Failed to clear checkpoints (Schema mismatch or Lock): %s", e)
-                return False
         except Exception as exc:
             logger.error("Failed to clear thread: %s", exc)
             return False
-    
-    def close(self) -> None:
-        """Close database connections."""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+
+    def clear_thread(self, thread_id: str) -> bool:
+        """Sync wrapper for aclear_thread."""
+        import asyncio
+        try:
+            return asyncio.run(self.aclear_thread(thread_id))
+        except RuntimeError:
+             return False
 
 
 # =============================================================================
@@ -463,6 +478,11 @@ def get_conversation_history(thread_id: str = "default") -> list:
     """Get conversation history for a thread."""
     graph = get_graph()
     return graph.get_thread_history(thread_id)
+
+async def aget_conversation_history(thread_id: str = "default") -> list:
+    """Async Get conversation history for a thread."""
+    graph = get_graph()
+    return await graph.aget_thread_history(thread_id)
 
 
 def clear_conversation(thread_id: str = "default") -> bool:

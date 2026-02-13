@@ -86,7 +86,7 @@ def capture_screen(delay: float = 0.5, **kwargs) -> str:
         Absolute path to the saved screenshot.
     """
     if not _HAS_PYAUTOGUI:
-        return "Error: pyautogui not installed. Run: pip install pyautogui"
+        return "Error: pyautogui not installed. Run: uv add pyautogui"
     
     try:
         # Wait for the specified delay
@@ -125,7 +125,7 @@ def capture_webcam(**kwargs) -> str:
         Absolute path to the saved image, or error message.
     """
     if not _HAS_CV2:
-        return "Error: OpenCV not installed. Run: pip install opencv-python"
+        return "Error: OpenCV not installed. Run: uv add opencv-python"
     
     cap = None
     try:

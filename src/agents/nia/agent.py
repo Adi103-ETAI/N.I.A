@@ -187,7 +187,7 @@ class SupervisorAgent:
         # Fallback: return as single command
         return [command.strip()]
 
-    def _build_context(self, state: Dict[str, Any]) -> Tuple[List[BaseMessage], List[BaseMessage]]:
+    async def _build_context(self, state: Dict[str, Any]) -> Tuple[List[BaseMessage], List[BaseMessage]]:
         """
         Build the message context for LLM invocation.
         
@@ -212,7 +212,8 @@ class SupervisorAgent:
         state_messages = state.get("messages", []) if isinstance(state.get("messages"), list) else []
         
         # 🧠 MEMORY INJECTION: Get relevant context for the last user message
-        memory_content = self._get_memory_context(state_messages)
+        # RIPPLE FIX: Await the async memory retrieval
+        memory_content = await self._get_memory_context(state_messages)
         if memory_content:
             logger.debug(f"🧠 [AGENT] Injected Memory Context: {len(memory_content)} chars")
             current_messages.append(SystemMessage(content=memory_content))
@@ -224,7 +225,7 @@ class SupervisorAgent:
             
         return current_messages, []
     
-    def _get_memory_context(self, messages: List[BaseMessage]) -> Optional[str]:
+    async def _get_memory_context(self, messages: List[BaseMessage]) -> Optional[str]:
         """
         Retrieve relevant memory context for the last user message.
         
@@ -252,9 +253,32 @@ class SupervisorAgent:
             return None
         
         try:
-            # Sync call to memory (ChromaDB semantic search)
-            episodes = memory._recall_episodes_sync(user_query, n=3)
-            preferences = memory.get_all_preferences()
+            # Async call to memory (ChromaDB semantic search)
+            # Use asyncio.to_thread for blocking sync calls until MemoryManager is fully async
+            # But wait! If MemoryManager HAS async methods, use them.
+            # Assuming MemoryManager might still be sync-heavy, we wrap in to_thread if needed.
+            # However, the user request says: "await memory.get_all_preferences()".
+            # This implies get_all_preferences might NOT be async yet, OR it IS async.
+            # If it IS async, we await it. If it's sync, we shouldn't await it unless we wrap it.
+            # Inspecting common patterns: if user says "un-awaited coroutine", it means
+            # get_all_preferences IS ALREADY async.
+            
+            # CRITICAL: User said "Issue: ... calling the newly asynchronous MemoryManager.get_all_preferences() synchronously."
+            # This means get_all_preferences IS ASYNC.
+            
+            # Check for arecall_episodes or wrap recall_episodes
+            if hasattr(memory, "arecall_episodes"):
+                episodes = await memory.arecall_episodes(user_query, n=3)
+            else:
+                # Fallback: Wrap sync recall
+                episodes = await asyncio.to_thread(memory._recall_episodes_sync, user_query, n=3)
+            
+            # User specifically mentioned get_all_preferences is async
+            if asyncio.iscoroutinefunction(memory.get_all_preferences):
+                preferences = await memory.get_all_preferences()
+            else:
+                # If it's not async (unexpected given the report), run it sync
+                preferences = memory.get_all_preferences()
             
             # Build context string
             parts = []
@@ -371,7 +395,27 @@ class SupervisorAgent:
         Returns:
             Updated state dict with routing decision.
         """
-        current_messages, retry_buffer = self._build_context(state)
+        # RIPPLE FIX: _build_context is now async, so we must wrap it for sync execution
+        # process() is rarely used in production (mostly tests/fallback), so overhead is acceptable
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're already in a loop, can't use run_until_complete easily without nesting
+                # Ideally, use aprocess() instead. But for fallback support:
+                current_messages, retry_buffer = loop.run_until_complete(self._build_context(state))
+            else:
+                current_messages, retry_buffer = asyncio.run(self._build_context(state))
+        except RuntimeError:
+            # Fallback for complex loop states
+            logger.warning("Could not run async memory context in sync process(), proceeding without memory")
+            from langchain_core.messages import SystemMessage
+            from src.persona.profile import get_system_prompt
+            
+            current_messages = [SystemMessage(content=get_system_prompt())]
+            state_messages = state.get("messages", [])
+            current_messages.extend(state_messages)
+            retry_buffer = []
         
         # Extract last user query for memory persistence
         user_query = None
@@ -429,7 +473,7 @@ class SupervisorAgent:
         Returns:
             Updated state dict with routing decision.
         """
-        current_messages, retry_buffer = self._build_context(state)
+        current_messages, retry_buffer = await self._build_context(state)
         
         # Extract last user query for memory persistence
         user_query = None

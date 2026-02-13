@@ -59,7 +59,7 @@ def take_screenshot(filename: Optional[str] = None, region: Optional[Tuple[int, 
         "📸 Screenshot saved: C:/Users/.../screenshot_20260111_221500.png"
     """
     if not _HAS_PYAUTOGUI:
-        return "❌ pyautogui not installed. Run: pip install pyautogui"
+        return "❌ pyautogui not installed. Run: uv add pyautogui"
     
     try:
         # Ensure directory exists

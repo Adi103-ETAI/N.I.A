@@ -150,7 +150,7 @@ async def mouse_click(
         as it uses semantic element names instead of coordinates.
     """
     if not _HAS_PYAUTOGUI:
-        return "❌ pyautogui not installed. Run: pip install pyautogui"
+        return "❌ pyautogui not installed. Run: uv add pyautogui"
     
     # === ROBUST PARSING (LLM Compatibility) ===
     try:
@@ -220,7 +220,7 @@ async def mouse_drag(
         - Window resizing (when Win32 APIs fail)
     """
     if not _HAS_PYAUTOGUI:
-        return "❌ pyautogui not installed. Run: pip install pyautogui"
+        return "❌ pyautogui not installed. Run: uv add pyautogui"
     
     # === ROBUST PARSING (LLM Compatibility) ===
     try:
@@ -294,7 +294,7 @@ async def mouse_scroll(clicks: int, x: Optional[int] = None, y: Optional[int] = 
         Scroll direction: positive clicks = UP (towards top), negative = DOWN.
     """
     if not _HAS_PYAUTOGUI:
-        return "❌ pyautogui not installed. Run: pip install pyautogui"
+        return "❌ pyautogui not installed. Run: uv add pyautogui"
     
     def _do_scroll():
         try:
@@ -345,7 +345,7 @@ async def keyboard_type(text: str, interval: float = 0.05) -> str:
         - Text longer than 30 chars will be truncated in the success message
     """
     if not _HAS_PYAUTOGUI:
-        return "❌ pyautogui not installed. Run: pip install pyautogui"
+        return "❌ pyautogui not installed. Run: uv add pyautogui"
     
     if not text:
         return "❌ No text provided"
@@ -409,7 +409,7 @@ async def keyboard_hotkey(keys: Union[List[str], Tuple[str, ...], str]) -> str:
         - Show Desktop: ["win", "d"]
     """
     if not _HAS_PYAUTOGUI:
-        return "❌ pyautogui not installed. Run: pip install pyautogui"
+        return "❌ pyautogui not installed. Run: uv add pyautogui"
     
     if not keys:
         return "❌ No keys provided"
@@ -477,7 +477,7 @@ async def keyboard_press(key: str, presses: int = 1) -> str:
         - Navigating lists/menus (up, down)
     """
     if not _HAS_PYAUTOGUI:
-        return "❌ pyautogui not installed. Run: pip install pyautogui"
+        return "❌ pyautogui not installed. Run: uv add pyautogui"
     
     if not key:
         return "❌ No key provided"

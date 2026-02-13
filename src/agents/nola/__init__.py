@@ -61,7 +61,7 @@ def check_dependencies() -> bool:
     
     if missing:
         logger.error("Missing NOLA dependencies: %s", ", ".join(missing))
-        logger.error("Fix with: pip install %s", " ".join(missing))
+        logger.error("Fix with: uv add %s", " ".join(missing))
         sys.exit(1)
     
     return True
