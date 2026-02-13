@@ -18,7 +18,7 @@ langchain-community~=0.0.10 # Community integrations
 langchain-nvidia-ai-endpoints~=0.0.1  # NVIDIA NIM (Primary)
 langchain-openai~=0.0.5               # OpenAI GPT-4o (Fallback)
 langchain-groq~=0.0.1                 # Groq (Fast inference)
-langchain-ollama~=0.0.1               # Ollama (Local/Offline)
+langchain-ollama>=0.1.0               # Ollama (Local/Offline)
 
 # --- Configuration ---
 python-dotenv>=1.0.0        # Environment variable loading
