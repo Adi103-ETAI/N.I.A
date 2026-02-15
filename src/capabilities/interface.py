@@ -266,6 +266,35 @@ def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
     
     # Discover all tools (including subdirectories)
     all_tools = discover_from_path(package_path)
+
+    # Phase 2: Sandboxed Tool Registration (Manual Override)
+    # =========================================================================
+    try:
+        from src.capabilities.execution.tools import SandboxedShell
+        from src.capabilities.execution.lifecycle import StartSession, EndSession
+        
+        sandbox_tool = SandboxedShell()
+        start_session_tool = StartSession()
+        end_session_tool = EndSession()
+        
+        all_tools.extend([sandbox_tool, start_session_tool, end_session_tool])
+        logger.info("✅ Registered SandboxedShell and Lifecycle tools")
+    except ImportError as e:
+        logger.error(f"Failed to register Execution tools: {e}")
+    except Exception as e:
+        logger.error(f"Error instantiating Execution tools: {e}")
+
+    # DEPRECATION: Filter out legacy local tools
+    deprecated_tools = {
+        "write_file", "append_file", "create_dir", 
+        "move_file", "copy_file", "delete_file"
+    }
+    # Keep read-only tools: list_dir, read_file, file_exists, get_file_info, search_files
+    
+    original_count = len(all_tools)
+    all_tools = [t for t in all_tools if t.name not in deprecated_tools]
+    if len(all_tools) < original_count:
+        logger.info(f"🚫 Filtered out {original_count - len(all_tools)} legacy local tools")
     
     core_count = len(all_tools)
     

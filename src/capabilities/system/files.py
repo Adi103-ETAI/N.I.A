@@ -632,13 +632,13 @@ __all__ = [
     "list_dir",
     "read_file",
     "file_exists",
-    "write_file",
-    "append_file",
-    # Tier 2: Controlled Mutation
-    "create_dir",
-    "move_file",
-    "copy_file",
-    "delete_file",
+    # Tier 2: Controlled Mutation (DEPRECATED for Sandbox)
+    # "write_file", 
+    # "append_file",
+    # "create_dir",
+    # "move_file",
+    # "copy_file",
+    # "delete_file",
     # Tier 3: Metadata
     "get_file_info",
     "search_files",

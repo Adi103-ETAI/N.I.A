@@ -209,38 +209,71 @@ async def launch_app(app_name: str) -> str:
     
     logger.info(f"🚀 Launching '{launch_cmd}'...")
     
-    # === SECURE PATH RESOLUTION ===
-    # Step 1: Resolve executable path using shutil.which()
-    executable_path: Optional[str] = None
-    
-    # Check if it's an absolute path first
-    if os.path.isabs(launch_cmd) and os.path.isfile(launch_cmd):
-        executable_path = launch_cmd
-        logger.debug(f"Using absolute path: {executable_path}")
+    # === DYNAMIC DISCOVERY (AppIndex) ===
+    # Try the omniscient index first — covers Win32, UWP, and Shell apps
+    from src.infrastructure.host_os.app_index import get_app_index
+    app_index = get_app_index()
+    index_entry = await asyncio.to_thread(app_index.search, app_lower)
+
+    if index_entry:
+        logger.info(f"AppIndex matched '{app_name}' -> {index_entry.display()}")
+
+        # For UWP/Shell apps, launch via shell:AppsFolder (can't get PID directly)
+        if index_entry.app_type in ("uwp", "shell"):
+            try:
+                launch_result = await asyncio.to_thread(app_index.launch, index_entry)
+                if launch_result.startswith("launched:"):
+                    alias = registry.register(
+                        app_name=index_entry.name,
+                        hwnd=None,
+                        pid=None,
+                        title=f"{index_entry.name} ({index_entry.app_type})",
+                    )
+                    return f"✅ Launched: {index_entry.name} [alias: {alias}] ({index_entry.app_type})"
+                else:
+                    return f"❌ Failed to launch '{index_entry.name}': {launch_result}"
+            except Exception as e:
+                return f"❌ Failed to launch '{index_entry.name}': {e}"
+
+        # For Win32 apps with a valid .exe path, use the path from AppIndex
+        elif index_entry.app_type == "win32" and os.path.isfile(index_entry.app_id):
+            executable_path = index_entry.app_id
+            logger.debug(f"AppIndex resolved Win32 path: {executable_path}")
+        else:
+            # Win32 but no direct path — try shutil.which as fallback
+            executable_path = shutil.which(index_entry.app_id) or shutil.which(app_lower)
     else:
-        # Try resolving with shutil.which()
-        exe_name = f"{launch_cmd}.exe" if not launch_cmd.endswith(".exe") else launch_cmd
-        
-        # First try with .exe extension
-        executable_path = shutil.which(exe_name)
-        
-        # If not found, try without .exe (for commands like 'notepad')
-        if not executable_path:
-            executable_path = shutil.which(launch_cmd)
-        
-        # Also check custom aliases path
-        if not executable_path and launch_cmd in CUSTOM_ALIASES:
-            alias_path = CUSTOM_ALIASES[launch_cmd]
-            if os.path.isfile(alias_path):
-                executable_path = alias_path
-            else:
-                # Try shutil.which on the alias
-                executable_path = shutil.which(alias_path)
-    
+        # No AppIndex match — original fallback logic
+        executable_path = None
+
+    # === LEGACY PATH RESOLUTION (fallback for unlisted apps) ===
+    if not executable_path:
+        # Check if it's an absolute path first
+        if os.path.isabs(launch_cmd) and os.path.isfile(launch_cmd):
+            executable_path = launch_cmd
+            logger.debug(f"Using absolute path: {executable_path}")
+        else:
+            # Try resolving with shutil.which()
+            exe_name = f"{launch_cmd}.exe" if not launch_cmd.endswith(".exe") else launch_cmd
+            executable_path = shutil.which(exe_name)
+            if not executable_path:
+                executable_path = shutil.which(launch_cmd)
+            if not executable_path and launch_cmd in CUSTOM_ALIASES:
+                alias_path = CUSTOM_ALIASES[launch_cmd]
+                if os.path.isfile(alias_path):
+                    executable_path = alias_path
+                else:
+                    executable_path = shutil.which(alias_path)
+
     # === FAIL FAST: No executable found ===
     if not executable_path:
-        logger.warning(f"❌ Executable not found in PATH: '{launch_cmd}'")
-        return f"❌ Application not found: '{app_name}' (not in PATH or custom aliases)"
+        # Provide helpful suggestions
+        suggestions = await asyncio.to_thread(app_index.search_all, app_lower, 3)
+        if suggestions:
+            names = ", ".join(f"'{s.name}'" for s in suggestions)
+            logger.warning(f"App not found: '{app_name}'. Did you mean: {names}?")
+            return f"❌ App not found: '{app_name}'. Did you mean: {names}?"
+        return f"❌ Application not found: '{app_name}' (not in Start Menu or PATH)"
     
     logger.debug(f"Resolved executable: {executable_path}")
     

@@ -453,35 +453,13 @@ async def tool_executor(state: TaraState) -> TaraStateUpdate:
                 logger.info(f"🛡️ Warden Approved: Proceeding with '{t_name}'")
             
             # Polymorphic Dispatch (Async or Sync)
-            # RIPPLE FIX: Check if tool is native async provided by user instruction
-            if inspect.iscoroutinefunction(tool.ainvoke):
-                result = await tool.ainvoke(t_args)
-            elif inspect.iscoroutinefunction(tool.invoke):
-                 # Rare but possible
-                result = await tool.invoke(t_args)
-            else:
-                # Fallback to LangChain's auto-handling or just await ainvoke (standard)
-                # But user specifically asked for inspect.iscoroutinefunction pattern on the CALLABLE
-                # Tools in LangChain are Runnables.
-                # If it's a StructuredTool, it has .coroutine or .func
-                
-                # However, LangChain's ainvoke IS async.
-                # The issue reported was "tool_executor is executing them synchronously".
-                # If we use `await tool.ainvoke(t_args)`, it SHOULD be async.
-                # The "Ripple Fix" request suggests `func(**kwargs)` style execution?
-                
-                # Let's stick to the requested fix pattern:
-                # "Scan the tool_executor logic. When dynamically calling a tool function... 
-                # use inspect.iscoroutinefunction(func)..."
-                
-                # Since we are using LangChain tools, `tool.ainvoke` is the standard way.
-                # But maybe the tool *implementation* being wrapped is the issue?
-                # If we trust `await tool.ainvoke`, it should work.
-                # User might be referring to direct function calls if not using LangChain tools?
-                # Code uses `get_tara_tools()` which returns LangChain tools.
-                
-                # Let's apply the guard anyway to be safe and explicit as requested.
-                result = await tool.ainvoke(t_args)
+            # RIPPLE FIX: Robust Async Detection (Universal Fix)
+            # 1. Execute the function (it might return a value OR a coroutine)
+            result = tool.ainvoke(t_args)
+            
+            # 2. Check if the RESULT itself is awaitable
+            if inspect.iscoroutine(result) or asyncio.isfuture(result):
+                result = await result
             
             result_str = str(result) if result is not None else f"✅ {t_name} completed"
             logger.info(f"[TOOL_EXECUTOR] ✅ {t_name}: {result_str[:80]}...")

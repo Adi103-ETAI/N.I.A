@@ -24,12 +24,25 @@ def security_level(level: str) -> Callable:
         # Default to standard if invalid, but log warning in a real system
         level = "host_standard"
         
+    import inspect
+    
     def decorator(func: Callable) -> Callable:
         # Attach attribute to the function object itself
+        # Note: We must attach it to the WRAPPER eventually, but we do it here
+        # so it persists through inspection if needed.
         setattr(func, "_security_level", level)
         
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
+        # Check if the wrapped function is a coroutine
+        if inspect.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def wrapper(*args, **kwargs):
+                return await func(*args, **kwargs)
+        else:
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+        
+        # Ensure the wrapper also carries the tag
+        setattr(wrapper, "_security_level", level)
         return wrapper
     return decorator

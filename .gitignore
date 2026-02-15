@@ -79,9 +79,7 @@ nola/models/
 *.onnx
 
 # Temporary Scripts & Artifacts
-scripts/test_*.py
-scripts/verify_*.py
-scripts/manual_test.py
+
 *.bak
 *.tmp
 *.temp
@@ -95,3 +93,15 @@ ghost_state.json
 
 # Models Folder (if re-created)
 models/
+
+# Workspace (Docker sandbox mount)
+workspace/
+
+# Debug & one-off verification scripts
+scripts/debug_*.py
+scripts/verify_*.py
+
+# AI Agent artifacts
+.gemini/
+.agent/
+.testsprite/

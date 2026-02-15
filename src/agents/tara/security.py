@@ -89,9 +89,23 @@ class WardenService:
         if not self.safe_zones:
             self.safe_zones = get_os_context().get_safe_zones()
 
-        if tool_name == "launch_app":
+        if tool_name in ["sandboxed_shell", "start_session", "end_session"]:
+            # Auto-approve: Sandboxed execution is safe by design
+            pass
+        elif tool_name in ["write_file", "delete_file", "git_clone"]:
+            # STRICT BLOCK for host operations
+            raise SecurityError(
+                "Security Restriction: You must use the sandboxed_shell tool for file operations."
+            )
+        elif tool_name == "launch_app":
             self._check_app_launcher(args)
-        elif tool_name == "delete_file" or tool_name == "move_file":
+        elif tool_name in ["terminate_process", "find_process"]:
+            # Host-side process management: high-risk but permitted
+            # Safety enforced by HostProcessManager's blocklist
+            pass
+        elif tool_name == "move_file": # move_file might be needed on host? Deprecated? 
+            # If it's deprecated, we should probably block it too, but maybe just use file_operation check for now
+            # The prompt says "BLOCK: write_file, delete_file, git_clone"
             self._check_file_operation(args, tool_name)
         else:
             # Default Deny for unknown high-risk tools

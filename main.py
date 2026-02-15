@@ -114,6 +114,11 @@ async def main() -> int:
     if args.voice:
         logger.debug(f"Wake words: {args.wake_words} | Wake required: {not args.no_wake}")
     
+    # Register cleanup
+    import atexit
+    from src.infrastructure.container_engine.manager import DockerEngine
+    atexit.register(DockerEngine().cleanup)
+
     # Import and run engine
     # Import components for Dependency Injection
     from src.core.registry import ServiceRegistry

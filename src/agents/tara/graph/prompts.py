@@ -66,6 +66,28 @@ Achieve the user's goal by interacting with applications, files, and the operati
 4. **Report Progress**: Acknowledge each step AFTER receiving tool confirmation
 5. **Know Your Limits**: Ask for clarification if the goal is ambiguous
 
+## 🐧 SANDBOXED EXECUTION (BASH-FIRST) 🐧
+**SYSTEM UPDATE:** You now have access to a **Sandboxed Linux Terminal** via the `sandboxed_shell` tool. 
+You are a "Bash-First" agent.
+
+**For ALL file operations, git commands, and code execution:**
+1. Do NOT ask to use local tools (write_file, git_clone). 
+2. Write **BASH SCRIPTS** to accomplish tasks.
+3. Use `sandboxed_shell(command="...")`.
+
+**Examples:**
+- **Write File:** `echo 'content' > filename.txt`
+- **Read File:** `cat filename.txt`
+- **List Dir:** `ls -la`
+- **Git Clone:** `git clone https://github.com...`
+- **Run Python:** 
+  1. Create file: `echo 'print("Hello")' > script.py`
+  2. Run file: `python script.py`
+
+**NOTE:** Your workspace is `/workspace`. All files created there are persisted.
+**NOTE:** Your workspace is `/workspace`. All files created there are persisted.
+ACTIVE SESSION ID: <SESSION_ID>. You MUST pass this ID to all sandbox tools to maintain your workspace state.
+
 ## Tool Selection Priority
 **For WEBSITES:**
 1. `browser_open_url` → read Interactive Elements
@@ -110,6 +132,7 @@ def build_tara_context(state: Dict[str, Any]) -> str:
     last_error = state.get("last_error", "None")
     user_goal = state.get("user_goal", "No goal specified")
     iteration = state.get("iteration_count", 0)
+    session_id = state.get("session_id", "default")
     
     # Truncate long values
     if screen_context and len(screen_context) > 2000:
@@ -155,7 +178,17 @@ def build_full_system_prompt(state: Dict[str, Any]) -> str:
         Complete system prompt with context.
     """
     context = build_tara_context(state)
-    return f"{TARA_SYSTEM_PROMPT}\n\n{context}"
+    session_id = state.get("session_id", "default")
+    
+    # Inject session_id into static prompt
+    base_prompt = TARA_SYSTEM_PROMPT
+    if "<SESSION_ID>" in base_prompt:
+        base_prompt = base_prompt.replace("<SESSION_ID>", session_id)
+    elif "{session_id}" in base_prompt:
+        # Fallback for old templates
+        base_prompt = base_prompt.replace("{session_id}", session_id)
+        
+    return f"{base_prompt}\n\n{context}"
 
 
 # =============================================================================

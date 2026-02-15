@@ -32,7 +32,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 def _get_base_dir() -> Path:
     """Determine the project base directory."""
     # Start from this file's location and go up to find the project root
-    current = Path(__file__).resolve().parent.parent
+    current = Path(__file__).resolve().parent.parent.parent
     return current
 
 

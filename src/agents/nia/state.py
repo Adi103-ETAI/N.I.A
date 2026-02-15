@@ -129,6 +129,7 @@ class AgentState(TypedDict, total=False):
     final_response: Optional[str]
     route_reason: Optional[str]
     metadata: Dict[str, Any]
+    session_id: str # Phase 4: Persistent Session ID
 
 
 # =============================================================================
@@ -152,12 +153,16 @@ def create_initial_state(user_input: str) -> dict:
     else:
         messages = [{"role": "user", "content": user_input}]
     
+    import uuid
+    session_id = str(uuid.uuid4())
+    
     return {
         "messages": messages,
         "next": AGENT_SUPERVISOR,
         "user_input": user_input,
         "final_response": None,
         "route_reason": None,
+        "session_id": session_id,
         "metadata": {
             "timestamp": datetime.now().isoformat(),
             "turn_id": 0,
