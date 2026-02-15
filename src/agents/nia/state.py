@@ -36,10 +36,11 @@ from datetime import datetime
 AGENT_SUPERVISOR = "supervisor"
 AGENT_IRIS = "iris"       # Vision specialist
 AGENT_TARA = "tara"       # Logic/reasoning specialist
+AGENT_DOCKER = "docker"   # Docker execution node (skills)
 AGENT_END = "__end__"     # Terminal state
 
 # Valid routing destinations
-AgentName = Literal["supervisor", "iris", "tara", "__end__"]
+AgentName = Literal["supervisor", "iris", "tara", "docker", "__end__"]
 
 
 # =============================================================================

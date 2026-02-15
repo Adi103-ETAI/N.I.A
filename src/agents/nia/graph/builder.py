@@ -8,7 +8,10 @@ from __future__ import annotations
 from src.core.logger import setup_logger
 from pathlib import Path
 from typing import Any, Optional, List
-import aiosqlite
+try:
+    import aiosqlite
+except ImportError:
+    aiosqlite = None
 
 logger = setup_logger("NIA.Graph")
 
@@ -18,6 +21,7 @@ from src.agents.nia.state import (
     AGENT_SUPERVISOR,
     AGENT_IRIS,
     AGENT_TARA,
+    AGENT_DOCKER, # Phase 2
     AGENT_END,
     create_initial_state,
     extract_response,
@@ -28,6 +32,7 @@ from .nodes import (
     iris_node,
     general_assistant,   # Chat/non-automation node
     call_tara_2,         # TARA 2.0 automation node
+    docker_node,         # Phase 2: Docker Execution
     route_from_tara,
     route_from_supervisor,
 )
@@ -88,9 +93,10 @@ class NIAGraph:
     The graph structure:
     ```
     [START] → [supervisor] → routing decision
-                               ├── direct response → [END]
-                               ├── IRIS → [iris] → [END]
-                               └── TARA → [tara] → [END] or [supervisor]
+                                ├── direct response → [END]
+                                ├── IRIS → [iris] → [END]
+                                └── TARA → [tara] → [END] or [supervisor]
+                                └── DOCKER → [docker] → [END]
     ```
     
     Persistence:
@@ -192,6 +198,10 @@ class NIAGraph:
         graph.add_node(AGENT_TARA, call_tara_2)
         logger.info("🚀 TARA 2.0 node registered")
         
+        # Phase 2: Docker Node
+        graph.add_node(AGENT_DOCKER, docker_node)
+        logger.info("🐳 Docker Node registered")
+        
         # General Assistant Node (for chat responses)
         graph.add_node("general", general_assistant)
         logger.info("💬 General Assistant node registered")
@@ -208,6 +218,7 @@ class NIAGraph:
                 AGENT_IRIS: AGENT_IRIS,
                 AGENT_TARA: AGENT_TARA,
                 "general": "general",
+                AGENT_DOCKER: AGENT_DOCKER, # Phase 2
                 AGENT_END: END,
             }
         )
@@ -215,6 +226,7 @@ class NIAGraph:
         # Terminal edges: All specialists return to END
         graph.add_edge(AGENT_IRIS, END)
         graph.add_edge("general", END)
+        graph.add_edge(AGENT_DOCKER, END)
         
         # Add conditional edges from TARA (allows looping back for Active Listening)
         graph.add_conditional_edges(

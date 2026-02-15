@@ -493,6 +493,84 @@ async def call_tara_2(state: AgentState) -> AgentState:
         return {**state, "next": AGENT_END}
 
 
+async def docker_node(state: AgentState) -> AgentState:
+    """Docker Execution Node (Phase 2).
+    
+    Routes tasks to the Docker Swarm via DockerBridge.
+    Supports Host Mounts (The Wormhole) for real file editing.
+    """
+    logger.info("🐳 Routing to Docker Node")
+    
+    # Imports (Lazy to prevent circular refs)
+    import os
+    import uuid
+    from pathlib import Path
+    from langchain_core.messages import AIMessage
+    
+    from src.infrastructure.container_engine.bridge import DockerBridge
+    from src.infrastructure.container_engine.manager import DockerEngine
+    from src.agents.soldiers.schemas import MissionManifest
+    from src.core.skills.loader import load_docker_skills, get_skill_source_code
+    
+    # 1. Retrieve Context
+    meta = state.get("metadata", {})
+    skill_name = meta.get("target_skill")
+    query = meta.get("skill_query")
+    
+    if not skill_name:
+        return {**state, "messages": state.get("messages", []) + [AIMessage(content="Error: No skill specified.")]}
+        
+    # 2. Load Skill Metadata
+    all_skills = load_docker_skills()
+    skill_config = next((s for s in all_skills if s["name"] == skill_name), None)
+    
+    if not skill_config:
+        return {**state, "messages": state.get("messages", []) + [AIMessage(content=f"Error: Skill '{skill_name}' not found.")]}
+    
+    # 3. Determine Host Workdir (The Wormhole)
+    # Default to CWD if not specified to allow local file editing
+    # The General might have parsed a specific path into metadata, but for now we fallback to CWD
+    host_workdir = meta.get("workdir", os.getcwd()) 
+    
+    # 4. Build Manifest
+    manifest = MissionManifest(
+        task_id=str(uuid.uuid4()),
+        soldier_type="coding", 
+        objective=query,
+        code=get_skill_source_code(skill_name),
+        runtime=skill_config.get("runtime", "python"),
+        host_workdir=host_workdir,
+        pty=skill_config.get("pty", False),
+        dependencies=skill_config.get("dependencies", []),
+        user_query=query
+    )
+    
+    # 5. Execute
+    try:
+        engine = DockerEngine()
+        bridge = DockerBridge(engine)
+        
+        # We allow bridge to create a temp workspace for the agent's infrastructure
+        # The project files are mounted at /workspace/project via host_workdir
+        result = bridge.execute_mission(manifest)
+        
+        response_text = result.output
+        if result.error:
+            response_text = f"Error: {result.error}\nOutput: {result.output}"
+            
+        logger.info(f"🐳 Docker execution complete. Result length: {len(response_text)}")
+            
+        return {
+            **state,
+            "messages": state.get("messages", []) + [AIMessage(content=response_text)],
+            "final_response": response_text
+        }
+        
+    except Exception as e:
+        logger.error(f"Docker execution failed: {e}")
+        return {**state, "messages": state.get("messages", []) + [AIMessage(content=f"Docker execution failed: {e}")]}
+
+
 # =============================================================================
 # Routing Functions
 # =============================================================================
@@ -530,7 +608,8 @@ def route_from_supervisor(state: AgentState) -> str:
     """
     # STRATEGY 0: Respect the Supervisor's Explicit Instruction (The Brain's Decision)
     next_agent = state.get("next")
-    if next_agent and next_agent in [AGENT_TARA, AGENT_IRIS]:
+    # Added AGENT_DOCKER for Phase 2 routing
+    if next_agent and next_agent in [AGENT_TARA, AGENT_IRIS, "docker"]:
         logger.info(f"🧠 Supervisor explicitly routed to: {next_agent}")
         return next_agent
 
@@ -586,6 +665,7 @@ __all__ = [
     "_HAS_TARA_2",        # Feature flag
     "route_from_tara",
     "route_from_supervisor",
+    "docker_node",
 ]
 
 

@@ -15,7 +15,7 @@ from src.core.logger import setup_logger
 
 # --- CRITICAL IMPORTS ---
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
-from src.models.manager import get_smart_model
+# Removed top-level get_smart_model to prevent circular import/mocking issues
 from src.agents.nia.gatekeeper import RoutingGatekeeper
 # ADAPTED: import settings as config to match user variable name but use correct source
 from src.core.config import settings as config
@@ -130,6 +130,7 @@ class SupervisorAgent:
         When ModelManager.set_active_provider() is called, subsequent accesses
         will automatically use the new provider.
         """
+        from src.models.manager import get_smart_model
         return get_smart_model(temperature=self._temperature)
     
 
@@ -205,6 +206,12 @@ class SupervisorAgent:
         # 🎲 DYNAMIC PERSONA: Regenerate system prompt each call for fresh 80/20 roll
         from src.persona.profile import get_system_prompt
         fresh_system_prompt = get_system_prompt()
+        
+        # 🛠️ SKILL INJECTION (Phase 2)
+        from src.core.skills.loader import get_skills_prompt
+        skills_doc = get_skills_prompt()
+        if skills_doc:
+            fresh_system_prompt += f"\n\n{skills_doc}"
         
         current_messages: List[BaseMessage] = [SystemMessage(content=fresh_system_prompt)]
         
@@ -304,7 +311,8 @@ class SupervisorAgent:
     def _handle_validation(
         self, 
         validation: Dict[str, Any], 
-        content: str
+        content: str,
+        base_metadata: Dict[str, Any] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Handle gatekeeper validation result and return routing decision.
@@ -312,6 +320,7 @@ class SupervisorAgent:
         Args:
             validation: Gatekeeper validation result dict.
             content: Raw LLM response content.
+            base_metadata: Current state metadata (to merge into).
             
         Returns:
             State dict if routing decision made, None if retry needed.
@@ -321,6 +330,9 @@ class SupervisorAgent:
             
         target = validation["target"]
         command = validation["command"]
+        
+        # Merge metadata
+        current_meta = (base_metadata or {}).copy()
         
         # --- TARA ROUTE ---
         if target == "TARA":
@@ -340,6 +352,27 @@ class SupervisorAgent:
                 "user_input": command,
             }
         
+        # --- DOCKER ROUTE (Phase 2) ---
+        elif target == "DOCKER":
+            logger.info(f"🐳 Routing to Docker Swarm: {command}")
+            
+            # Parse "skill query"
+            parts = command.strip().split(" ", 1)
+            skill_name = parts[0]
+            query = parts[1] if len(parts) > 1 else ""
+            
+            current_meta["target_skill"] = skill_name
+            current_meta["skill_query"] = query
+            
+            return {
+                # We forward the command as a HumanMessage so the node has context 
+                # (though it reads metadata)
+                "messages": [HumanMessage(content=command)],
+                "next": "docker",
+                "user_input": command,
+                "metadata": current_meta
+            }
+
         # --- CHAT (Direct Response) ---
         else:
             return {"messages": [AIMessage(content=content)]}
@@ -439,7 +472,7 @@ class SupervisorAgent:
             
             # Gatekeeper Check
             validation = self.gatekeeper.validate(content)
-            result = self._handle_validation(validation, content)
+            result = self._handle_validation(validation, content, state.get("metadata", {}))
             
             if result is not None:
                 # 🧠 MEMORY SAVE: Persist this turn
@@ -502,7 +535,7 @@ class SupervisorAgent:
             
             # Gatekeeper Check (sync - pure CPU logic, negligible blocking)
             validation = self.gatekeeper.validate(content)
-            result = self._handle_validation(validation, content)
+            result = self._handle_validation(validation, content, state.get("metadata", {}))
             
             if result is not None:
                 # Memory is saved in core/engine.py after graph execution (single source of truth)

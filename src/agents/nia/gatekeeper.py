@@ -10,7 +10,7 @@ class RoutingGatekeeper:
     """
     def __init__(self):
         # Regex to catch "ROUTE:TARGET:COMMAND"
-        self.route_pattern = r"(?i)route\s*[:\->]\s*(TARA|IRIS)"
+        self.route_pattern = r"(?i)route\s*[:\->]\s*(TARA|IRIS|DOCKER)"
 
     def validate(self, llm_response: str) -> dict:
         match = re.search(self.route_pattern, llm_response)

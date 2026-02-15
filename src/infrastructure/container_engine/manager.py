@@ -3,7 +3,11 @@ Docker Engine Manager.
 
 Handles low-level Docker operations for the Sandbox.
 """
-import docker
+try:
+    import docker
+except ImportError:
+    docker = None
+    
 import logging
 from typing import Optional, Tuple, Dict, Any, List
 
@@ -24,13 +28,17 @@ class DockerEngine:
         if self._initialized:
             return
             
-        try:
-            self.client = docker.from_env()
-            self.client.ping()
-            logger.info("🐳 Connected to Docker Engine")
-        except docker.errors.DockerException as e:
-            logger.warning(f"⚠️ Docker Desktop not running or not installed: {e}")
-            self.client = None
+        self.client = None
+        if docker:
+            try:
+                self.client = docker.from_env()
+                self.client.ping()
+                logger.info("🐳 Connected to Docker Engine")
+            except (docker.errors.DockerException, Exception) as e:
+                logger.warning(f"⚠️ Docker Desktop not running or not installed: {e}")
+                self.client = None
+        else:
+             logger.warning("⚠️ Docker SDK not installed. Sandbox disabled.")
             
         self._initialized = True
         
@@ -188,6 +196,62 @@ class DockerEngine:
             except Exception as e:
                 logger.error(f"Ephemeral execution failed: {e}")
                 return -1, "", str(e)
+
+    def run_command_pty(
+        self,
+        image: str,
+        command: str,
+        session_id: str = "default",
+        environment: Optional[Dict[str, str]] = None,
+        mounts: Optional[Dict[str, Dict[str, str]]] = None,
+        workdir: str = "/workspace",
+        timeout: int = 300,
+    ) -> Tuple[int, str, str]:
+        """Run a command with PTY (pseudo-terminal) support.
+        
+        Required for interactive CLIs like Codex, Aider, or Claude Code
+        that expect a terminal and hang without one.
+        
+        v5.0 Additive — does NOT modify run_command().
+        """
+        if not self.client:
+            return -1, "", "Docker client not available"
+        
+        try:
+            if not mounts:
+                from src.infrastructure.container_engine.factory import SessionBuilder
+                mounts = SessionBuilder.get_session_mounts(session_id)
+
+            container = self.client.containers.run(
+                image,
+                command=["bash", "-c", command],
+                detach=True,
+                tty=True,           # <-- PTY allocation
+                stdin_open=True,    # <-- Keep stdin open for interactive tools
+                environment=environment or {},
+                volumes=mounts or {},
+                network_mode="bridge",
+                remove=False,
+                working_dir=workdir,
+            )
+
+            # Wait with timeout
+            result = container.wait(timeout=timeout)
+            exit_code = result.get("StatusCode", -1)
+            stdout = container.logs(stdout=True, stderr=False).decode("utf-8", errors="replace")
+            stderr = container.logs(stdout=False, stderr=True).decode("utf-8", errors="replace")
+            container.remove(force=True)
+
+            return exit_code, stdout, stderr
+
+        except Exception as e:
+            logger.error(f"PTY execution failed: {e}")
+            # Attempt cleanup
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
+            return -1, "", str(e)
 
     def cleanup(self):
         """Kill all session containers on shutdown."""

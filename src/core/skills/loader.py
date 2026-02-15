@@ -281,4 +281,204 @@ __all__ = [
     "SkillLoader",
     "get_skill_loader",
     "load_skills",
+    "get_skill_source_code",
+    "load_docker_skills",
 ]
+
+
+# =============================================================================
+# Docker Execution Helpers (v5.0 Polyglot Extension)
+# =============================================================================
+
+# Permanent built-in skills (git-tracked, syncs to GitHub)
+_LIBRARY_SKILLS_DIR = Path(__file__).resolve().parent / "library"
+
+# Learned/ephemeral skills (gitignored, created by Builder Soldier)
+_DATA_SKILLS_DIR = Path(__file__).resolve().parents[3] / "data" / "skills"
+
+
+def _all_skill_dirs() -> list[Path]:
+    """Return all skill search directories (library first, then data)."""
+    dirs = []
+    if _LIBRARY_SKILLS_DIR.exists():
+        dirs.append(_LIBRARY_SKILLS_DIR)
+    if _DATA_SKILLS_DIR.exists():
+        dirs.append(_DATA_SKILLS_DIR)
+    return dirs
+
+
+def _detect_runtime(skill_dir: Path) -> Optional[str]:
+    """Detect the runtime from available source files."""
+    if (skill_dir / "source.py").exists():
+        return "python"
+    if (skill_dir / "source.js").exists():
+        return "node"
+    return None
+
+
+def _detect_source_file(skill_dir: Path) -> Optional[Path]:
+    """Find the source code file in a skill directory."""
+    for candidate in ["source.py", "source.js"]:
+        path = skill_dir / candidate
+        if path.exists():
+            return path
+    return None
+
+
+def get_skill_source_code(name: str, skills_dir: Optional[Path] = None) -> Optional[str]:
+    """Read the raw source code for a Docker-executable skill.
+    
+    Searches both library/ (permanent) and data/skills/ (learned).
+    An explicit skills_dir overrides the dual-search.
+    
+    Args:
+        name: Skill folder name.
+        skills_dir: Override directory.
+        
+    Returns:
+        Source code string, or None if not found.
+    """
+    if skills_dir:
+        search_dirs = [skills_dir]
+    else:
+        search_dirs = _all_skill_dirs()
+    
+    for base in search_dirs:
+        skill_dir = base / name
+        if not skill_dir.is_dir():
+            continue
+        
+        source_file = _detect_source_file(skill_dir)
+        if source_file is None:
+            continue
+        
+        try:
+            return source_file.read_text(encoding="utf-8")
+        except Exception as e:
+            logger.error(f"Failed to read skill source {source_file}: {e}")
+            continue
+    
+    return None
+
+
+def _scan_skill_directory(base: Path, source_type: str) -> dict[str, dict]:
+    """Scan a directory for skill.md folders and return dict of skills {name: metadata}."""
+    skills = {}
+    
+    if not base.exists():
+        return skills
+    
+    for item in sorted(base.iterdir()):
+        if not item.is_dir():
+            continue
+        
+        # v5.0 Standard: skill.md
+        skill_file = item / "skill.md"
+        if not skill_file.exists():
+            continue
+        
+        runtime = _detect_runtime(item)
+        source_file = _detect_source_file(item)
+        
+        # Parse skill.md frontmatter
+        try:
+            content = skill_file.read_text(encoding="utf-8")
+            frontmatter, body = _parse_frontmatter(content)
+        except Exception:
+            frontmatter = {}
+            body = ""
+        
+        # Parse dependencies
+        deps = frontmatter.get("dependencies", [])
+        if isinstance(deps, str):
+            deps = [d.strip() for d in deps.split(",") if d.strip()]
+        
+        # Parse requires (binary requirements like codex, pi)
+        # Check standard root 'requires' AND 'metadata.nia.requires'
+        requires = frontmatter.get("requires", [])
+        if not requires:
+             meta = frontmatter.get("metadata", {})
+             if isinstance(meta, dict):
+                 nia_meta = meta.get("nia", {})
+                 if isinstance(nia_meta, dict):
+                     requires = nia_meta.get("requires", [])
+
+        if isinstance(requires, str):
+            requires = [r.strip() for r in requires.split(",") if r.strip()]
+        
+        # Parse boolean fields
+        pty = str(frontmatter.get("pty", "false")).lower() in ("true", "1", "yes")
+        
+        name = frontmatter.get("name", item.name)
+        skills[name] = {
+            "name": name,
+            "emoji": frontmatter.get("emoji", "🔧"),
+            "description": frontmatter.get("description", body[:200].strip()),
+            "runtime": frontmatter.get("runtime", runtime or "python"),
+            "dependencies": deps,
+            "requires": requires,
+            "source_file": str(source_file) if source_file else None,
+            "pty": pty,
+            "workdir": frontmatter.get("workdir", "/workspace"),
+            "body": body.strip(),
+            "source": source_type,
+        }
+    
+    return skills
+
+
+def load_docker_skills(skills_dir: Optional[Path] = None) -> list[dict]:
+    """Load metadata for all Docker-executable skills.
+    
+    Scans TWO directories with priority:
+    1. src/core/skills/library/ — Permanent (High Priority)
+    2. data/skills/ — Learned/Ephemeral (Low Priority)
+    
+    Conflict Resolution: If a skill exists in both, the Library version wins.
+    
+    Returns:
+        List of dicts with skill metadata.
+    """
+    if skills_dir:
+        # Single directory scan (test mode)
+        skills_map = _scan_skill_directory(skills_dir, "custom")
+        return list(skills_map.values())
+    
+    # Dual-scan: library (permanent) + data (learned)
+    # Scan Data first (Low Priority)
+    all_skills_map = {}
+    
+    data_skills = _scan_skill_directory(_DATA_SKILLS_DIR, "learned")
+    all_skills_map.update(data_skills)
+    
+    # Scan Library second (High Priority - Overwrites Data)
+    library_skills = _scan_skill_directory(_LIBRARY_SKILLS_DIR, "library")
+    all_skills_map.update(library_skills)
+    
+    logger.info(
+        f"Docker skills loaded: {len(all_skills_map)} total "
+        f"(library={len(library_skills)}, data={len(data_skills)})"
+    )
+    
+    # Return sorted list
+    return sorted(list(all_skills_map.values()), key=lambda x: x["name"])
+
+
+def get_skills_prompt(skills_dir: Optional[Path] = None) -> str:
+    """Build a formatted Skill Library prompt for the General's LLM."""
+    skills = load_docker_skills(skills_dir)
+    
+    if not skills:
+        return ""
+    
+    lines = ["## 🛠️ Available Skills\n"]
+    for s in skills:
+        emoji = s.get("emoji", "🔧")
+        pty_marker = " ⌨️ (interactive)" if s.get("pty") else ""
+        requires_marker = f" [requires: {', '.join(s['requires'])}]" if s.get("requires") else ""
+        lines.append(
+            f"- {emoji} **{s['name']}** ({s['runtime']}{pty_marker}){requires_marker}: {s['description']}"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
