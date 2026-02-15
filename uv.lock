@@ -194,10 +194,10 @@ name = "appopener"
 version = "1.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "psutil" },
-    { name = "pywin32" },
-    { name = "regex" },
-    { name = "wheel" },
+    { name = "psutil", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "pywin32", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "regex", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "wheel", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6c/80/c332f7b6221135e5065d85ebdc02ab5f26ca8b27ff44df6bcccceae6517d/appopener-1.7.tar.gz", hash = "sha256:21cd542049daa0adc6243605180c9ebd757fd280785c483923185eb6ffb1dd4d", size = 10220, upload-time = "2023-04-30T11:29:03.268Z" }
 wheels = [
@@ -1832,9 +1832,9 @@ source = { editable = "." }
 dependencies = [
     { name = "aioconsole" },
     { name = "aiosqlite" },
-    { name = "appopener" },
+    { name = "appopener", marker = "sys_platform == 'win32'" },
     { name = "chromadb" },
-    { name = "comtypes" },
+    { name = "comtypes", marker = "sys_platform == 'win32'" },
     { name = "docker" },
     { name = "duckduckgo-search" },
     { name = "edge-tts" },
@@ -1856,19 +1856,20 @@ dependencies = [
     { name = "prompt-toolkit" },
     { name = "psutil" },
     { name = "pyautogui" },
-    { name = "pycaw" },
+    { name = "pycaw", marker = "sys_platform == 'win32'" },
     { name = "pydantic-settings" },
     { name = "pygame" },
-    { name = "pygetwindow" },
+    { name = "pygetwindow", marker = "sys_platform == 'win32'" },
     { name = "pyperclip" },
+    { name = "pytest-asyncio" },
     { name = "python-dotenv" },
-    { name = "pywin32" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "requests" },
     { name = "send2trash" },
     { name = "sounddevice" },
     { name = "vosk" },
     { name = "watchdog" },
-    { name = "winsdk" },
+    { name = "winsdk", marker = "sys_platform == 'win32'" },
 ]
 
 [package.dev-dependencies]
@@ -1881,9 +1882,9 @@ dev = [
 requires-dist = [
     { name = "aioconsole", specifier = ">=0.8.1" },
     { name = "aiosqlite", specifier = ">=0.21.0" },
-    { name = "appopener", specifier = ">=1.7" },
+    { name = "appopener", marker = "sys_platform == 'win32'", specifier = ">=1.7" },
     { name = "chromadb", specifier = ">=0.6.3" },
-    { name = "comtypes", specifier = ">=1.4.10" },
+    { name = "comtypes", marker = "sys_platform == 'win32'", specifier = ">=1.4.10" },
     { name = "docker", specifier = ">=7.1.0" },
     { name = "duckduckgo-search", specifier = ">=7.3" },
     { name = "edge-tts", specifier = ">=7.0.0" },
@@ -1905,19 +1906,20 @@ requires-dist = [
     { name = "prompt-toolkit", specifier = ">=3.0.50" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pyautogui", specifier = ">=0.9.54" },
-    { name = "pycaw", specifier = ">=20240818" },
+    { name = "pycaw", marker = "sys_platform == 'win32'", specifier = ">=20240818" },
     { name = "pydantic-settings", specifier = ">=2.7.1" },
     { name = "pygame", specifier = ">=2.6.1" },
-    { name = "pygetwindow", specifier = ">=0.0.9" },
+    { name = "pygetwindow", marker = "sys_platform == 'win32'", specifier = ">=0.0.9" },
     { name = "pyperclip", specifier = ">=1.9.0" },
+    { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
-    { name = "pywin32", specifier = ">=308" },
+    { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=308" },
     { name = "requests", specifier = ">=2.32.3" },
     { name = "send2trash", specifier = ">=1.8.3" },
     { name = "sounddevice", specifier = ">=0.5.1" },
     { name = "vosk", specifier = ">=0.3.45" },
     { name = "watchdog", specifier = ">=6.0.0" },
-    { name = "winsdk", specifier = ">=1.0.0b10" },
+    { name = "winsdk", marker = "sys_platform == 'win32'", specifier = ">=1.0.0b10" },
 ]
 
 [package.metadata.requires-dev]
@@ -2783,8 +2785,8 @@ name = "pycaw"
 version = "20251023"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "comtypes" },
-    { name = "psutil" },
+    { name = "comtypes", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "psutil", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d1/81/19181e3118a503f94d8689fbbed60616e85d08cee3a295c11245ae73018f/pycaw-20251023.tar.gz", hash = "sha256:19935b92eb5efc3f3ea5ee8a2d37ca49009e9dc00f83d067b74b9922e84b5b3b", size = 23421, upload-time = "2025-10-23T18:26:45.087Z" }
 wheels = [
@@ -3099,6 +3101,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d1/db/7ef3487e0fb0049ddb5ce41d3a49c235bf9ad299b6a25d5780a89f19230f/pytest-9.0.2.tar.gz", hash = "sha256:75186651a92bd89611d1d9fc20f0b4345fd827c41ccd5c299a868a05d70edf11", size = 1568901, upload-time = "2025-12-06T21:30:51.014Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3b/ab/b3226f0bd7cdcf710fbede2b3548584366da3b19b5021e74f5bde2a8fa3f/pytest-9.0.2-py3-none-any.whl", hash = "sha256:711ffd45bf766d5264d487b917733b453d917afd2b0ad65223959f59089f875b", size = 374801, upload-time = "2025-12-06T21:30:49.154Z" },
+]
+
+[[package]]
+name = "pytest-asyncio"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/90/2c/8af215c0f776415f3590cac4f9086ccefd6fd463befeae41cd4d3f193e5a/pytest_asyncio-1.3.0.tar.gz", hash = "sha256:d7f52f36d231b80ee124cd216ffb19369aa168fc10095013c6b014a34d3ee9e5", size = 50087, upload-time = "2025-11-10T16:07:47.256Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/35/f8b19922b6a25bc0880171a2f1a003eaeb93657475193ab516fd87cac9da/pytest_asyncio-1.3.0-py3-none-any.whl", hash = "sha256:611e26147c7f77640e6d0a92a38ed17c3e9848063698d5c93d5aa7aa11cebff5", size = 15075, upload-time = "2025-11-10T16:07:45.537Z" },
 ]
 
 [[package]]
@@ -4137,7 +4152,7 @@ name = "wheel"
 version = "0.46.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "packaging" },
+    { name = "packaging", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/89/24/a2eb353a6edac9a0303977c4cb048134959dd2a51b48a269dfc9dde00c8a/wheel-0.46.3.tar.gz", hash = "sha256:e3e79874b07d776c40bd6033f8ddf76a7dad46a7b8aa1b2787a83083519a1803", size = 60605, upload-time = "2026-01-22T12:39:49.136Z" }
 wheels = [

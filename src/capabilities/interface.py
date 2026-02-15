@@ -375,16 +375,31 @@ def get_tools_by_category() -> Dict[str, List[str]]:
     for tool in tools:
         # tool.func.__module__ gives e.g. "src.capabilities.system.files"
         # We want "system.files"
-        if tool.func:
-            mod_name = tool.func.__module__.replace("src.capabilities.", "")
-            if mod_name not in categories:
-                categories[mod_name] = []
-            categories[mod_name].append(tool.name)
-        elif tool.coroutine:
-            mod_name = tool.coroutine.__module__.replace("src.capabilities.", "")
-            if mod_name not in categories:
-                categories[mod_name] = []
-            categories[mod_name].append(tool.name)
+
+        # FIX for BaseTool subclasses (like SandboxedShell) that don't have .func
+        if hasattr(tool, "func") and tool.func:
+             mod_name = tool.func.__module__.replace("src.capabilities.", "")
+             if mod_name not in categories:
+                 categories[mod_name] = []
+             categories[mod_name].append(tool.name)
+        elif hasattr(tool, "coroutine") and tool.coroutine:
+             mod_name = tool.coroutine.__module__.replace("src.capabilities.", "")
+             if mod_name not in categories:
+                 categories[mod_name] = []
+             categories[mod_name].append(tool.name)
+        else:
+            # Fallback for Class-based tools (BaseTool subclasses)
+            # Try to get module from class
+            try:
+                mod_name = tool.__class__.__module__.replace("src.capabilities.", "")
+                if mod_name not in categories:
+                    categories[mod_name] = []
+                categories[mod_name].append(tool.name)
+            except AttributeError:
+                # Last resort
+                if "unknown" not in categories:
+                    categories["unknown"] = []
+                categories["unknown"].append(tool.name)
             
     return categories
 

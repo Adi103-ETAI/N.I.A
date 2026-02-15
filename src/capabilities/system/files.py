@@ -39,9 +39,34 @@ from typing import List, Optional
 
 from src.core.logger import setup_logger
 from src.core.context import get_os_context
+from src.core.config import get_settings
 from src.capabilities.decorators import security_level
 
 logger = setup_logger("TARA.Tools.FileOps")
+
+# =============================================================================
+# Security Constants
+# =============================================================================
+
+# Files that are strictly forbidden to access
+SENSITIVE_FILES = {
+    ".env",
+    ".env.local",
+    "secrets.yaml",
+    "id_rsa",
+    "id_dsa",
+    "id_ed25519",
+    "known_hosts"
+}
+
+# Directories that are strictly forbidden to traverse
+SENSITIVE_DIRS = {
+    ".git",
+    ".ssh",
+    ".aws",
+    ".kube",
+    "__pycache__"
+}
 
 # =============================================================================
 # Optional Dependencies
@@ -71,7 +96,7 @@ def _validate_path(path: str, must_exist: bool = False) -> Path:
         Normalized Path object.
         
     Raises:
-        ValueError: If path is invalid or OUTSIDE SAFE ZONES.
+        ValueError: If path is invalid, OUTSIDE SAFE ZONES, or SENSITIVE.
         FileNotFoundError: If must_exist and path doesn't exist.
     """
     if not path or not path.strip():
@@ -85,8 +110,19 @@ def _validate_path(path: str, must_exist: bool = False) -> Path:
         p.relative_to(p.anchor)  # Must be under a valid root
     except ValueError:
         raise ValueError(f"Invalid path: {path}")
-    
-    # SANDBOX CHECK: Ensure path is within a Safe Zone
+
+    # 1. STRICT BLACKLIST CHECK (SENSITIVE FILES)
+    # Check if filename is sensitive
+    if p.name in SENSITIVE_FILES:
+        raise ValueError(f"🚫 Security Access Denied: Access to sensitive file '{p.name}' is strictly forbidden.")
+
+    # Check if any parent directory is sensitive
+    # We check parts against SENSITIVE_DIRS
+    for part in p.parts:
+        if part in SENSITIVE_DIRS:
+            raise ValueError(f"🚫 Security Access Denied: Access to sensitive directory '{part}' is strictly forbidden.")
+
+    # 2. SANDBOX CHECK: Ensure path is within a Safe Zone
     ctx = get_os_context()
     safe_zones = ctx.get_safe_zones()
 
@@ -159,6 +195,10 @@ def list_dir(path: str) -> str:
         
         items = []
         for item in sorted(p.iterdir()):
+            # Security: Filter sensitive files from listing
+            if item.name in SENSITIVE_FILES or item.name in SENSITIVE_DIRS:
+                continue
+
             if item.is_dir():
                 items.append(f"[DIR]  {item.name}")
             else:
@@ -605,6 +645,13 @@ def search_files(
         # Search with early termination
         matches = []
         for match in glob.iglob(search_pattern, recursive=True):
+            # Security Filter
+            m_path = Path(match)
+            if m_path.name in SENSITIVE_FILES:
+                continue
+            if any(part in SENSITIVE_DIRS for part in m_path.parts):
+                continue
+
             matches.append(match)
             if len(matches) >= max_results:
                 break

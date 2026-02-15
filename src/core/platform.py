@@ -204,7 +204,12 @@ class OSContext:
         safe_zones = [
             self.downloads_dir,
             self.temp_dir,
-            settings.BASE_DIR,  # Project root is now a safe zone (sandboxed workspace)
+            # settings.BASE_DIR, # SECURITY RISK: Do NOT allow full project root access
+            settings.DATA_DIR,   # Allow access to data/ (logs, memory, etc.)
+            settings.BASE_DIR / "src", # Allow access to source code for self-improvement
+            settings.BASE_DIR / "main.py", # Allow reading entry point
+            settings.BASE_DIR / "README.md", # Allow reading docs
+            settings.BASE_DIR / "tests", # Allow reading/writing tests
         ]
         
         # Add OS-specific safe zones

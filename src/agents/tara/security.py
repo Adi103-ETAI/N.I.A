@@ -92,21 +92,12 @@ class WardenService:
         if tool_name in ["sandboxed_shell", "start_session", "end_session"]:
             # Auto-approve: Sandboxed execution is safe by design
             pass
-        elif tool_name in ["write_file", "delete_file", "git_clone"]:
-            # STRICT BLOCK for host operations
-            raise SecurityError(
-                "Security Restriction: You must use the sandboxed_shell tool for file operations."
-            )
         elif tool_name == "launch_app":
             self._check_app_launcher(args)
         elif tool_name in ["terminate_process", "find_process"]:
             # Host-side process management: high-risk but permitted
             # Safety enforced by HostProcessManager's blocklist
             pass
-        elif tool_name == "move_file": # move_file might be needed on host? Deprecated? 
-            # If it's deprecated, we should probably block it too, but maybe just use file_operation check for now
-            # The prompt says "BLOCK: write_file, delete_file, git_clone"
-            self._check_file_operation(args, tool_name)
         else:
             # Default Deny for unknown high-risk tools
             raise SecurityError(f"Unknown high-risk tool '{tool_name}' blocked by default.")
@@ -135,46 +126,6 @@ class WardenService:
              pass
 
         # If we get here, it's approved (apps.py handles the execution safety)
-
-    def _check_file_operation(self, args: Dict[str, Any], tool_name: str) -> None:
-        """Verify file operation against Safe Zones."""
-        path_str = args.get("path") or args.get("src")
-        if not path_str:
-            # If move_file, check both src and dst?
-            # args might have 'src' and 'dst'.
-            pass
-            
-        paths_to_check = []
-        if "path" in args:
-            paths_to_check.append(args["path"])
-        if "src" in args:
-            paths_to_check.append(args["src"])
-        if "dst" in args:
-            paths_to_check.append(args["dst"])
-
-        for p_str in paths_to_check:
-            path = Path(p_str).resolve()
-
-            # Check Safe Zones
-            is_safe_zone = False
-            for zone in self.safe_zones:
-                try:
-                    path.relative_to(zone)
-                    is_safe_zone = True
-                    break
-                except ValueError:
-                    continue
-
-            if not is_safe_zone:
-                # STRICT ENFORCEMENT
-                raise SecurityError(
-                    f"Access Denied: Path '{path}' is outside Allowed Workspace (Safe Zones)."
-                )
-
-        # Special check for delete: Recycle Bin
-        if tool_name == "delete_file" and not _HAS_TRASH:
-            logger.warning("⚠️ send2trash missing. Permanent delete allowed inside Safe Zone.")
-            # We allow it because it IS in a safe zone (e.g. workspace), so it's the user's data.
 
 
 # Global Accessor
