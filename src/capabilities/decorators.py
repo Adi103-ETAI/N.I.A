@@ -1,7 +1,24 @@
-"""
-TARA Tool Decorators.
+"""Capabilities Security Decorators.
 
-Provides metadata tagging for TARA tools, specifically for security capability gating.
+Provides the ``@security_level`` metadata decorator used to tag tool
+functions with their risk classification.
+
+Security Levels:
+    ``"read_only"``
+        Safe, idempotent operations — e.g. ``read_file``, ``list_dir``.
+    ``"host_standard"``
+        Default. Normal local execution — e.g. ``click``, ``type_text``.
+    ``"high_risk"``
+        Dangerous — e.g. ``delete_file``, shell commands.
+        Requires Warden approval or sandboxed execution.
+
+Usage::
+
+    from src.capabilities.decorators import security_level
+
+    @security_level("high_risk")
+    def delete_file(path: str) -> str:
+        ...
 """
 from typing import Callable
 import functools

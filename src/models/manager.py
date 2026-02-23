@@ -1,55 +1,58 @@
-"""Model Manager for NIA - Multi-Provider LLM Factory.
+"""Model Manager for NIA — Multi-Provider LLM Factory.
 
-This module provides a clean, decoupled interface for working with multiple
-LLM providers (NVIDIA NIM, OpenAI, Ollama, Groq) through a unified API.
+Provides a clean, decoupled interface for working with multiple LLM providers
+(NVIDIA NIM, OpenAI, Ollama, Groq) through a single unified API.
 
-v2.5.2 "Velocity" - Key Features:
-    - Hot-Swap Provider Switching: Change active provider at runtime via
-      `set_active_provider()`. All agents automatically use the new provider.
-    - SafeLLM Circuit Breaker: All models are wrapped with automatic retry
-      and fallback logic. If Provider A fails (429), switches to Provider B.
-    - Dynamic Access Pattern: Agents use `@property` to fetch models on each
-      access, enabling seamless hot-swap without restart.
+v4.0 key features:
+    - Hot-swap provider switching: change active provider at runtime via
+      ``set_active_provider()``; all agents pick it up on next call.
+    - Dynamic access pattern: ``@property`` on ModelManager always fetches
+      the currently-active provider — zero-restart required.
+    - Preset shortcuts: ``get_smart_model()``, ``get_fast_model()``,
+      ``get_vision_model()``, ``get_embedding_function()``.
 
-Data Flow:
-    User -> Supervisor -> SafeLLM -> ModelManager -> [NVIDIA|OpenAI|Groq|Ollama]
-                            ^
-                            |__ Circuit Breaker: Auto-fallback on 429/503
+Data flow:
+    Request → ModelManager → ModelConfig (API key) → ModelFactory
+                                                              │
+                    ┌─────────────────────────────────────────┘
+                    ▼
+             [ChatNVIDIA | ChatOpenAI | ChatGroq | ChatOllama]
+                    │
+                    ▼
+             Calling agent (supervisor / reasoner / general_assistant)
 
 Architecture:
-    ┌─────────────────────────────────────────────────────────────────┐
-    │                       ModelManager                              │
-    │                                                                 │
-    │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-    │  │ ModelConfig │  │ ModelFactory│  │      Model Presets      │  │
-    │  │ (API Keys)  │  │ (Providers) │  │ smart/fast/vision/embed │  │
-    │  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
-    │         │                │                     │                │
-    │         ▼                ▼                     ▼                │
-    │  ┌───────────────────────────────────────────────────────────┐  │
-    │  │               SafeLLM Wrapped Chat Models                 │  │
-    │  │  ChatNVIDIA  │  ChatOpenAI  │  ChatOllama  │  ChatGroq    │  │
-    │  └───────────────────────────────────────────────────────────┘  │
-    └─────────────────────────────────────────────────────────────────┘
+    ┌──────────────────────────────────────────────────────────────────┐
+    │                        ModelManager                              │
+    │                                                                  │
+    │  ┌─────────────┐   ┌──────────────┐   ┌──────────────────────┐   │
+    │  │ ModelConfig │   │ ModelFactory │   │    Model Presets     │   │
+    │  │  (API keys) │   │  (providers) │   │ smart/fast/vision    │   │
+    │  └──────┬──────┘   └──────┬───────┘   └──────────┬───────────┘   │
+    │         │                 │                      │               │
+    │         └─────────────────┴──────────────────────┘               │
+    │                           ▼                                      │
+    │          [ChatNVIDIA | ChatOpenAI | ChatGroq | ChatOllama]       │
+    └──────────────────────────────────────────────────────────────────┘
 
-Usage:
+Usage::
+
     from src.models import ModelManager
-    
+
     manager = ModelManager()
-    
-    # Use presets (all wrapped with SafeLLM)
-    smart = manager.get_smart_model()   # Best quality
-    fast = manager.get_fast_model()     # Fastest response
-    vision = manager.get_vision_model() # Image understanding
-    
+
+    smart  = manager.get_smart_model()   # Best quality
+    fast   = manager.get_fast_model()    # Fastest response
+    vision = manager.get_vision_model()  # Image understanding
+
     # Hot-swap provider at runtime
-    manager.set_active_provider("openai")  # All agents now use OpenAI
-    
-    # Or get specific provider/model
+    manager.set_active_provider("openai")  # All subsequent calls use OpenAI
+
+    # Explicit provider + model
     model = manager.get_chat_model("nvidia", "meta/llama-3.1-70b-instruct")
     response = model.invoke("Hello!")
 
-Version: 2.5.2
+Version: 4.0.0
 """
 from __future__ import annotations
 
@@ -66,8 +69,7 @@ from dotenv import load_dotenv
 from src.core.logger import setup_logger
 from src.core.config import settings
 
-# v2.5.2: SafeLLM import (deferred to avoid circular import)
-# SafeLLM is imported lazily in _wrap_with_safety()
+# SafeLLM was removed in v4.0. Models are returned directly from ModelFactory.
 
 # Load environment variables
 load_dotenv()
@@ -75,8 +77,22 @@ load_dotenv()
 # Configure module logger
 logger = setup_logger("Models")
 
+# Config data lives at src/core/config/data/ (moved from root config/ in Tier 2 cleanup)
+# Path: src/models/manager.py → parents[1]=src/ → core/config/data/
+_CONFIG_DATA = Path(__file__).resolve().parents[1] / "core" / "config" / "defaults"
+
+
+# =============================================================================
+# Module-Level Config Loaders
+# =============================================================================
+
 def _load_general_config() -> dict:
-    config_path = Path(__file__).resolve().parents[2] / "config" / "nia" / "general.json"
+    """Load NIA general config (default provider, valid providers).
+
+    Reads from src/core/config/data/nia/general.json.
+    Returns an empty dict on any failure so module loading never crashes.
+    """
+    config_path = _CONFIG_DATA / "nia" / "general.json"
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -84,16 +100,14 @@ def _load_general_config() -> dict:
         logger.warning(f"Failed to load general.json: {e}")
         return {}
 
+
 _GENERAL_CONFIG = _load_general_config()
 
-# Default fallback provider (NVIDIA supremacy)
+# Default provider when no override is set
 DEFAULT_PROVIDER = _GENERAL_CONFIG.get("DEFAULT_PROVIDER", "nvidia")
 
-# Valid providers for runtime switching
+# Frozenset of valid provider identifiers for runtime validation
 VALID_PROVIDERS = frozenset(_GENERAL_CONFIG.get("VALID_PROVIDERS", ["nvidia", "openai", "groq", "ollama"]))
-
-# v2.5.2: Enable/disable SafeLLM wrapping (for testing/debugging)
-ENABLE_SAFE_LLM = True
 
 
 # =============================================================================
@@ -142,7 +156,7 @@ def _load_catalog() -> Dict[str, ModelSpec]:
         FileNotFoundError: If catalog.json is missing.
         json.JSONDecodeError: If catalog.json has invalid JSON.
     """
-    catalog_path = Path(__file__).resolve().parents[2] / "config" / "nia" / "models.json"
+    catalog_path = _CONFIG_DATA / "nia" / "models.json"
     
     if not catalog_path.exists():
         logger.warning("models.json not found, using empty catalog")
@@ -800,40 +814,16 @@ class ModelManager:
     def _wrap_with_safety(self, model: Any) -> Any:
         """Wrap a model with SafeLLM circuit breaker.
         
-        v2.5.2: All models are wrapped for automatic 429 handling
-        and provider fallback.
+        v4.0.0 Update: SafeLLM was deprecated. Models are now returned directly.
+        This method is kept as a pass-through for API compatibility.
         
         Args:
             model: Raw LangChain chat model.
             
         Returns:
-            SafeLLM wrapper (or raw model if disabled).
+            The raw model.
         """
-        if not ENABLE_SAFE_LLM:
-            return model
-        
-        try:
-            from src.models.safe_llm import SafeLLM
-            
-            # Determine fallback based on current provider
-            # If we're on NVIDIA, fallback to OpenAI; otherwise fallback to NVIDIA
-            if self.active_provider == "nvidia":
-                fallback = "openai" if self.config.has_api_key("openai") else "nvidia"
-            else:
-                fallback = "nvidia"
-            
-            wrapped = SafeLLM(
-                primary_model=model,
-                manager=self,
-                fallback_provider=fallback,
-                max_retries=2,
-            )
-            self.logger.debug(f"Model wrapped with SafeLLM (fallback={fallback})")
-            return wrapped
-            
-        except ImportError as e:
-            self.logger.warning(f"SafeLLM not available, using raw model: {e}")
-            return model
+        return model
     
     # =========================================================================
     # High-Level API
@@ -1112,3 +1102,54 @@ def print_status() -> None:
 if __name__ == "__main__":
     print_status()
 
+
+# =============================================================================
+# LLM Operator Functions (formerly src.capabilities.ai.llm)
+# Runtime provider management tools — used by TARA tools and compat shim.
+# =============================================================================
+
+def switch_llm_provider(provider: str) -> str:
+    """Switch the active AI model provider at runtime.
+
+    Allows changing between LLM providers (nvidia, openai, groq, ollama)
+    without restarting the application. All agents will use the new provider.
+
+    Args:
+        provider: The provider to switch to. Valid: 'nvidia', 'openai', 'groq', 'ollama'.
+
+    Returns:
+        Success message or error description.
+    """
+    import logging
+    _log = logging.getLogger("Models.LLMOps")
+    provider_clean = provider.lower().strip()
+    _log.info(f"Attempting to switch LLM provider to: {provider_clean}")
+    try:
+        mm = get_model_manager()
+        old = mm.get_active_provider()
+        mm.set_active_provider(provider_clean)
+        _log.info(f"Switched: {old} → {provider_clean}")
+        return f"✅ Switched active LLM provider from '{old}' to '{provider_clean}'."
+    except ValueError as e:
+        return f"❌ Cannot switch to '{provider_clean}': {e}"
+    except Exception as e:
+        return f"❌ Unexpected error: {e}"
+
+
+def get_current_provider() -> str:
+    """Get the name of the currently active LLM provider."""
+    try:
+        return f"🧠 Current provider: '{get_model_manager().get_active_provider()}'"
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def list_available_providers() -> str:
+    """List all available LLM providers."""
+    try:
+        mm = get_model_manager()
+        available = ", ".join(sorted(mm.factory.get_available_providers()))
+        current = mm.get_active_provider()
+        return f"📋 Available: {available}\n🧠 Using: '{current}'"
+    except Exception as e:
+        return f"❌ Error: {e}"

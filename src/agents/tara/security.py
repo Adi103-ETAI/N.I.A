@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from src.core.logger import setup_logger
-from src.core.events import get_event_bus
-from src.core.context import get_os_context
+from src.core.bus import get_event_bus
+from src.core.os import get_os_context
 
 try:
     from send2trash import send2trash

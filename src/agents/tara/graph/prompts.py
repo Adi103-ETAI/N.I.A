@@ -1,11 +1,16 @@
-"""
-TARA 2.0 Prompt Templates & Context Builder.
+"""TARA Prompt Templates & Dynamic Context Builder.
 
-Provides dynamic context injection for the TARA reasoning loop.
-The context builder formats runtime state into structured prompts.
+Provides the static ``TARA_SYSTEM_PROMPT`` base instruction set and the
+``build_tara_context()`` function that injects runtime state into the
+LLM system message on each reasoning iteration.
 
-Architecture:
-    Static Base Prompt + Dynamic Context = Full System Message
+Static prompt + Dynamic context = Full system message sent to the LLM::
+
+    TARA_SYSTEM_PROMPT
+        ↓
+    build_tara_context(state)  # appends XML: active_app, screen, goal…
+        ↓
+    Full system message → LLM reasoning node
 """
 from __future__ import annotations
 

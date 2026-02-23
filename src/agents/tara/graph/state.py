@@ -1,10 +1,11 @@
-"""
-TARA 2.0 State Definitions.
+"""TARA Graph State Definitions.
 
-Defines the TypedDict state schema for the TARA SubGraph.
-This state flows through all graph nodes and accumulates context.
+Defines the ``TaraState`` TypedDict and related schemas that flow through
+the TARA LangGraph reasoning loop.  Every node in the TARA SubGraph
+reads from and writes to this shared state.
 
-Architecture:
+State flow::
+
     NIA Master Graph → TaraState → TARA Nodes → Tool Results → Updated State
 """
 from __future__ import annotations
@@ -112,11 +113,34 @@ TaraNextStep = Literal["reasoner", "tool_executor", "context_updater", "__end__"
 
 
 # =============================================================================
+# Node Return Type
+# =============================================================================
+
+class TaraStateUpdate(TypedDict, total=False):
+    """TypedDict for partial state updates returned by TARA nodes.
+
+    All fields are optional (total=False) since each node returns only
+    the subset of state keys it modified.
+    """
+    messages: Sequence[Any]
+    user_goal: str
+    screen_context: Optional[str]
+    active_app: Optional[str]
+    clipboard: Optional[str]
+    last_error: Optional[str]
+    tool_calls_pending: bool
+    iteration_count: int
+    final_response: Optional[str]
+    metadata: Dict[str, Any]
+
+
+# =============================================================================
 # Exports
 # =============================================================================
 
 __all__ = [
     "TaraState",
+    "TaraStateUpdate",
     "TaraNextStep",
     "create_initial_tara_state",
     "BaseMessage",

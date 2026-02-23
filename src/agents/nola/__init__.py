@@ -2,12 +2,17 @@
 
 A modular voice I/O system for NIA using Edge TTS and Vosk STT.
 
-Package Structure:
+Package Structure::
+
     nola/
-    ├── __init__.py      # This file - public API exports & dependency check
-    ├── manager.py       # NOLAManager orchestrator with wake word state machine
-    ├── security.py      # Input sanitization & command filtering
-    └── io.py            # HybridTTS (Edge+Piper) & VoskSTT implementations
+    ├── __init__.py       # Public API exports + dependency check (this file)
+    ├── manager.py        # NOLAManager orchestrator with ASLEEP/AWAKE state machine
+    ├── security.py       # Input sanitization & command filtering
+    ├── io/
+    │   ├── __init__.py   # I/O package exports
+    │   ├── hearing.py    # VoskSTT offline speech-to-text
+    │   └── speech.py     # HybridTTS (Edge TTS primary + Piper fallback)
+    └── models/           # Model stubs reserved for future use
 
 Quick Start:
     from src.agents.nola import get_nola_manager

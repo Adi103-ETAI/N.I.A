@@ -1,0 +1,33 @@
+# =============================================================================
+# Layer 2: nia-sandbox-common:latest — The Agent Layer
+# =============================================================================
+# Runtimes (Python + Build Tools) + openai SDK for NVIDIA API calls
+#
+# Build: docker build -t nia-sandbox-common:latest -f docker/Dockerfile.sandbox-common .
+# Requires: nia-sandbox:latest (Layer 1) built first
+# =============================================================================
+FROM nia-sandbox:latest
+
+USER root
+
+# Install Runtimes (Python + Build Tools)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-venv \
+    build-essential \
+    ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages needed inside the sandbox
+# --break-system-packages required for Debian bookworm's managed-environment policy
+RUN pip3 install --break-system-packages \
+    openai \
+    requests
+
+# Revert to sandbox user
+USER sandbox
+WORKDIR /home/sandbox/project
+
+# Keep alive for Bridge (persistent session mode)
+CMD ["sleep", "infinity"]

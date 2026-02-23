@@ -366,25 +366,19 @@ def get_tools_by_category() -> Dict[str, List[str]]:
     """
     categories: Dict[str, List[str]] = {}
     
-    # Needs recursive implementation similar to get_tara_tools
-    # For now, simplistic implementation not fully recursive or just omitted
-    # But since it's used for listing, we should try to support it.
-    
-    # Simplification: We iterate over cached tools if available
     tools = get_tara_tools()
     for tool in tools:
-        # tool.func.__module__ gives e.g. "src.capabilities.system.files"
-        # We want "system.files"
-        if tool.func:
-            mod_name = tool.func.__module__.replace("src.capabilities.", "")
-            if mod_name not in categories:
-                categories[mod_name] = []
-            categories[mod_name].append(tool.name)
-        elif tool.coroutine:
-            mod_name = tool.coroutine.__module__.replace("src.capabilities.", "")
-            if mod_name not in categories:
-                categories[mod_name] = []
-            categories[mod_name].append(tool.name)
+        # StructuredTool has .func/.coroutine; BaseTool subclasses (SandboxedShell etc.) do not.
+        func = getattr(tool, "func", None) or getattr(tool, "coroutine", None)
+        if func:
+            mod_name = func.__module__.replace("src.capabilities.", "")
+        else:
+            # Fallback: use tool class module
+            mod_name = type(tool).__module__.replace("src.capabilities.", "")
+        
+        if mod_name not in categories:
+            categories[mod_name] = []
+        categories[mod_name].append(tool.name)
             
     return categories
 

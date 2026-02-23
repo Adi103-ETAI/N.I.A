@@ -4,34 +4,34 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from langchain_core.messages import HumanMessage, AIMessage
 from src.agents.nia.state import AgentState
 # Import strictly what we need to avoid side effects
-from src.agents.nia.agent import SupervisorAgent
-from src.agents.nia.graph.nodes import docker_node
+from src.agents.nia.decision.router import RoutingDecision
+from src.agents.nia.graph.nodes import docker_node, router_node
 
 @pytest.mark.asyncio
-async def test_supervisor_routing_docker():
-    """Verify Supervisor routes to DOCKER when Gatekeeper detects it."""
+async def test_router_routing_to_docker():
+    """Verify Router Node correctly routes to DOCKER."""
     
-    # Mock ModelManager to return our MagicMock LLM
-    with patch("src.models.manager.get_smart_model") as mock_get_model, \
-         patch("src.persona.profile.get_system_prompt", return_value="System Prompt"), \
-         patch("src.core.skills.loader.get_skills_prompt", return_value="Skills: coding-agent"):
+    # Mock DecisionCore inside router_node
+    with patch("src.agents.nia.decision.router.DecisionCore") as MockRouterClass:
+        mock_router_instance = MockRouterClass.return_value
         
-        mock_llm = MagicMock()
-        # Async invoke setup
-        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="ROUTE:DOCKER:coding-agent list files"))
-        mock_get_model.return_value = mock_llm
+        # Setup mock decision
+        mock_router_instance.aroute = AsyncMock(return_value=RoutingDecision(
+            target="swarm",
+            skill="coding-agent",
+            reasoning="User wants to code"
+        ))
         
-        agent = SupervisorAgent()
+        state = {"user_input": "Use coding agent to list files", "messages": [], "metadata": {}}
         
-        state = {"messages": [HumanMessage(content="Use coding agent to list files")]}
-        
-        # Execute
-        result = await agent.aprocess(state)
+        # Execute Router Node
+        result = await router_node(state)
         
         # Verify
         assert result["next"] == "docker"
         assert result["metadata"]["target_skill"] == "coding-agent"
-        assert result["metadata"]["skill_query"] == "list files"
+        assert result["metadata"]["skill_query"] == "Use coding agent to list files"
+
 
 
 @pytest.mark.asyncio

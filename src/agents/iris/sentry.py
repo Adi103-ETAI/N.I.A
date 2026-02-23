@@ -67,7 +67,8 @@ import json
 from pathlib import Path
 
 def _load_config() -> dict:
-    config_path = Path(__file__).resolve().parents[3] / "config" / "iris" / "sentry.json"
+    # Centralized config path: iris -> agents -> src -> core/config/defaults/iris
+    config_path = Path(__file__).resolve().parents[2] / "core" / "config" / "defaults" / "iris" / "sentry.json"
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)

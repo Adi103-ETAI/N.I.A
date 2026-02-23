@@ -31,12 +31,12 @@ Quick Start:
     response = process_input("Hello, who are you?")
     print(response)  # "Hello! I'm N.I.A., your Neural Intelligence Assistant..."
 
-Version: 2.5.2
+Version: 4.0.0
 
 LAZY LOADING:
-    This module uses Python's __getattr__ pattern to defer heavy imports
+    Uses Python's ``__getattr__`` pattern to defer heavy imports
     (LangGraph, LangChain, ModelManager, TARA tools) until first access.
-    This reduces boot time from ~80s to <5s.
+    This keeps boot time under 5 seconds.
 """
 from __future__ import annotations
 
@@ -156,7 +156,7 @@ def __getattr__(name: str):
     
     # --- SupervisorAgent ---
     if name == "SupervisorAgent":
-        from .agent import SupervisorAgent
+        from .persona.supervisor import SupervisorAgent
         _lazy_cache["SupervisorAgent"] = SupervisorAgent
         return SupervisorAgent
     
@@ -241,36 +241,3 @@ def print_status() -> None:
         if pkg_missing:
             logger.warning(f"     Install packages: uv add {' '.join(pkg_missing)}")
 
-
-# =============================================================================
-# Demo (Uses lazy-loaded process_input)
-# =============================================================================
-
-def demo():
-    """Run a quick demo of the NIA system (v3.1: Uses logger)."""
-    print_status()
-    
-    logger.info("NIA Demo - Type 'exit' to quit\n")
-    
-    while True:
-        try:
-            user_input = input("You: ").strip()
-            if not user_input:
-                continue
-            if user_input.lower() in ("exit", "quit"):
-                logger.info("Goodbye!")
-                break
-            
-            # This triggers lazy loading of the graph module
-            response = process_input(user_input)
-            logger.info(f"\nNIA: {response}\n")
-            
-        except KeyboardInterrupt:
-            logger.info("\nGoodbye!")
-            break
-        except Exception as exc:
-            logger.error(f"\nError: {exc}\n")
-
-
-if __name__ == "__main__":
-    demo()

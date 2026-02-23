@@ -1,31 +1,18 @@
 """
 MODULE: File System Operations (3-Tier Security Model)
-VERSION: 3.0.0
-STRICT SCOPE: Read, Write, List, Delete, Create Dir.
-CONSTRAINTS: Atomic actions only. Explicit guards on destructive operations.
+VERSION: 3.1.0
+ACTIVE SCOPE: Read, Search, Metadata.
 
 TARA 2.0 Atomic Tool Module.
 
-Verification Logic (Trust But Verify):
-    - All paths validated via `_validate_path()` before any operation.
-    - `must_exist=True` parameter enforces pre-existence checks.
-    - Path traversal attacks blocked (no `../` escapes).
-
-Safety Guards:
-    - delete_file(): Requires `confirm=True` parameter (safety lock).
-    - delete_file(): Blocks wildcard patterns (no `*` or `?` allowed).
-    - delete_file(): Uses send2trash when available (recoverable).
-    - write_file(): Prevents accidental overwrite unless `overwrite=True`.
+DEPRECATED (Sandbox Era): Tier-2 mutation tools (write_file, append_file,
+create_dir, move_file, copy_file, delete_file) were removed in v4.0.0.
+File mutations are now handled inside Docker sandboxes via the coding-agent
+skill, keeping the host filesystem untouched.
 
 Security Architecture:
-    TIER 1: Safe (Eyes) - list_dir, read_file, file_exists, write_file, append_file
-    TIER 2: Controlled Mutation (Hands) - create_dir, move_file, copy_file, delete_file
-    TIER 3: Metadata (Brain) - get_file_info, search_files
-
-Exports:
-    - list_dir, read_file, file_exists, write_file, append_file
-    - create_dir, move_file, copy_file, delete_file
-    - get_file_info, search_files
+    TIER 1: Safe (Eyes)   — list_dir, read_file, file_exists
+    TIER 3: Brain         — get_file_info, search_files
 """
 from __future__ import annotations
 
@@ -38,22 +25,10 @@ from pathlib import Path
 from typing import List, Optional
 
 from src.core.logger import setup_logger
-from src.core.context import get_os_context
+from src.core.os.platform import get_os_context
 from src.capabilities.decorators import security_level
 
 logger = setup_logger("TARA.Tools.FileOps")
-
-# =============================================================================
-# Optional Dependencies
-# =============================================================================
-
-try:
-    from send2trash import send2trash
-    _HAS_TRASH = True
-except ImportError:
-    _HAS_TRASH = False
-    logger.warning("send2trash not available - deletes will be permanent")
-
 
 # =============================================================================
 # Security Helpers
@@ -248,276 +223,6 @@ def file_exists(path: str) -> bool:
         return False
 
 
-def write_file(path: str, content: str, overwrite: bool = False) -> str:
-    """
-    Write content to a file.
-    
-    TIER 1: Controlled write with overwrite guard.
-    
-    Args:
-        path: Path to file.
-        content: Text content to write.
-        overwrite: If False, raises error if file exists.
-        
-    Returns:
-        Success message.
-        
-    Raises:
-        FileExistsError: If file exists and overwrite is False.
-    """
-    # 🔒 LAYER 4: Security Audit Log
-    try:
-        from src.core.registry import ServiceRegistry  # RIPPLE FIX
-        mem = ServiceRegistry.get("memory")
-        if mem:
-            mem.log_security_event("file_write", f"Writing to: {path}")
-    except Exception:
-        pass  # Fail safe, don't block the tool
-    
-    try:
-        p = _validate_path(path)
-        
-        # Safety guard: prevent accidental overwrite
-        if p.exists() and not overwrite:
-            raise FileExistsError(
-                f"File already exists: {path}. Set overwrite=True to replace."
-            )
-        
-        # Create parent directories if needed
-        p.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Write content
-        with open(p, "w", encoding="utf-8") as f:
-            f.write(content)
-        
-        logger.info(f"Wrote {len(content)} chars to {path}")
-        return f"✅ Wrote {len(content)} characters to {p.name}"
-        
-    except FileExistsError:
-        raise
-    except PermissionError:
-        return f"❌ Permission denied: {path}"
-    except Exception as e:
-        return f"❌ Error writing file: {e}"
-
-
-def append_file(path: str, content: str) -> str:
-    """
-    Append content to an existing file.
-    
-    TIER 1: Safe append (file must exist).
-    
-    Args:
-        path: Path to existing file.
-        content: Text content to append.
-        
-    Returns:
-        Success message.
-        
-    Raises:
-        FileNotFoundError: If file doesn't exist (no auto-create).
-    """
-    try:
-        p = _validate_path(path, must_exist=True)
-        
-        if not p.is_file():
-            return f"❌ Not a file: {path}"
-        
-        with open(p, "a", encoding="utf-8") as f:
-            f.write(content)
-        
-        logger.info(f"Appended {len(content)} chars to {path}")
-        return f"✅ Appended {len(content)} characters to {p.name}"
-        
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"File does not exist (append requires existing file): {path}"
-        )
-    except PermissionError:
-        return f"❌ Permission denied: {path}"
-    except Exception as e:
-        return f"❌ Error appending: {e}"
-
-
-# =============================================================================
-# TIER 2: Controlled Mutation (The Hands - Dangerous)
-# =============================================================================
-
-def create_dir(path: str) -> str:
-    """
-    Create a directory (and parent directories).
-    
-    TIER 2: Mutation operation.
-    
-    Args:
-        path: Path to directory to create.
-        
-    Returns:
-        Success message.
-    """
-    try:
-        p = _validate_path(path)
-        
-        if p.exists():
-            if p.is_dir():
-                return f"⚠️ Directory already exists: {path}"
-            else:
-                return f"❌ Path exists as file: {path}"
-        
-        p.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Created directory: {path}")
-        return f"📁 Created: {path}"
-        
-    except PermissionError:
-        return f"❌ Permission denied: {path}"
-    except Exception as e:
-        return f"❌ Error creating directory: {e}"
-
-
-@security_level("high_risk")
-def move_file(src: str, dst: str) -> str:
-    """
-    Move a file or directory.
-    
-    TIER 2: Mutation operation.
-    
-    Args:
-        src: Source path.
-        dst: Destination path (explicit, not just directory).
-        
-    Returns:
-        Success message.
-    """
-    # 🔒 LAYER 4: Security Audit Log
-    try:
-        from src.core.registry import ServiceRegistry  # RIPPLE FIX
-        mem = ServiceRegistry.get("memory")
-        if mem:
-            mem.log_security_event("file_move", f"Moving: {src} -> {dst}")
-    except Exception:
-        pass  # Fail safe, don't block the tool
-    
-    try:
-        src_p = _validate_path(src, must_exist=True)
-        dst_p = _validate_path(dst)
-        
-        # Ensure destination parent exists
-        dst_p.parent.mkdir(parents=True, exist_ok=True)
-        
-        shutil.move(str(src_p), str(dst_p))
-        logger.info(f"Moved: {src} -> {dst}")
-        return f"✅ Moved: {src_p.name} → {dst_p.name}"
-        
-    except FileNotFoundError as e:
-        return f"❌ {e}"
-    except PermissionError:
-        return f"❌ Permission denied"
-    except Exception as e:
-        return f"❌ Error moving: {e}"
-
-
-def copy_file(src: str, dst: str) -> str:
-    """
-    Copy a file (preserves metadata).
-    
-    TIER 2: Mutation operation.
-    
-    Args:
-        src: Source file path.
-        dst: Destination file path.
-        
-    Returns:
-        Success message.
-    """
-    try:
-        src_p = _validate_path(src, must_exist=True)
-        dst_p = _validate_path(dst)
-        
-        if not src_p.is_file():
-            return f"❌ Source is not a file: {src}"
-        
-        # Ensure destination parent exists
-        dst_p.parent.mkdir(parents=True, exist_ok=True)
-        
-        shutil.copy2(str(src_p), str(dst_p))
-        logger.info(f"Copied: {src} -> {dst}")
-        return f"✅ Copied: {src_p.name} → {dst_p.name}"
-        
-    except FileNotFoundError as e:
-        return f"❌ {e}"
-    except PermissionError:
-        return f"❌ Permission denied"
-    except Exception as e:
-        return f"❌ Error copying: {e}"
-
-
-@security_level("high_risk")
-def delete_file(path: str, confirm: bool = False) -> str:
-    """
-    Delete a file or directory.
-    
-    TIER 2: DANGEROUS mutation operation with safety lock.
-    
-    Args:
-        path: Path to delete.
-        confirm: MUST be True to proceed (safety lock).
-        
-    Returns:
-        Success message.
-        
-    Raises:
-        ValueError: If confirm is False (safety lock).
-    """
-    # CRITICAL: Safety lock
-    if not confirm:
-        raise ValueError(
-            "Safety Lock: confirm=True required to delete. "
-            "Call with delete_file(path, confirm=True)"
-        )
-    
-    # CRITICAL: Block wildcards
-    if _has_wildcards(path):
-        raise ValueError(
-            "Security Error: Wildcards (*?) not allowed in delete path"
-        )
-    
-    # 🔒 LAYER 4: Security Audit Log
-    try:
-        from src.core.registry import ServiceRegistry  # RIPPLE FIX
-        mem = ServiceRegistry.get("memory")
-        if mem:
-            mem.log_security_event("file_delete", f"Deleting: {path}")
-    except Exception:
-        pass  # Fail safe, don't block the tool
-    
-    try:
-        p = _validate_path(path, must_exist=True)
-        
-        if _HAS_TRASH:
-            # Safe delete: move to trash
-            send2trash(str(p))
-            logger.info(f"Moved to trash: {path}")
-            return f"🗑️ Moved to Trash: {p.name}"
-        else:
-            # Permanent delete (no recycle bin)
-            if p.is_file():
-                os.remove(p)
-            elif p.is_dir():
-                shutil.rmtree(p)
-            else:
-                return f"❌ Unknown file type: {path}"
-            
-            logger.warning(f"PERMANENTLY deleted: {path}")
-            return f"⚠️ Permanently Deleted: {p.name} (no recycle bin)"
-        
-    except FileNotFoundError as e:
-        return f"❌ {e}"
-    except PermissionError:
-        return f"❌ Permission denied: {path}"
-    except Exception as e:
-        return f"❌ Error deleting: {e}"
-
-
 # =============================================================================
 # TIER 3: Metadata & Verification (The Brain)
 # =============================================================================
@@ -628,18 +333,11 @@ def search_files(
 
 
 __all__ = [
-    # Tier 1: Safe
+    # Tier 1: Safe (Active)
     "list_dir",
     "read_file",
     "file_exists",
-    # Tier 2: Controlled Mutation (DEPRECATED for Sandbox)
-    # "write_file", 
-    # "append_file",
-    # "create_dir",
-    # "move_file",
-    # "copy_file",
-    # "delete_file",
-    # Tier 3: Metadata
+    # Tier 3: Metadata (Active)
     "get_file_info",
     "search_files",
 ]

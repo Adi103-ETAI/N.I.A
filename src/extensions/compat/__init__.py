@@ -33,10 +33,10 @@ IMPORT_ALIASES = {
     'tara.tools.web.browser_ops': 'src.capabilities.web.browser',
     
     # Memory tools
-    'tara.tools.memory.preferences': 'src.capabilities.memory.preferences',
+    'tara.tools.memory.preferences': 'src.core.memory',
     
     # AI tools
-    'tara.tools.ai.llm_ops': 'src.capabilities.ai.llm',
+    'tara.tools.ai.llm_ops': 'src.models.manager',
     
     # Core imports
     'core.logger': 'src.core.logger',

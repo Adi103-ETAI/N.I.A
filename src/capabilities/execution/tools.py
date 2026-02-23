@@ -1,7 +1,21 @@
-"""
-TARA 2.0 Execution Tools.
+"""Sandboxed Shell Tool — Docker-Backed Code Execution.
 
-Phase 2: Sandboxed Execution via Docker.
+Provides the ``SandboxedShell`` LangChain tool that routes bash command
+execution through the ``DockerEngine``.  TARA uses this as its primary
+execution mechanism for file operations, git commands, and code runs —
+keeping all such work inside a containerised Linux environment and off
+the host filesystem.
+
+Tools:
+    SandboxedShell  — Execute bash in a persistent ``/workspace`` Linux container
+
+Usage via TARA::
+
+    # TARA calls this automatically when the user asks to run code or write files.
+    result = sandboxed_shell.invoke({
+        "command": "echo 'hello' > hello.txt && cat hello.txt",
+        "session_id": "abc-123",
+    })
 """
 import shlex
 import logging
@@ -29,11 +43,10 @@ class SandboxedShell(BaseTool):
     description: str = "Execute bash commands in a secure Linux sandbox. Use this for ALL file operations, git commands, and code execution. Input should be a valid bash script."
     args_schema: Type[BaseModel] = SandboxedShellInput
     
-    # Metadata for TARA 2.0
-    metadata: Optional[dict] = {
-        "security_level": "sandboxed", # Pre-approved by Warden
-        "type": "execution"
-    }
+    # Metadata for TARA 2.0 — use Field(default_factory) to avoid Pydantic v2 mutable default error
+    metadata: Optional[dict] = Field(
+        default_factory=lambda: {"security_level": "sandboxed", "type": "execution"}
+    )
 
     def _run(self, command: str, session_id: str = "default", timeout: int = 60, background: bool = False) -> str:
         """Execute the command in the sandbox."""

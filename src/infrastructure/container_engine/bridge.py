@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -240,6 +241,9 @@ class DockerBridge:
                 if manifest.workdir == "/workspace":
                     manifest.workdir = "/workspace/project"
 
+            # --- Build environment (inject API keys) ---
+            env = self._build_environment()
+
             # --- Execute (PTY or standard) ---
             logger.info(
                 f"🚀 Executing mission {manifest.task_id} "
@@ -248,12 +252,13 @@ class DockerBridge:
             )
 
             if manifest.pty:
-                # Interactive CLI mode (Codex, Aider, etc.)
+                # Interactive CLI mode (Pi-Mono, Aider, etc.)
                 exit_code, stdout, stderr = self.engine.run_command_pty(
                     image=runtime.image,
                     command=command,
                     session_id=manifest.task_id,
                     mounts=mounts,
+                    environment=env,
                     workdir=manifest.workdir,
                     timeout=manifest.timeout_seconds,
                 )
@@ -264,6 +269,7 @@ class DockerBridge:
                     command=command,
                     session_id=manifest.task_id,
                     mounts=mounts,
+                    environment=env,
                 )
 
             logger.info(
@@ -361,12 +367,58 @@ class DockerBridge:
             install_step = f"{runtime.install_cmd} {deps} && "
 
         if manifest.runtime in (RuntimeType.PYTHON, RuntimeType.CUSTOM):
-            return f"bash -c '{install_step}python /workspace/_entrypoint.py'"
+            return f"bash -c '{install_step}{runtime.entrypoint} /workspace/_entrypoint.py'"
         elif manifest.runtime in (RuntimeType.NODE, RuntimeType.PLAYWRIGHT):
-            return f"bash -c '{install_step}node /workspace/_entrypoint.js'"
+            return f"bash -c '{install_step}{runtime.entrypoint} /workspace/_entrypoint.js'"
         else:
             # Bash: direct execution
             return f"bash -c '{install_step}sh /workspace/soldier_code.sh'"
+
+    def _build_environment(self) -> dict[str, str]:
+        """Inject LLM API keys from host into container environment.
+        
+        Reads from both pydantic settings (.env) and os.environ to ensure
+        keys are captured regardless of how they were loaded.
+        """
+        env = {}
+        
+        # Primary source: pydantic settings (loads from .env)
+        try:
+            from src.core.config import get_settings
+            settings = get_settings()
+            
+            # NVIDIA_API_KEY (SecretStr)
+            try:
+                nvidia_key = settings.NVIDIA_API_KEY.get_secret_value()
+                if nvidia_key and not nvidia_key.startswith("nvapi-xxx"):
+                    env["NVIDIA_API_KEY"] = nvidia_key
+            except Exception:
+                pass
+            
+            # OPENAI_API_KEY (SecretStr)
+            try:
+                openai_key = settings.OPENAI_API_KEY.get_secret_value()
+                if openai_key and openai_key != "sk-xxx":
+                    env["OPENAI_API_KEY"] = openai_key
+            except Exception:
+                pass
+                
+        except Exception:
+            pass
+        
+        # Fallback: os.environ (for keys not in settings)
+        for key in [
+            "NVIDIA_API_KEY",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "GROQ_API_KEY",
+        ]:
+            if key not in env:
+                val = os.environ.get(key)
+                if val:
+                    env[key] = val
+        
+        return env
 
     # =========================================================================
     # Helpers

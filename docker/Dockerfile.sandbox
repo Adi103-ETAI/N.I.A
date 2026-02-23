@@ -1,0 +1,31 @@
+# =============================================================================
+# Layer 1: nia-sandbox:latest — The Foundation
+# =============================================================================
+# Base OS + Shell + Window/GUI Automation Tools
+# This is the minimal secure sandbox that all other layers build upon.
+#
+# Build: docker build -t nia-sandbox:latest -f docker/Dockerfile.sandbox .
+# =============================================================================
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Core OS & Window/GUI Automation Tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    curl \
+    wget \
+    git \
+    jq \
+    nano \
+    procps \
+    xdotool \
+    wmctrl \
+    libx11-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Secure User (uid 1000 — standard non-root sandbox user)
+RUN useradd --create-home --shell /bin/bash sandbox
+USER sandbox
+WORKDIR /home/sandbox

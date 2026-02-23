@@ -1,132 +1,196 @@
-"""Universal Bash Wrapper for Coding Agent.
+"""Coding Agent — Direct LLM code generation + execution.
 
-This script acts as the driver for the coding-agent skill.
-It handles:
-1. Reading the mission objective/command from mission.json.
-2. Checking PTY requirements.
-3. Spawning the appropriate shell process (interactive vs non-interactive).
-4. Capturing output and writing result.json.
+Strategy:
+    1. Read the objective from mission.json
+    2. Call NVIDIA's API (OpenAI-compatible) to generate Python code
+    3. Execute the generated code inside the container
+    4. Write result.json (or update the global 'result' dict for the entrypoint)
+
+This avoids Pi-Mono CLI dependency entirely and directly uses the openai SDK
+which is pip-installable and works reliably with NVIDIA's endpoint.
 """
 import json
 import os
-import sys
 import subprocess
-import pty
-import select
+import sys
+import tempfile
 from pathlib import Path
 
-def main():
-    # 1. Read Mission
+
+# Absolute paths — the bridge sets workdir=/workspace/project when host_workdir is mounted,
+# but mission.json and result.json always live at /workspace/ (the mount root).
+WORKSPACE = Path("/workspace")
+
+
+def _get_llm_code(objective: str, api_key: str) -> str:
+    """Ask NVIDIA LLM to generate Python code for the given objective."""
     try:
-        mission_path = Path("mission.json")
+        from openai import OpenAI
+    except ImportError:
+        subprocess.run([sys.executable, "-m", "pip", "install", "openai", "--break-system-packages", "-q"], check=True)
+        from openai import OpenAI
+
+    client = OpenAI(
+        api_key=api_key,
+        base_url="https://integrate.api.nvidia.com/v1",
+    )
+
+    system_prompt = (
+        "You are a Python coding assistant running inside a non-interactive Docker container. "
+        "Respond ONLY with a complete, runnable Python script — no markdown fences, no explanation. "
+        "The script must print its output to stdout. "
+        "IMPORTANT: NEVER use input(), sys.stdin, or any interactive prompts — there is no terminal. "
+        "If the task says 'accept input from user' or 'read from user', use hardcoded example values instead "
+        "and add a comment showing where the user would provide input."
+    )
+
+    response = client.chat.completions.create(
+        model="meta/llama-3.1-70b-instruct",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": objective},
+        ],
+        temperature=0.1,
+        max_tokens=2048,
+    )
+
+    code = response.choices[0].message.content.strip()
+
+    # Strip markdown fences if the model ignores instructions
+    if code.startswith("```"):
+        lines = code.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        code = "\n".join(lines).strip()
+
+    return code
+
+
+def main(mission: dict = None):
+    """Main entry point for the coding agent soldier.
+    
+    Args:
+        mission: Pre-loaded mission dict (when called from _entrypoint.py exec()).
+                 If None, reads from /workspace/mission.json.
+    """
+
+    # -----------------------------------------------------------------------
+    # 1. Read Mission
+    # -----------------------------------------------------------------------
+    if mission is None:
+        mission_path = WORKSPACE / "mission.json"
         if not mission_path.exists():
-            print("❌ mission.json not found")
+            print(f"❌ mission.json not found at {mission_path}")
             sys.exit(1)
-            
         mission = json.loads(mission_path.read_text(encoding="utf-8"))
-        command = mission.get("objective", "").strip() or mission.get("command", "").strip()
-        
-        # Fallback for raw command injection if 'code' was used to pass arguments
-        # In this skill, 'code' isn't Python code to run, but might be CLI args
-        # But per skill design, 'objective' usually holds the prompt "Write a flask app"
-        # We need to construct the actual CLI command here if it wasn't passed fully.
-        # For now, assume 'objective' IS the command or prompt for the default agent.
-        
-        # If the binary is 'codex', we might wrap the objective: codex "objective"
-        # But to be 'Universal', we expect the General to pass the full command string
-        # OR we default to a specific binary.
-        # Let's assume the manifest 'objective' is the Prompt, and we default to 'codex'
-        # unless 'command' is explicitly set in logic I don't see yet.
-        # Actually, let's treat the 'objective' as the argument to the agent.
-        
-        # Check if we have a specific binary command
-        binary = "codex" # Default
-        full_command = f"{binary} {json.dumps(command)}" # Quote the prompt
-        
-    except Exception as e:
-        print(f"❌ Failed to parse mission: {e}")
+
+    objective = (
+        mission.get("objective", "").strip()
+        or mission.get("user_query", "").strip()
+        or mission.get("command", "").strip()
+    )
+
+    # Strip [MEMORY CONTEXT] prefix if injected by graph
+    if "[MEMORY CONTEXT]" in objective:
+        # Extract the actual user query from the context block
+        parts = objective.split("- User Input:")
+        if len(parts) > 1:
+            objective = parts[-1].split("\n")[0].strip().strip('"').strip("'")
+        else:
+            # fallback: take first line that isn't context metadata
+            lines = [l.strip() for l in objective.split("\n") if l.strip() and not l.startswith("-") and "MEMORY" not in l]
+            objective = lines[0] if lines else objective
+
+    if not objective:
+        print("❌ No objective found in mission.json")
         sys.exit(1)
 
-    print(f"🚀 Launching Coding Agent: {full_command}")
-    
-    # 2. Check PTY Requirement via Environment or Manifest inference
-    # (The Bridge sets PTY at Docker level, so we are ALREADY in a PTY if requested)
-    # However, Python subprocess doesn't automatically attach to it unless we use pty.spawn
-    # or just subprocess.run if the parent is already a PTY? 
-    # Actually, DockerBridge.run_command_pty attaches the container's TTY to the socket.
-    # We are running INSIDE the container. 
-    # If we are inside, `sys.stdout.isatty()` should be True if Bridge did its job.
-    
-    is_interactive = sys.stdout.isatty()
-    output_text = ""
-    exit_code = 0
-    
-    # 3. Execution
-    if is_interactive:
-        print("💻 PTY Detected - Spawning interactive shell...")
-        
-        # pty.spawn fits perfectly for interactive CLIs that need a TTY
-        # It forks, runs the command, and connects parent FD to child TTY
-        # But capturing output from pty.spawn is tricky as it writes to stdout directly.
-        # We need to read from the master fd if we want to capture it for result.json.
-        
-        # Simple approach: Use subprocess with standard streams, relying on caller (Docker) TTY
-        # For 'codex', it might need a real TTY.
-        # Let's use a simpler robust method: subprocess.run, but we force a TTY allocation if needed?
-        # If sys.stdout is already a TTY, subprocess.run inherits it by default usually.
-        
-        try:
-            # We want to capture output AND stream it.
-            process = subprocess.Popen(
-                ["/bin/bash", "-c", full_command],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, # Merge stderr
-                stdin=sys.stdin, # Pass stdin transparently
-                text=True,
-                bufsize=1 # Line buffered
-            )
-            
-            captured_lines = []
-            while True:
-                line = process.stdout.readline()
-                if not line and process.poll() is not None:
-                    break
-                if line:
-                    sys.stdout.write(line) # Stream to Docker logs
-                    sys.stdout.flush()
-                    captured_lines.append(line)
-            
-            exit_code = process.poll()
-            output_text = "".join(captured_lines)
-            
-        except Exception as e:
-            output_text = f"Execution Error: {e}"
-            exit_code = 1
-            
-    else:
-        print("⚠️ No PTY Detected - Running in non-interactive mode")
-        result = subprocess.run(
-            ["/bin/bash", "-c", full_command],
-            capture_output=True,
-            text=True
-        )
-        output_text = result.stdout + "\n" + result.stderr
-        exit_code = result.returncode
+    print(f"🎯 Objective: {objective}")
 
-    # 4. Write Result
+    # -----------------------------------------------------------------------
+    # 2. Get API Key
+    # -----------------------------------------------------------------------
+    api_key = (
+        os.environ.get("NVIDIA_API_KEY", "")
+        or os.environ.get("OPENAI_API_KEY", "")
+    )
+    if not api_key:
+        print("❌ No API key found — set NVIDIA_API_KEY in environment")
+        sys.exit(1)
+
+    # -----------------------------------------------------------------------
+    # 3. Generate Code via LLM
+    # -----------------------------------------------------------------------
+    print("🤖 Asking LLM to generate code...")
+    try:
+        generated_code = _get_llm_code(objective, api_key)
+    except Exception as e:
+        print(f"❌ LLM call failed: {e}")
+        sys.exit(1)
+
+    print(f"\n📝 Generated Code:\n{'='*40}")
+    print(generated_code)
+    print('='*40)
+
+    # -----------------------------------------------------------------------
+    # 4. Execute the Generated Code
+    # -----------------------------------------------------------------------
+    print("\n🚀 Executing code...")
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", delete=False, encoding="utf-8"
+    ) as tmp:
+        tmp.write(generated_code)
+        tmp_path = tmp.name
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        stdout = proc.stdout.strip()
+        stderr = proc.stderr.strip()
+        exit_code = proc.returncode
+
+        if stdout:
+            print(f"\n✅ Output:\n{stdout}")
+        if stderr:
+            print(f"\n⚠️ Stderr:\n{stderr}")
+
+    except subprocess.TimeoutExpired:
+        stdout = ""
+        stderr = "Execution timed out (60s)"
+        exit_code = 1
+        print(f"❌ {stderr}")
+    except Exception as e:
+        stdout = ""
+        stderr = str(e)
+        exit_code = 1
+        print(f"❌ Execution error: {e}")
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    # -----------------------------------------------------------------------
+    # 5. Write result (for standalone run) & update globals for entrypoint
+    # -----------------------------------------------------------------------
+    combined_output = f"Generated Code:\n{generated_code}\n\nOutput:\n{stdout}"
+    if stderr:
+        combined_output += f"\n\nStderr:\n{stderr}"
+
     result_data = {
         "status": "success" if exit_code == 0 else "error",
         "exit_code": exit_code,
-        "output": output_text,
-        "artifacts": [] # TODO: Scan workspace for new files?
+        "output": combined_output,
+        "artifacts": [],
+        "generated_code": generated_code,
     }
-    
-    # Write for standalone usage
-    Path("result.json").write_text(json.dumps(result_data, indent=2), encoding="utf-8")
+
     print(f"\n🏁 Finished with exit code {exit_code}")
-    
     return result_data
 
+
 if __name__ == "__main__":
-    # Assign to global 'result' so DockerBridge's _entrypoint.py picks it up
-    result = main()
+    # When called via exec() from _entrypoint.py, the `mission` dict is injected
+    # into globals. Pass it to main() so it doesn't try to re-read mission.json.
+    _injected_mission = globals().get("mission", None)
+    result = main(mission=_injected_mission)

@@ -26,15 +26,15 @@ from src.agents.nia.state import (
     create_initial_state,
     extract_response,
 )
-from src.agents.nia.agent import SupervisorAgent
+from src.agents.nia.persona.supervisor import SupervisorAgent
 from .nodes import (
     supervisor_node,
     iris_node,
-    general_assistant,   # Chat/non-automation node
     call_tara_2,         # TARA 2.0 automation node
     docker_node,         # Phase 2: Docker Execution
     route_from_tara,
-    route_from_supervisor,
+    router_node,         # Phase 3: AI Router
+    route_from_router,   # Phase 3: Routing Logic
 )
 
 # TARA 2.0 is now the only TARA - no legacy fallback needed
@@ -90,13 +90,13 @@ DEFAULT_STATE_DB = Path("data/state.db")
 class NIAGraph:
     """LangGraph-based state machine for NIA supervisor architecture.
     
-    The graph structure:
+    Phase 3 Graph Structure:
     ```
-    [START] → [supervisor] → routing decision
-                                ├── direct response → [END]
-                                ├── IRIS → [iris] → [END]
-                                └── TARA → [tara] → [END] or [supervisor]
-                                └── DOCKER → [docker] → [END]
+    [START] → [router] → routing decision
+                            ├── chat    → [supervisor] → [END]
+                            ├── swarm   → [docker]     → [END]
+                            ├── system  → [tara]       → [END] or [supervisor]
+                            └── iris    → [iris]       → [END]
     ```
     
     Persistence:
@@ -128,7 +128,7 @@ class NIAGraph:
         self.enable_persistence = enable_persistence and _HAS_ASYNC_CHECKPOINTER
         
         try:
-            from src.core.registry import ServiceRegistry
+            from src.core.di import ServiceRegistry
             self.memory = ServiceRegistry.get("memory")
             if self.memory is None:
                 # Fallback: create and register if engine hasn't done it yet
@@ -190,7 +190,12 @@ class NIAGraph:
         async def run_iris(state):
             return await iris_node(state, self.iris)
 
+        async def run_router(state):
+             # Router is stateless in terms of class instance, but needs async
+             return await router_node(state)
+
         # Add nodes with async wrappers
+        graph.add_node("router", run_router)
         graph.add_node(AGENT_SUPERVISOR, run_supervisor)
         graph.add_node(AGENT_IRIS, run_iris)
         
@@ -202,30 +207,32 @@ class NIAGraph:
         graph.add_node(AGENT_DOCKER, docker_node)
         logger.info("🐳 Docker Node registered")
         
-        # General Assistant Node (for chat responses)
-        graph.add_node("general", general_assistant)
-        logger.info("💬 General Assistant node registered")
         
         # Set entry point
-        graph.set_entry_point(AGENT_SUPERVISOR)
+        graph.set_entry_point("router")
         
-        # Add conditional edges from supervisor
-        # Routes to: TARA (automation), IRIS (vision), general (chat), or END
+        # Add conditional edges from ROUTER
         graph.add_conditional_edges(
-            AGENT_SUPERVISOR,
-            route_from_supervisor,
+            "router",
+            route_from_router,
             {
+                AGENT_SUPERVISOR: AGENT_SUPERVISOR, # Chat
                 AGENT_IRIS: AGENT_IRIS,
                 AGENT_TARA: AGENT_TARA,
-                "general": "general",
-                AGENT_DOCKER: AGENT_DOCKER, # Phase 2
-                AGENT_END: END,
+                AGENT_DOCKER: AGENT_DOCKER,
+                "tara": AGENT_TARA,         # Alias
+                "docker": AGENT_DOCKER,     # Alias
+                "iris": AGENT_IRIS,         # Alias
+                "supervisor": AGENT_SUPERVISOR, # Alias
             }
         )
         
+        # Supervisor now just chats and ends (or could loop, but let's keep it simple for now)
+        graph.add_edge(AGENT_SUPERVISOR, END)
+        
         # Terminal edges: All specialists return to END
         graph.add_edge(AGENT_IRIS, END)
-        graph.add_edge("general", END)
+        # graph.add_edge("general", END) # General is now handled by Supervisor
         graph.add_edge(AGENT_DOCKER, END)
         
         # Add conditional edges from TARA (allows looping back for Active Listening)
@@ -423,7 +430,7 @@ def get_graph(
     Returns:
         NIAGraph instance.
     """
-    from src.core.registry import ServiceRegistry
+    from src.core.di import ServiceRegistry
     
     graph = ServiceRegistry.get("graph")
     

@@ -11,7 +11,7 @@ Dynamic Provider Access:
     without restarting. All calls are wrapped with SafeLLM circuit breaker.
 
 Data Flow:
-    Supervisor -> ROUTE:IRIS -> IrisAgent.process()
+    Decision Core -> iris_node -> IrisAgent.process()
                                     |
                                     v
                              Screen/Webcam Capture
@@ -78,8 +78,8 @@ def _load_iris_config() -> dict:
     Returns:
         Dictionary with intent keywords and vision prompt.
     """
-    # Centralized config path: iris -> ROOT (1 level up via .parents[1])
-    config_dir = Path(__file__).resolve().parents[3] / "config" / "iris"
+    # Centralized config path: iris -> agents -> src -> core/config/defaults/iris
+    config_dir = Path(__file__).resolve().parents[2] / "core" / "config" / "defaults" / "iris"
     config = {}
     
     vision_config_path = config_dir / "triggers.json"

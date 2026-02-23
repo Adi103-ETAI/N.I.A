@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from src.core.logger import setup_logger
-from src.core.context import get_os_context
+from src.core.os import get_os_context
 
 logger = setup_logger("SkillLoader")
 
@@ -329,10 +329,11 @@ def get_skill_source_code(name: str, skills_dir: Optional[Path] = None) -> Optio
     """Read the raw source code for a Docker-executable skill.
     
     Searches both library/ (permanent) and data/skills/ (learned).
-    An explicit skills_dir overrides the dual-search.
+    Matches by the 'name' field in skill.md, NOT the directory name,
+    to handle mismatches like coding-agent (name) vs coding_agent (dir).
     
     Args:
-        name: Skill folder name.
+        name: Skill name (as defined in skill.md frontmatter).
         skills_dir: Override directory.
         
     Returns:
@@ -344,19 +345,38 @@ def get_skill_source_code(name: str, skills_dir: Optional[Path] = None) -> Optio
         search_dirs = _all_skill_dirs()
     
     for base in search_dirs:
-        skill_dir = base / name
-        if not skill_dir.is_dir():
+        if not base.exists():
             continue
         
-        source_file = _detect_source_file(skill_dir)
-        if source_file is None:
-            continue
-        
-        try:
-            return source_file.read_text(encoding="utf-8")
-        except Exception as e:
-            logger.error(f"Failed to read skill source {source_file}: {e}")
-            continue
+        for item in base.iterdir():
+            if not item.is_dir():
+                continue
+            
+            # Check skill.md for the canonical name
+            skill_file = item / "skill.md"
+            if skill_file.exists():
+                try:
+                    content = skill_file.read_text(encoding="utf-8")
+                    meta, _ = _parse_frontmatter(content)
+                    skill_name = meta.get("name", item.name)
+                except Exception:
+                    skill_name = item.name
+            else:
+                skill_name = item.name
+            
+            if skill_name != name:
+                continue
+            
+            # Found matching skill — read source
+            source_file = _detect_source_file(item)
+            if source_file is None:
+                continue
+            
+            try:
+                return source_file.read_text(encoding="utf-8")
+            except Exception as e:
+                logger.error(f"Failed to read skill source {source_file}: {e}")
+                continue
     
     return None
 

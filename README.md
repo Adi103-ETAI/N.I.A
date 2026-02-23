@@ -61,27 +61,22 @@ N.I.A/
 │   │   ├── nia/                     # Supervisor agent
 │   │   ├── tara/                    # Tool execution agent
 │   │   ├── iris/                    # Vision agent
-│   │   └── nola/                    # Voice agent
+│   │   ├── nola/                    # Voice agent
+│   │   └── soldiers/                # Swarm nodes (code, browser, cmd)
 │   ├── capabilities/                # Unified tool system
 │   │   ├── desktop/                 # Apps, windows, input, screen
 │   │   ├── system/                  # Files, clipboard, stats
 │   │   ├── web/                     # Browser automation
-│   │   ├── memory/                  # User preferences
-│   │   ├── vision/                  # Image analysis
-│   │   └── ai/                      # LLM operations
+│   │   └── execution/               # Lifecycle and environment
+│   ├── infrastructure/              # Core systems
+│   │   ├── container_engine/        # Docker sandbox
+│   │   └── host_os/                 # AppIndex and OS adapters
 │   ├── models/                      # LLM management
 │   ├── persona/                     # Identity & personality
 │   ├── interface/                   # CLI, API, GUI
 │   └── extensions/                  # Extension system
 │       └── compat/                  # v3.1.0 compatibility layer
 │
-├── 📁 config/                       # Centralized YAML configs
-│   ├── base/                        # Pydantic settings models
-│   ├── agents/                      # Agent configs (nia.yaml, tara.yaml, etc.)
-│   ├── capabilities/                # Capability configs
-│   └── models.yaml                  # LLM provider configs
-│
-├── 📁 extensions/                   # User extensions (hot-loadable)
 ├── 📁 data/                         # Runtime data (memory, cache, logs)
 ├── 📁 tests/                        # Mirrors src/ structure
 │   ├── unit/
@@ -103,32 +98,26 @@ N.I.A/
               │  (Fuzzy Command Matching)   │
               └──────────────┬──────────────┘
                              │
-     ┌───────────────────────▼───────────────────────┐
-     │              🧠 SUPERVISOR (NIA)              │
-     │  ┌─────────────────────────────────────────┐  │
-     │  │   ServiceRegistry (Dependency Injection) │  │
-     │  │   + RoutingGatekeeper Validation         │  │
-     │  │   + Identity Injection System            │  │
-     │  └───────────────────┬─────────────────────┘  │
-     │                      │                        │
-     │  ┌───────────────────▼─────────────────────┐  │
-     │  │   ⚡ CIRCUIT BREAKER (SafeLLM)          │  │
-     │  │   └─> Retry Logic (Exponential)         │  │
-     │  │   └─> Auto-Fallback on 429/503          │  │
-     │  └───────────────────┬─────────────────────┘  │
-     │                      │                        │
-     │  ┌───────────────────▼─────────────────────┐  │
-     │  │          AGENT ROUTING                  │  │
-     │  │ ╔════════╗  ╔════════╗  ╔═══════════╗   │  │
-     │  │ ║  TARA  ║  ║  IRIS  ║  ║   CHAT    ║   │  │
-     │  │ ║(Tools) ║  ║(Vision)║  ║ (General) ║   │  │
-     │  │ ╚════════╝  ╚════════╝  ╚═══════════╝   │  │
-     │  │      │                                  │  │
-     │  │ ┌────▼────────────────────────────┐     │  │
-     │  │ │   🧩 CAPABILITIES (Unified)     │     │  │
-     │  │ │  desktop • system • web • ai    │     │  │
-     │  │ └─────────────────────────────────┘     │  │
-     └───────────────────────────────────────────────┘
+     ┌───────────────────────▼─────────────────────────┐
+     │              🧠 SUPERVISOR (NIA)               │
+     │  ┌───────────────────────────────────────────┐  │
+     │  │   ServiceRegistry (Dependency Injection)  │  │
+     │  │   + Identity Injection System             │  │
+     │  └───────────────────┬───────────────────────┘  │
+     │                      │                          │
+     │  ┌───────────────────▼───────────────────────┐  │
+     │  │              AGENT ROUTING                │  │
+     │  │   ╔════════╗  ╔════════╗  ╔═══════════╗   │  │
+     │  │   ║  TARA  ║  ║  IRIS  ║  ║  SWARM    ║   │  │
+     │  │   ║(Tools) ║  ║(Vision)║  ║(Soldiers) ║   │  │
+     │  │   ╚════════╝  ╚════════╝  ╚═══════════╝   │  │
+     │  │        │                                  │  │
+     │  │   ┌────▼──────────────────────────────┐   │  │
+     │  │   │   🧩 CAPABILITIES (Unified)       │   │  │
+     │  │   │  desktop • system • web • ai      │   │  │
+     │  │   └───────────────────────────────────┘   │  │  
+     │  └───────────────────────────────────────────┘  │
+     └─────────────────────────────────────────────────┘
 ```
 
 ---
@@ -140,7 +129,7 @@ Configuration has been migrated from scattered JSON files to unified YAML:
 ### Agent Configuration
 
 ```yaml
-# config/agents/nia.yaml
+# src/core/config/defaults/agents/nia.yaml
 name: NIA
 version: 4.0.0
 debug_mode: false
@@ -148,10 +137,6 @@ log_level: INFO
 
 routing_mode: hybrid
 confidence_threshold: 0.7
-
-gatekeeper:
-  enabled: true
-  fallback_agent: chat
 
 memory:
   enabled: true
@@ -161,7 +146,7 @@ memory:
 ### Model Configuration
 
 ```yaml
-# config/models.yaml
+# src/core/config/defaults/models.yaml
 default_provider: nvidia
 
 providers:
@@ -194,9 +179,7 @@ The v4.0.0 capabilities system unifies tools and skills:
 | **Desktop** | `launch_app`, `kill_app`, `focus_window`, `minimize_window`, `maximize_window`, `snap_window`, `close_window`, `mouse_click`, `keyboard_type`, `keyboard_hotkey`, `take_screenshot` |
 | **System** | `list_dir`, `read_file`, `write_file`, `delete_file`, `move_file`, `copy_file`, `search_files`, `system_stats`, `battery_status` |
 | **Web** | `browser_open_url`, `browser_click`, `browser_type`, `browser_scroll`, `browser_screenshot`, `browser_close` |
-| **Memory** | `save_user_preference`, `get_user_preference`, `list_user_preferences` |
-| **Vision** | `analyze_screen`, `extract_text` |
-| **AI** | `llm_switch_provider`, `llm_get_status` |
+| **Execution** | Application lifecycle and isolated command environments |
 
 ---
 
@@ -284,9 +267,7 @@ python main.py --version
 | Browser | "open google.com" | TARA → browser_open_url |
 | App Launch | "open notepad" | TARA → launch_app |
 | Vision | "what's on my screen" | IRIS → screen_capture |
-| File | "create a file called notes.txt" | TARA → write_file |
-| Memory | "remember I like dark mode" | TARA → save_user_preference |
-| Provider | "switch to openai" | TARA → llm_switch_provider |
+| Code | "create a python snake game" | NIA → SWARM (Coding Agent) |
 
 ---
 
@@ -295,31 +276,15 @@ python main.py --version
 ### Creating an Extension
 
 ```python
-# extensions/custom/my_extension.py
-from src.extensions.base import BaseExtension
-from src.capabilities.decorators import capability
+# Create custom skills by adding to src/core/skills/library/
+from src.core.skills.registry import SkillRegistry
 
-class MyExtension(BaseExtension):
-    def initialize(self):
-        @capability(name="my_custom_tool")
-        def my_tool(param: str) -> str:
-            return f"Executed with: {param}"
-    
-    def cleanup(self):
-        pass
-```
+def my_custom_skill(args):
+    print(f"Executing skill with {args}")
 
-### v3.1.0 Plugin Compatibility
-
-Legacy plugins still work via the compatibility layer:
-
-```python
-# Your old v3.1.0 plugin - STILL WORKS
-from tara.tools.decorators import tool
-
-@tool(name="my_old_tool")
-def my_tool():
-    return "Works with compatibility mode!"
+# Register it using the core registry system
+registry = SkillRegistry()
+registry.register("my_custom_skill", my_custom_skill, "A custom tool")
 ```
 
 See [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md) for full migration details.

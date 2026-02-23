@@ -1,10 +1,10 @@
-"""
-TARA 2.0 Graph Workflow.
+"""TARA Graph Workflow — LangGraph StateGraph Assembly & Compilation.
 
-Assembles the StateGraph from nodes and compiles it into a runnable application.
-This is the "Neural Network" connecting TARA's brain to its memory.
+Assembles all TARA nodes into a compiled ``StateGraph`` application and
+provides convenience wrappers for invoking it.
 
-Architecture:
+Graph topology::
+
     ┌─────────────────────────────────────────────────────────────┐
     │                     TARA SubGraph                           │
     │                                                             │

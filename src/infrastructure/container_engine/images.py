@@ -33,18 +33,18 @@ class RuntimeImage:
 
 RUNTIME_REGISTRY: dict[str, RuntimeImage] = {
     "python": RuntimeImage(
-        image="python:3.11-slim",
-        entrypoint="python",
+        image="nia-sandbox-common:latest",
+        entrypoint="python3",
         install_cmd="pip install --no-cache-dir",
-        healthcheck="python --version",
-        description="Python 3.11 for data science, ML, scripting",
+        healthcheck="python3 --version",
+        description="N.I.A. Sandbox — Python 3 + Pi-Mono + GUI tools",
     ),
     "node": RuntimeImage(
-        image="node:20-slim",
+        image="nia-sandbox-common:latest",
         entrypoint="node",
         install_cmd="npm install --no-save",
         healthcheck="node --version",
-        description="Node.js 20 for web automation, TypeScript, APIs",
+        description="N.I.A. Sandbox — Node.js + Pi-Mono + GUI tools",
     ),
     "playwright": RuntimeImage(
         image="mcr.microsoft.com/playwright:v1.42.0-jammy",
@@ -54,10 +54,17 @@ RUNTIME_REGISTRY: dict[str, RuntimeImage] = {
         description="Playwright + Chromium for browser automation",
     ),
     "bash": RuntimeImage(
-        image="alpine:3.19",
-        entrypoint="sh",
-        install_cmd="apk add --no-cache",
+        image="nia-sandbox-common:latest",
+        entrypoint="bash",
+        install_cmd="apt-get install -y --no-install-recommends",
         healthcheck="echo ok",
-        description="Lightweight shell for simple commands",
+        description="N.I.A. Sandbox — Full shell with all tools",
+    ),
+    "custom": RuntimeImage(
+        image="nia-sandbox-common:latest",
+        entrypoint="python3",
+        install_cmd="pip install --no-cache-dir",
+        healthcheck="python3 --version",
+        description="N.I.A. Sandbox — Custom runtime (defaults to Python)",
     ),
 }
