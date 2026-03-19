@@ -284,18 +284,8 @@ def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
     except Exception as e:
         logger.error(f"Error instantiating Execution tools: {e}")
 
-    # DEPRECATION: Filter out legacy local tools
-    deprecated_tools = {
-        "write_file", "append_file", "create_dir", 
-        "move_file", "copy_file", "delete_file"
-    }
-    # Keep read-only tools: list_dir, read_file, file_exists, get_file_info, search_files
-    
-    original_count = len(all_tools)
-    all_tools = [t for t in all_tools if t.name not in deprecated_tools]
-    if len(all_tools) < original_count:
-        logger.info(f"🚫 Filtered out {original_count - len(all_tools)} legacy local tools")
-    
+    # User explicitly requested filesystem tools back in Phase 2
+    # Keeping all tools enabled
     core_count = len(all_tools)
     
     # =========================================================================

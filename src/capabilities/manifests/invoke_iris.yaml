@@ -1,0 +1,5 @@
+description: Invokes the IRIS vision subagent.
+name: invoke_iris
+reversible: false
+scope: execute
+timeout: 120

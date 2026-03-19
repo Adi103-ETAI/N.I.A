@@ -1,0 +1,5 @@
+description: Searches file contents using grep.
+name: grep_search
+reversible: true
+scope: read_only
+timeout: 60

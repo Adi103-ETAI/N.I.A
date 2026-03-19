@@ -1,10 +1,14 @@
-"""Polyglot IPC Schemas — The JSON contract between Brain (Host) and Body (Docker).
+"""Docker IPC Schemas — The JSON contract between Host and Container.
 
 These Pydantic models define the structured communication protocol
-for the MissionManifest (Brain → Soldier) and MissionResult (Soldier → Brain).
+for the MissionManifest (Host -> Container) and MissionResult (Container -> Host).
+
+Migrated from src.agents.soldiers.schemas during Phase 4 Sprint 6 cleanup.
+The soldiers/ package was removed; these schemas now live alongside the
+DockerBridge and DockerEngine that consume them.
 
 Usage:
-    from src.agents.soldiers.schemas import MissionManifest, MissionResult
+    from src.infrastructure.container_engine.schemas import MissionManifest, MissionResult
 
     manifest = MissionManifest(
         task_id="abc-123",
@@ -67,16 +71,16 @@ class OutputFormat(str, Enum):
 
 
 # =============================================================================
-# MissionManifest — Brain → Soldier
+# MissionManifest — Host -> Container
 # =============================================================================
 
 class MissionManifest(BaseModel):
-    """The mission briefing passed from the General to a Soldier.
-    
+    """The mission briefing passed from the Host to a Container.
+
     Written as mission.json to the shared Docker volume.
     Read by the entrypoint wrapper inside the container.
     """
-    
+
     # --- Identity ---
     task_id: str = Field(description="Unique mission identifier")
     soldier_type: SoldierType = Field(
@@ -87,7 +91,7 @@ class MissionManifest(BaseModel):
         default=RuntimeType.PYTHON,
         description="Docker runtime environment",
     )
-    
+
     # --- Mission ---
     objective: str = Field(description="Human-readable goal for the Soldier")
     code: str = Field(
@@ -102,13 +106,13 @@ class MissionManifest(BaseModel):
         default_factory=list,
         description="Files pre-staged in /workspace/ for the Soldier",
     )
-    
+
     # --- Context ---
     user_query: str = Field(
         default="",
         description="Original user message",
     )
-    
+
     # --- Execution Config ---
     model_type: str = Field(
         default="fast",
@@ -138,27 +142,27 @@ class MissionManifest(BaseModel):
         le=5,
         description="Max self-correction attempts (Builder Soldier)",
     )
-    
+
     # --- Timestamp ---
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),
     )
-    
+
     # ---- Serialization Helpers ----
-    
+
     def to_json(self) -> str:
         """Serialize to JSON string."""
         return self.model_dump_json(indent=2)
-    
+
     def to_json_file(self, path: Path) -> None:
         """Write manifest to a JSON file."""
         path.write_text(self.to_json(), encoding="utf-8")
-    
+
     @classmethod
     def from_json(cls, raw: str) -> MissionManifest:
         """Deserialize from JSON string."""
         return cls.model_validate_json(raw)
-    
+
     @classmethod
     def from_json_file(cls, path: Path) -> MissionManifest:
         """Load manifest from a JSON file."""
@@ -166,19 +170,19 @@ class MissionManifest(BaseModel):
 
 
 # =============================================================================
-# MissionResult — Soldier → Brain
+# MissionResult — Container -> Host
 # =============================================================================
 
 class MissionResult(BaseModel):
-    """The final report from a Soldier before death.
-    
+    """The final report from a Container execution.
+
     Written as result.json by the entrypoint wrapper inside Docker.
     Read by the DockerBridge on the Host.
     """
-    
+
     # --- Identity ---
     task_id: str = Field(description="Matching task_id from the MissionManifest")
-    
+
     # --- Outcome ---
     status: MissionStatus = Field(
         default=MissionStatus.SUCCESS,
@@ -188,7 +192,7 @@ class MissionResult(BaseModel):
         default=0,
         description="Process exit code (0 = success)",
     )
-    
+
     # --- Output ---
     output: str = Field(
         default="",
@@ -202,13 +206,13 @@ class MissionResult(BaseModel):
         default_factory=list,
         description="File paths created in /workspace/ (relative)",
     )
-    
+
     # --- Error Info ---
     error: Optional[str] = Field(
         default=None,
         description="Error message or stack trace on failure",
     )
-    
+
     # --- Diagnostics ---
     execution_time_seconds: float = Field(
         default=0.0,
@@ -218,27 +222,27 @@ class MissionResult(BaseModel):
         default=0,
         description="Self-correction attempts used",
     )
-    
+
     # --- Timestamp ---
     timestamp: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),
     )
-    
+
     # ---- Serialization Helpers ----
-    
+
     def to_json(self) -> str:
         """Serialize to JSON string."""
         return self.model_dump_json(indent=2)
-    
+
     def to_json_file(self, path: Path) -> None:
         """Write result to a JSON file."""
         path.write_text(self.to_json(), encoding="utf-8")
-    
+
     @classmethod
     def from_json(cls, raw: str) -> MissionResult:
         """Deserialize from JSON string."""
         return cls.model_validate_json(raw)
-    
+
     @classmethod
     def from_json_file(cls, path: Path) -> MissionResult:
         """Load result from a JSON file."""

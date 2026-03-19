@@ -1,0 +1,5 @@
+description: Reads a file from the host filesystem.
+name: read_file
+reversible: true
+scope: read_only
+timeout: 30

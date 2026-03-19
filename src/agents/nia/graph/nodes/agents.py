@@ -65,14 +65,17 @@ async def supervisor_node(state: AgentState, supervisor, summarize_llm=None) -> 
 # =============================================================================
 
 async def iris_node(state: AgentState, iris) -> AgentState:
-    """Wrap IRIS (sync) in a thread to prevent event-loop blocking.
+    """Run IRIS asynchronously via its native aprocess() method.
+
+    Uses IrisAgent.aprocess() which internally offloads the sync vision
+    call to a thread pool.  This never blocks the event loop.
 
     Args:
         state: Current AgentState.
         iris:  IRIS agent instance (injected by builder).
     """
-    logger.debug("Executing IRIS node (Async Wrapper)")
-    return await asyncio.to_thread(iris.process, state)
+    logger.debug("Executing IRIS node (async via aprocess)")
+    return await iris.aprocess(state)
 
 
 # =============================================================================

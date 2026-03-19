@@ -7,9 +7,12 @@ unchanged after the split.
 Submodule layout:
     helpers.py  — config loaders (vision, prompts) + summarize_oldest
     agents.py   — supervisor_node, iris_node, general_assistant
-    docker.py   — call_tara_2, docker_node
-    routing.py  — router_node, route_from_router, route_from_tara
+    docker.py   — call_tara_2, docker_node, sandbox_node
+    planner.py  — planner_node (Sprint 2 entry point)
+    coordinator_node.py — coordinator_node (Sprint 4 multi-step dispatch)
 """
+from src.agents.nia.graph.nodes.planner import planner_node
+from src.agents.nia.graph.nodes.coordinator_node import coordinator_node
 from src.agents.nia.graph.nodes.helpers import (
     get_vision_keywords,
     get_prompts,
@@ -24,12 +27,8 @@ from src.agents.nia.graph.nodes.agents import (
 from src.agents.nia.graph.nodes.docker import (
     call_tara_2,
     docker_node,
+    sandbox_node,
     _HAS_TARA_2,
-)
-from src.agents.nia.graph.nodes.routing import (
-    router_node,
-    route_from_router,
-    route_from_tara,
 )
 
 __all__ = [
@@ -45,9 +44,10 @@ __all__ = [
     # Execution nodes
     "call_tara_2",
     "docker_node",
+    "sandbox_node",
     "_HAS_TARA_2",
-    # Routing
-    "router_node",
-    "route_from_router",
-    "route_from_tara",
+    # Sprint 2: Planner
+    "planner_node",
+    # Sprint 4: Coordinator
+    "coordinator_node",
 ]

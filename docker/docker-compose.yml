@@ -1,0 +1,59 @@
+# =============================================================================
+# docker-compose.yml — N.I.A. Sandbox Docker Images
+# =============================================================================
+# Defines the build specifications for all three N.I.A. static sandbox images.
+# These are STATIC images — build them once with docker-setup.sh, then
+# N.I.A. runs tasks in them without any image pulls at runtime.
+#
+# Usage:
+#   Build all:     docker compose -f docker/docker-compose.yml build
+#   Or use:        bash docker/docker-setup.sh
+#
+# Images produced (in build order due to dependencies):
+#   nia-sandbox:latest          — Layer 1: base OS, sandbox user
+#   nia-sandbox-common:latest   — Layer 2: Python 3.12, Node 20, pip/npm tools
+#   nia-sandbox-browser:latest  — Layer 3: Playwright + Chromium
+#
+# NIA uses these images via src/infrastructure/container_engine/sandbox.py
+# =============================================================================
+
+version: "3.9"
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Layer 1: Base sandbox OS
+  # ---------------------------------------------------------------------------
+  sandbox:
+    image: nia-sandbox:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.sandbox
+    profiles:
+      - build
+
+  # ---------------------------------------------------------------------------
+  # Layer 2: Python + Node runtimes
+  # ---------------------------------------------------------------------------
+  sandbox-common:
+    image: nia-sandbox-common:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.sandbox-common
+    depends_on:
+      - sandbox
+    profiles:
+      - build
+
+  # ---------------------------------------------------------------------------
+  # Layer 3: Browser automation (Playwright + Chromium)
+  # ---------------------------------------------------------------------------
+  sandbox-browser:
+    image: nia-sandbox-browser:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.sandbox-browser
+    depends_on:
+      - sandbox-common
+    profiles:
+      - build

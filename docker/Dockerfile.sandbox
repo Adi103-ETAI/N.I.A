@@ -1,16 +1,27 @@
 # =============================================================================
-# Layer 1: nia-sandbox:latest — The Foundation
+# Dockerfile.sandbox — N.I.A. Base Sandbox (Layer 1)
 # =============================================================================
-# Base OS + Shell + Window/GUI Automation Tools
-# This is the minimal secure sandbox that all other layers build upon.
+# Minimal, hardened base OS layer. Provides:
+#   - Debian slim base
+#   - Isolated sandbox user (uid 1000 — non-root)
+#   - Core shell utilities
+#   - Clean /workspace mount point
 #
-# Build: docker build -t nia-sandbox:latest -f docker/Dockerfile.sandbox .
+# Built as: nia-sandbox:latest
+#   docker build -t nia-sandbox:latest -f docker/Dockerfile.sandbox .
+#
+# All other sandbox images (sandbox-common, sandbox-browser) build on this.
 # =============================================================================
+
 FROM debian:bookworm-slim
+
+LABEL maintainer="N.I.A. Team"
+LABEL description="N.I.A. Sandbox Base — hardened OS layer"
+LABEL version="1.0"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Core OS & Window/GUI Automation Tools
+# ── Core OS + shell utilities ─────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
@@ -20,12 +31,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     nano \
     procps \
-    xdotool \
-    wmctrl \
-    libx11-dev \
+    unzip \
+    zip \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Secure User (uid 1000 — standard non-root sandbox user)
-RUN useradd --create-home --shell /bin/bash sandbox
+# ── Isolated non-root sandbox user (uid 1000) ─────────────────────────────────
+RUN useradd --create-home --shell /bin/bash --uid 1000 sandbox
+
+# ── Shared workspace (world-writable so host volume mounts work) ──────────────
+RUN mkdir -p /workspace && chmod 777 /workspace
+
 USER sandbox
 WORKDIR /home/sandbox
+
+# Keep alive for potential long-running tasks
+CMD ["bash"]

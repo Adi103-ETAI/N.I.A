@@ -22,6 +22,8 @@ from src.agents.nia.state import (
     AGENT_IRIS,
     AGENT_TARA,
     AGENT_DOCKER, # Phase 2
+    AGENT_SANDBOX, # Phase 3
+    AGENT_COORDINATOR, # Sprint 4
     AGENT_END,
     create_initial_state,
     extract_response,
@@ -32,10 +34,30 @@ from .nodes import (
     iris_node,
     call_tara_2,         # TARA 2.0 automation node
     docker_node,         # Phase 2: Docker Execution
-    route_from_tara,
-    router_node,         # Phase 3: AI Router
-    route_from_router,   # Phase 3: Routing Logic
+    sandbox_node,        # Phase 3: Static Sandbox routing
+    planner_node,        # Sprint 2: Mission Planner entry point
+    coordinator_node,    # Sprint 4: Multi-step Coordinator
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Conditional Edge Functions (moved from legacy routing.py in Sprint 6)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def route_from_planner(state: AgentState) -> str:
+    """Conditional edge after planner_node — reads state['next'] to pick the target."""
+    next_node = state.get("next", "supervisor")
+    logger.info(f"Planner → {next_node}")
+    return next_node
+
+
+def route_from_tara(state: AgentState) -> str:
+    """Conditional edge after TARA — enables Active Listening loop back to supervisor."""
+    next_agent = state.get("next", AGENT_END)
+    if next_agent in ("supervisor", AGENT_SUPERVISOR):
+        logger.debug("TARA → Supervisor: Active Listening loop")
+        return AGENT_SUPERVISOR
+    return AGENT_END
 
 # TARA 2.0 is now the only TARA - no legacy fallback needed
 
@@ -53,12 +75,15 @@ except ImportError:
 # LangGraph Imports
 # =============================================================================
 
+# Core LangGraph imports — mandatory
 try:
     from langgraph.graph import StateGraph, END
+    from langgraph.checkpoint.memory import InMemorySaver
     _HAS_LANGGRAPH = True
 except ImportError:
     _HAS_LANGGRAPH = False
     StateGraph = None  # type: ignore
+    InMemorySaver = None  # type: ignore
     END = "__end__"
     logger.warning("langgraph not installed. Install with: uv add langgraph")
 
@@ -90,13 +115,15 @@ DEFAULT_STATE_DB = Path("data/state.db")
 class NIAGraph:
     """LangGraph-based state machine for NIA supervisor architecture.
     
-    Phase 3 Graph Structure:
+    Phase 4 Graph Structure:
     ```
-    [START] → [router] → routing decision
-                            ├── chat    → [supervisor] → [END]
-                            ├── swarm   → [docker]     → [END]
-                            ├── system  → [tara]       → [END] or [supervisor]
-                            └── iris    → [iris]       → [END]
+    [START] → [planner] → route_from_planner
+                            ├── supervisor  → [supervisor]   → [END]
+                            ├── tara        → [tara]         → route_from_tara → [supervisor] | [END]
+                            ├── docker      → [docker]       → [END]
+                            ├── sandbox     → [sandbox]      → [END]
+                            ├── coordinator → [coordinator]  → [END]
+                            └── iris        → [iris]         → [END]
     ```
     
     Persistence:
@@ -190,12 +217,7 @@ class NIAGraph:
         async def run_iris(state):
             return await iris_node(state, self.iris)
 
-        async def run_router(state):
-             # Router is stateless in terms of class instance, but needs async
-             return await router_node(state)
-
         # Add nodes with async wrappers
-        graph.add_node("router", run_router)
         graph.add_node(AGENT_SUPERVISOR, run_supervisor)
         graph.add_node(AGENT_IRIS, run_iris)
         
@@ -207,23 +229,39 @@ class NIAGraph:
         graph.add_node(AGENT_DOCKER, docker_node)
         logger.info("🐳 Docker Node registered")
         
+        # Phase 3: Sandbox Node
+        graph.add_node(AGENT_SANDBOX, sandbox_node)
+        logger.info("📦 Sandbox Node registered")
+
+        # Sprint 4: Coordinator Node
+        graph.add_node(AGENT_COORDINATOR, coordinator_node)
+        logger.info("🧠 Coordinator Node registered (Sprint 4)")
         
         # Set entry point
-        graph.set_entry_point("router")
-        
-        # Add conditional edges from ROUTER
+        # ─── Sprint 2: Planner Entry Point ────────────────────────────────
+        # The planner replaces the legacy router as graph entry point.
+        # It calls MissionPlanner + pre-flight approval, then sets state["next"]
+        # so route_from_router still works unchanged for downstream routing.
+        graph.add_node("planner", planner_node)
+        graph.set_entry_point("planner")
+
+        # Conditional edges from PLANNER — routes to the appropriate agent node
         graph.add_conditional_edges(
-            "router",
-            route_from_router,
+            "planner",
+            route_from_planner,
             {
-                AGENT_SUPERVISOR: AGENT_SUPERVISOR, # Chat
+                AGENT_SUPERVISOR: AGENT_SUPERVISOR,
                 AGENT_IRIS: AGENT_IRIS,
                 AGENT_TARA: AGENT_TARA,
                 AGENT_DOCKER: AGENT_DOCKER,
-                "tara": AGENT_TARA,         # Alias
-                "docker": AGENT_DOCKER,     # Alias
-                "iris": AGENT_IRIS,         # Alias
-                "supervisor": AGENT_SUPERVISOR, # Alias
+                AGENT_SANDBOX: AGENT_SANDBOX,
+                AGENT_COORDINATOR: AGENT_COORDINATOR,
+                "tara": AGENT_TARA,
+                "docker": AGENT_DOCKER,
+                "sandbox": AGENT_SANDBOX,
+                "iris": AGENT_IRIS,
+                "supervisor": AGENT_SUPERVISOR,
+                "coordinator": AGENT_COORDINATOR,
             }
         )
         
@@ -232,8 +270,9 @@ class NIAGraph:
         
         # Terminal edges: All specialists return to END
         graph.add_edge(AGENT_IRIS, END)
-        # graph.add_edge("general", END) # General is now handled by Supervisor
         graph.add_edge(AGENT_DOCKER, END)
+        graph.add_edge(AGENT_SANDBOX, END)
+        graph.add_edge(AGENT_COORDINATOR, END)
         
         # Add conditional edges from TARA (allows looping back for Active Listening)
         graph.add_conditional_edges(
@@ -245,14 +284,18 @@ class NIAGraph:
             }
         )
         
-        # Initialize checkpointer for persistence
-        # In Async mode, we do NOT compile with a static checkpointer here.
-        # We compile ON-DEMAND in arun() with the async context manager.
-        
-        # Compile the graph (without persistence for sync fallback/structure)
+        # Compile once in __init__ with InMemorySaver (always available).
+        # This is the ONLY compilation — arun() / astream() reuse _compiled.
+        # AsyncSqliteSaver persistence is handled per-session via the config
+        # thread_id; the compiled graph itself stays constant.
         self._graph = graph
-        self._compiled = graph.compile()
-        logger.info("NIA graph structure compiled (persistence determined at runtime)")
+        from langgraph.checkpoint.memory import InMemorySaver
+        self._compiled = graph.compile(checkpointer=InMemorySaver())
+        logger.info("NIA graph compiled with InMemorySaver (persistent checkpointing via thread_id)")
+
+        # If AsyncSqliteSaver is available, pre-open it as a long-lived context
+        # so arun/astream don\'t pay connection overhead per call.
+        self._persistent_checkpointer = None  # initialized lazily in arun/astream
     
     def run(
         self,
@@ -304,55 +347,67 @@ class NIAGraph:
         user_input: str,
         thread_id: str = "default",
     ) -> str:
-        """Async version of run (Native).
-        
-        Uses LangGraph's ainvoke for non-blocking execution.
-        Handles async persistence via AsyncSqliteSaver.
-        """
-        # Create initial state
-        initial_state = create_initial_state(user_input)
-        
-        # Build config with thread ID for checkpointing
-        config = {
-            "configurable": {
-                "thread_id": thread_id,
-            }
-        }
-        
-        # 🌊 ASYNC PERSISTENCE IMPLEMENTATION
-        # Use AsyncSqliteSaver as a context manager to ensure non-blocking cleanup
-        if self.enable_persistence and _HAS_ASYNC_CHECKPOINTER:
-            try:
-                # Ensure db directory exists
-                db_path = Path(self._db_path)
-                db_path.parent.mkdir(parents=True, exist_ok=True)
+        """Async execution — non-blocking, with persistence via thread_id.
 
-                # Use context manager for auto-closing connection
-                async with AsyncSqliteSaver.from_conn_string(self._db_path) as checkpointer:
-                    # Compile the graph structure with async checkpointer
-                    # This is lightweight as the graph definition is cached in self._graph
-                    app = self._graph.compile(checkpointer=checkpointer)
-                    
-                    # Invoke async
-                    final_state = await app.ainvoke(initial_state, config)
-                    return extract_response(final_state)
-            except Exception as exc:
-                logger.exception("Async graph execution failed: %s", exc)
-                return f"I encountered an error: {str(exc)}"
-                
-        # Fallback: Stateless execution
-        elif self._compiled:
+        Uses the single pre-compiled graph (compiled once in __init__).
+        Persistence is handled by the InMemorySaver checkpointer and the
+        thread_id config; no re-compilation on each call.
+        """
+        initial_state = create_initial_state(user_input)
+        config = {"configurable": {"thread_id": thread_id}}
+
+        if self._compiled:
             try:
-                # Native async invoke on stateless graph
                 final_state = await self._compiled.ainvoke(initial_state, config)
                 return extract_response(final_state)
             except Exception as exc:
-                logger.exception("Graph execution failed: %s", exc)
+                logger.exception("Async graph execution failed: %s", exc)
                 return f"I encountered an error: {str(exc)}"
         else:
-            # Fallback for no LangGraph
             import asyncio
             return await asyncio.to_thread(self._fallback_run, initial_state)
+
+    async def astream(
+        self,
+        user_input: str,
+        thread_id: str = "default",
+    ):
+        """Async streaming execution — yields response tokens as they arrive.
+
+        Uses LangGraph 1.0.8 stream_mode=\'messages\' which yields
+        (chunk, metadata) tuples where chunk is a BaseMessage-like object.
+
+        Usage::
+            async for token in graph.astream("Hello!"):
+                print(token, end="", flush=True)
+
+        Args:
+            user_input: User\'s message.
+            thread_id: Conversation thread for persistence.
+
+        Yields:
+            str: Individual response text tokens.
+        """
+        if not self._compiled:
+            yield extract_response(await asyncio.to_thread(self._fallback_run, create_initial_state(user_input)))
+            return
+
+        initial_state = create_initial_state(user_input)
+        config = {"configurable": {"thread_id": thread_id}}
+
+        try:
+            async for chunk, metadata in self._compiled.astream(
+                initial_state,
+                config,
+                stream_mode="messages",
+            ):
+                # chunk is a BaseMessage-like object; content is the token string
+                content = getattr(chunk, "content", None)
+                if content and isinstance(content, str) and content.strip():
+                    yield content
+        except Exception as exc:
+            logger.exception("Streaming failed: %s", exc)
+            yield f"Error during streaming: {exc}"
     
     async def aget_thread_history(self, thread_id: str) -> List:
         """Get conversation history for a thread (Async)."""

@@ -10,7 +10,6 @@ Agents:
     tara     — Tool-use specialist for desktop/system/web automation
     iris     — Vision specialist powered by a multimodal LLM
     nola     — Voice I/O manager (requires audio hardware + dependencies)
-    soldiers — Ephemeral Docker-based task agents (the Polyglot Swarm)
 """
 
 # Lazy imports to avoid circular dependency and missing optional deps

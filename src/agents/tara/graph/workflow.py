@@ -136,23 +136,32 @@ _cached_app = None
 
 
 def get_tara_graph(with_memory: bool = False):
-    """
-    Get or create the TARA graph instance.
-    
-    Uses caching for performance; first call builds the graph.
-    
+    """Get or create the TARA graph instance (lazy, cached after first call).
+
     Args:
         with_memory: Enable memory persistence.
-        
+
     Returns:
         Compiled LangGraph application.
     """
     global _cached_app
-    
+
     if _cached_app is None:
         _cached_app = build_tara_graph(with_memory=with_memory)
-    
+
     return _cached_app
+
+
+def get_tara_subgraph():
+    """Return TARA as a compiled subgraph for mounting inside NIAGraph.
+
+    Alias of get_tara_graph() with a semantic name that clarifies intent.
+    Lazy — first call builds the graph; subsequent calls return the cache.
+
+    Returns:
+        Compiled LangGraph application ready for ainvoke().
+    """
+    return get_tara_graph(with_memory=False)
 
 
 # =============================================================================
@@ -191,14 +200,10 @@ def run_tara(user_goal: str, initial_context: dict = None) -> str:
 # Pre-compiled App (for direct import)
 # =============================================================================
 
-# Build on import if langgraph available
-tara_app = None
-if _HAS_LANGGRAPH:
-    try:
-        tara_app = build_tara_graph()
-    except Exception as e:
-        logger.error(f"Failed to pre-compile TARA graph: {e}")
-        tara_app = None
+# tara_app is intentionally NOT pre-compiled at import time.
+# Lazy compilation via get_tara_graph() / get_tara_subgraph() on first use.
+# This keeps boot time fast and avoids blocking the event loop at startup.
+tara_app = None  # kept for backward compat; resolves via get_tara_graph()
 
 
 # =============================================================================
@@ -208,6 +213,7 @@ if _HAS_LANGGRAPH:
 __all__ = [
     "build_tara_graph",
     "get_tara_graph",
+    "get_tara_subgraph",
     "run_tara",
     "tara_app",
 ]

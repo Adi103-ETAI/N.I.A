@@ -34,6 +34,7 @@ Version: 2.5.2
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 from typing import Any, Dict, Optional, Union
@@ -402,12 +403,31 @@ class IrisAgent:
         
         return {"messages": [ai_message], "next": "__end__"}
     
+    async def aprocess(
+        self,
+        input_data: Union[str, Dict[str, Any]],
+        image_path: str = None,
+    ) -> Union[str, Dict[str, Any]]:
+        """Non-blocking async wrapper around process().
+
+        Offloads the synchronous vision model call to a thread pool so the
+        event loop is never blocked.  Use this in all LangGraph nodes.
+
+        Args:
+            input_data: Either a string query or LangGraph state dict.
+            image_path: Optional path to existing image file.
+
+        Returns:
+            Same as process() — string or updated state dict.
+        """
+        return await asyncio.to_thread(self.process, input_data, image_path)
+
     def run(self, query: str) -> str:
         """Convenience method - same as process() with string input.
-        
+
         Args:
             query: User's question about what they see.
-            
+
         Returns:
             Description/analysis of the visual content.
         """
@@ -474,17 +494,17 @@ class IrisAgent:
 # LangGraph Node Function
 # =============================================================================
 
-def run_iris_agent(state: dict) -> dict:
-    """IRIS LangGraph Node function.
-    
+async def run_iris_agent(state: dict) -> dict:
+    """IRIS LangGraph Node function (async — non-blocking).
+
     Args:
         state: LangGraph state dict.
-        
+
     Returns:
         Updated state with IRIS response.
     """
     agent = IrisAgent()
-    return agent.process(state)
+    return await agent.aprocess(state)
 
 
 # =============================================================================

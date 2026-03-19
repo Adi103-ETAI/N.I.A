@@ -35,11 +35,11 @@ from __future__ import annotations
 
 # TARA 2.0: Export graph components
 try:
-    from src.agents.tara.graph import run_tara, tara_app, TaraState
+    from src.agents.tara.graph import run_tara, get_tara_subgraph, TaraState
     _HAS_GRAPH = True
 except ImportError:
     run_tara = None  # type: ignore
-    tara_app = None  # type: ignore
+    get_tara_subgraph = None  # type: ignore
     TaraState = None  # type: ignore
     _HAS_GRAPH = False
 
@@ -53,4 +53,4 @@ except ImportError:
 
 
 __version__ = "3.1.0"
-__all__ = ["run_tara", "tara_app", "TaraState", "get_tara_tools"]
+__all__ = ["run_tara", "get_tara_subgraph", "TaraState", "get_tara_tools"]

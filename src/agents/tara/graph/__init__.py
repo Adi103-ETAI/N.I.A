@@ -52,10 +52,9 @@ from .nodes import (
 
 # Workflow
 from .workflow import (
-    build_tara_graph,
     get_tara_graph,
+    get_tara_subgraph,
     run_tara,
-    tara_app,
 )
 
 
@@ -75,8 +74,7 @@ __all__ = [
     "response_formatter",
     "should_continue",
     # Workflow (Main Exports)
-    "build_tara_graph",
     "get_tara_graph",
+    "get_tara_subgraph",
     "run_tara",
-    "tara_app",
 ]

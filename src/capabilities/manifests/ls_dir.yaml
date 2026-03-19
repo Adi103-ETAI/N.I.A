@@ -1,0 +1,5 @@
+description: Lists directory contents.
+name: ls_dir
+reversible: true
+scope: read_only
+timeout: 30

@@ -1,33 +1,70 @@
 # =============================================================================
-# Layer 2: nia-sandbox-common:latest — The Agent Layer
+# Dockerfile.sandbox-common — N.I.A. Runtime Sandbox (Layer 2)
 # =============================================================================
-# Runtimes (Python + Build Tools) + openai SDK for NVIDIA API calls
+# Builds on nia-sandbox:latest. Adds Python 3 + Node.js + common packages
+# needed for most code execution tasks.
 #
-# Build: docker build -t nia-sandbox-common:latest -f docker/Dockerfile.sandbox-common .
-# Requires: nia-sandbox:latest (Layer 1) built first
+# Built as: nia-sandbox-common:latest
+#   Requires: nia-sandbox:latest (Layer 1) built first
+#   docker build -t nia-sandbox-common:latest -f docker/Dockerfile.sandbox-common .
+#
+# Use cases: Python scripts, Node.js scripts, data analysis, API calls,
+#            file processing, build tasks.
 # =============================================================================
+
 FROM nia-sandbox:latest
+
+LABEL maintainer="N.I.A. Team"
+LABEL description="N.I.A. Runtime Sandbox — Python 3.12 + Node 20 + common libs"
+LABEL version="1.0"
 
 USER root
 
-# Install Runtimes (Python + Build Tools)
+# ── System runtimes ────────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Python
     python3 \
     python3-pip \
     python3-venv \
+    python3-dev \
+    # Node.js (via system package — stable LTS)
+    nodejs \
+    npm \
+    # Build tools (for compiling C extensions)
     build-essential \
+    gcc \
+    g++ \
+    # Useful CLI tools
     ripgrep \
+    jq \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python packages needed inside the sandbox
-# --break-system-packages required for Debian bookworm's managed-environment policy
-RUN pip3 install --break-system-packages \
+# ── Python packages (available inside sandbox without re-install per task) ────
+# --break-system-packages needed for Debian bookworm's PEP 668
+RUN pip3 install --break-system-packages --no-cache-dir \
+    # LLM integrations (for tasks that call APIs from inside the sandbox)
     openai \
-    requests
+    requests \
+    httpx \
+    # Data / utilities
+    pandas \
+    numpy \
+    python-dotenv \
+    rich
 
-# Revert to sandbox user
+# ── Node packages (global, so tasks can use them immediately) ─────────────────
+RUN npm install -g \
+    typescript \
+    ts-node \
+    axios
+
+# ── Workspace ─────────────────────────────────────────────────────────────────
+WORKDIR /workspace
+RUN chmod 777 /workspace
+
+# Revert to sandbox user for task execution
 USER sandbox
-WORKDIR /home/sandbox/project
+WORKDIR /workspace
 
-# Keep alive for Bridge (persistent session mode)
-CMD ["sleep", "infinity"]
+CMD ["python3", "-c", "print('NIA Sandbox Common ready')"]

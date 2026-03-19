@@ -9,7 +9,7 @@ v5.0 Phase 1: Core bridge for the Polyglot Swarm.
 Usage:
     from src.infrastructure.container_engine.bridge import DockerBridge
     from src.infrastructure.container_engine.manager import DockerEngine
-    from src.agents.soldiers.schemas import MissionManifest
+    from src.infrastructure.container_engine.schemas import MissionManifest
 
     bridge = DockerBridge(DockerEngine())
     result = bridge.execute_mission(manifest)
@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from src.agents.soldiers.schemas import (
+from src.infrastructure.container_engine.schemas import (
     MissionManifest,
     MissionResult,
     MissionStatus,
