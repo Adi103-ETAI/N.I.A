@@ -7,6 +7,32 @@
 
 ---
 
+## ✅ Phase 1 Completion Status (2026-03-26)
+
+Phase 1 has been completed for the approved scope:
+
+- Completed key module renames/moves in desktop, DI, and capability registry areas.
+- Added compatibility shims to preserve legacy import paths during migration:
+  - `src/core/platform.py` → `src.core.os.platform`
+  - `src/core/context.py` → `src.core.os.context`
+  - desktop forwarding shims (e.g., `apps.py` → `app_launcher.py`, `windows.py` → `window_ops.py`, `window_manager.py` → `window_registry.py`)
+- Fixed root config/defaults resolution by centralizing defaults path usage under `src/core/config/defaults/` and correcting auto-generation/load paths (including NIA prompts and TARA defaults references).
+- Maintained backward compatibility via compat aliases and re-export layers.
+
+**Explicit exclusion (user-requested):** filesystem consolidation was postponed; the filesystem module split remains in place for now.
+
+---
+
+## ✅ Phase 2 Follow-up Status (2026-03-26)
+
+Phase 2 has also been completed after this guide:
+- centralized `core/security` layer completed;
+- centralized `core/utils` layer completed;
+- `models/manager.py` split into focused modules with backward-compatible facade;
+- filesystem consolidation remains deferred by explicit request.
+
+---
+
 ## 🎯 Phase 1: Critical Issues (Do First)
 
 ### Task 1: Remove Duplicate `get_os_context()` Function

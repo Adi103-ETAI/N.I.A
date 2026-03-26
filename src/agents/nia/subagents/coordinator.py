@@ -471,7 +471,7 @@ def _build_coordinator_graph():
         A compiled LangGraph ``CompiledGraph`` ready for ``ainvoke()``.
     """
     from langgraph.graph import StateGraph, END
-    from src.agents.nia.subagents.state import CoordinatorState
+    from src.core.schema.states import CoordinatorState
 
     graph = StateGraph(CoordinatorState)
 
@@ -529,7 +529,7 @@ async def run_coordinator(manifest) -> dict:
         - ``context_log``:  full observation trail.
         - ``completed_results``:  raw subagent results.
     """
-    from src.agents.nia.subagents.state import create_coordinator_state
+    from src.core.schema.states import create_coordinator_state
     from src.core.bus.events import get_event_bus
 
     logger.info(

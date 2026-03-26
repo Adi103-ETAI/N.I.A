@@ -19,7 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
+.ruff_cache/
 # Virtual Environment
 .venv/
 venv/
@@ -93,6 +93,8 @@ ghost_state.json
 
 # Models Folder (if re-created)
 models/
+!/src/models/
+!/src/models/*.py
 
 # Workspace (Docker sandbox mount)
 workspace/
@@ -100,6 +102,7 @@ workspace/
 # Debug & one-off verification scripts
 scripts/debug_*.py
 scripts/verify_*.py
+gen_manifests.py
 
 # AI Agent artifacts
 .gemini/

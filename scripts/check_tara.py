@@ -118,7 +118,7 @@ def test_state_creation():
     logger.info("=" * 60)
     
     try:
-        from src.agents.tara.graph.state import create_initial_tara_state, TaraState
+        from src.core.schema.states import create_initial_tara_state, TaraState
         
         state = create_initial_tara_state("Test goal")
         

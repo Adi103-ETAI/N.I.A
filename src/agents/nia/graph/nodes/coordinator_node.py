@@ -17,7 +17,7 @@ Flow:
 from __future__ import annotations
 
 import logging
-from src.agents.nia.state import AgentState, AGENT_END
+from src.core.schema.states import AgentState, AGENT_END
 
 logger = logging.getLogger("NIA.Nodes.Coordinator")
 

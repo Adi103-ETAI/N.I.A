@@ -44,6 +44,11 @@ import warnings
 warnings.filterwarnings("ignore", message=".*timeout is not default parameter.*")
 
 import json
+
+try:
+    import yaml
+except ImportError:
+    yaml = None  # type: ignore
 import os
 import time
 import sys
@@ -86,31 +91,22 @@ except ImportError:
 # =============================================================================
 
 def _load_engine_config() -> dict:
-    """Load engine configuration from external files.
-    
-    Returns:
-        Dictionary with command vocabularies and help text.
-    """
-    config_dir = Path(__file__).parent.parent.parent / "config" / "tara"
-    config = {}
-    
-    # Load command vocabularies
-    commands_path = config_dir / "commands.json"
-    if commands_path.exists():
-        with open(commands_path, "r", encoding="utf-8") as f:
-            config["commands"] = json.load(f)
-    else:
-        config["commands"] = {}
-    
-    # Load help text
-    help_path = config_dir / "help.txt"
-    if help_path.exists():
-        with open(help_path, "r", encoding="utf-8") as f:
-            config["help_text"] = f.read()
-    else:
-        config["help_text"] = "Type 'exit' to quit."
-    
-    return config
+    """Load engine configuration from centralized defaults."""
+    config_path = Path(__file__).resolve().parents[1] / "config" / "defaults" / "agents" / "tara.yaml"
+
+    if yaml is None:
+        return {"commands": {}, "help_text": "Type 'exit' to quit."}
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except Exception:
+        data = {}
+
+    return {
+        "commands": data.get("commands", {}),
+        "help_text": "Type 'exit' to quit.",
+    }
 
 
 # Load at module level (cached)

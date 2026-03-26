@@ -17,9 +17,9 @@ Security: most tools carry ``@security_level("host_standard")``;
 file-destructive operations are tagged ``"high_risk"``.
 """
 
-from .apps import *
-from .windows import *
+from .app_launcher import *
+from .window_ops import *
 from .screen import *
 from .uia import *
 from .input import *
-from .window_manager import *
+from .window_registry import *

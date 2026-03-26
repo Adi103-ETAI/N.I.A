@@ -443,6 +443,29 @@ Priority 5 - Refactoring:
 
 ---
 
+## 📍 Phase 1 Actual Status Update (2026-03-26)
+
+Phase 1 is complete for the approved subset. Delivered items include:
+- module renames/moves for `tool_registry`, `service_registry`, desktop window/app modules, and related import updates;
+- compatibility shims preserving old import contracts (`src/core/platform.py`, `src/core/context.py`, and desktop forwarding modules);
+- root config/defaults path fixes with centralized defaults resolution under `src/core/config/defaults/` (including prompt/default config load paths);
+- state/schema and compat alias updates validated for backward compatibility.
+
+**Deferred by user request:** planned filesystem consolidation (Issue 8 / “9 filesystem files → 1”) was intentionally postponed and is not part of completed Phase 1 work.
+
+---
+
 **Recommendation**: Start with **Phase 1 (Critical Issues)** immediately (1-2 days of safe work), then decide on full restructuring based on team capacity.
 
 Would you like me to proceed with Phase 1 implementation?
+
+
+## 📍 Phase 2 Actual Status Update (2026-03-26)
+
+Phase 2 is complete for the approved scope:
+- `src/core/security/` introduced (`warden.py`, `validation.py`, `policies.py`) with compatibility maintained from `src/agents/tara/security.py`;
+- `src/core/utils/` introduced (`file_utils.py`, `text_utils.py`, `graph_utils.py`) with wrappers/shims kept in prior helper locations;
+- `src/models/manager.py` split into `src/models/config.py`, `factory.py`, `presets.py`, and `embeddings.py` while preserving manager compatibility surface;
+- integration compatibility fixes applied in planner paths, with tests passing in validated runs.
+
+**Deferred by explicit project decision:** filesystem consolidation remains postponed and unchanged in this phase.

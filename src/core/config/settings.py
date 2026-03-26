@@ -39,7 +39,7 @@ def _get_base_dir() -> Path:
 
 # Directory containing all config data files (JSON/YAML)
 # Moved from project root config/ → src/core/config/defaults/
-CONFIG_DATA_DIR = Path(__file__).resolve().parent / "data"
+CONFIG_DATA_DIR = Path(__file__).resolve().parent / "defaults"
 
 
 # =============================================================================
@@ -460,7 +460,7 @@ class Settings(BaseSettings):
     @property
     def SUPERVISOR_PROMPT_FILE(self) -> Path:
         """Path to supervisor system prompt."""
-        return self.BASE_DIR / "config" / "nia" / "prompts.json"
+        return CONFIG_DATA_DIR / "nia" / "prompts.json"
 
 
 # =============================================================================

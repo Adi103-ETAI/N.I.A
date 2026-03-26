@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 import logging
-from typing import List
+from typing import List, Mapping, Union, Any
 
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -81,7 +81,105 @@ Rules:
 - Do NOT include any text outside the JSON object.
 """
 
-    async def plan(self, user_intent: str) -> MissionManifest:
+    def _extract_user_intent(self, payload: Union[str, Mapping[str, Any]]) -> tuple[str, bool]:
+        """Normalize planner input and detect legacy state-dict mode."""
+        if isinstance(payload, str):
+            return payload, False
+
+        if isinstance(payload, Mapping):
+            # Backward compatibility: tests/older callers pass full AgentState dict.
+            user_input = payload.get("user_input")
+            if isinstance(user_input, str) and user_input.strip():
+                return user_input, True
+
+            messages = payload.get("messages", [])
+            for msg in reversed(messages if isinstance(messages, list) else []):
+                content = getattr(msg, "content", "")
+                if isinstance(content, str) and content.strip():
+                    return content, True
+            return "", True
+
+        return str(payload or ""), False
+
+    def _coerce_scopes(self, scope_list: list) -> List[CapabilityScope]:
+        """Coerce mixed legacy/new scope strings to CapabilityScope values."""
+        aliases = {
+            "single_turn": CapabilityScope.READ_ONLY,
+            "conversation": CapabilityScope.READ_ONLY,
+            "tool_execution": CapabilityScope.EXECUTE,
+        }
+        result: List[CapabilityScope] = []
+        for scope in scope_list:
+            if isinstance(scope, CapabilityScope):
+                result.append(scope)
+                continue
+            try:
+                result.append(CapabilityScope(str(scope)))
+                continue
+            except ValueError:
+                alias = aliases.get(str(scope))
+                if alias is not None:
+                    result.append(alias)
+                else:
+                    logger.warning("Unknown scope '%s' — defaulting to execute", scope)
+                    result.append(CapabilityScope.EXECUTE)
+        return result
+
+    def _infer_mission_type(self, manifest: MissionManifest, hint: str | None = None) -> str:
+        """Infer legacy mission_type for compatibility consumers."""
+        if hint:
+            return hint
+        if (
+            manifest.execution_mode == "deep"
+            or len(manifest.steps) > 1
+            or CapabilityScope.AGENT_SPAWN in manifest.required_scopes
+        ):
+            return "agent_spawn"
+        if any(
+            s in manifest.required_scopes
+            for s in (
+                CapabilityScope.EXECUTE,
+                CapabilityScope.WRITE,
+                CapabilityScope.NETWORK,
+                CapabilityScope.DESTRUCTIVE,
+            )
+        ):
+            return "tool_execution"
+        return "conversation"
+
+    def _to_legacy_manifest_dict(
+        self,
+        manifest: MissionManifest,
+        mission_type_hint: str | None = None,
+    ) -> dict:
+        """Return legacy dict schema used by pre-Phase-2 tests/callers."""
+        mission_type = self._infer_mission_type(manifest, mission_type_hint)
+        if CapabilityScope.AGENT_SPAWN in manifest.required_scopes:
+            legacy_scope = "agent_spawn"
+        elif CapabilityScope.READ_ONLY in manifest.required_scopes and len(manifest.required_scopes) == 1:
+            legacy_scope = "single_turn"
+        else:
+            legacy_scope = "tool_execution"
+
+        legacy_steps = [
+            {
+                "step_id": f"step_{idx}",
+                "role": step.assigned_role,
+                "instruction": step.description,
+                "dependencies": [],
+            }
+            for idx, step in enumerate(manifest.steps, start=1)
+        ]
+
+        return {
+            "mission_type": mission_type,
+            "scope": legacy_scope,
+            "execution_mode": manifest.execution_mode,
+            "steps": legacy_steps,
+            "required_scopes": [s.value for s in manifest.required_scopes],
+        }
+
+    async def plan(self, user_intent: Union[str, Mapping[str, Any]]) -> Union[MissionManifest, dict]:
         """Turn raw user intent into a structured MissionManifest.
 
         Args:
@@ -90,19 +188,22 @@ Rules:
         Returns:
             A fully populated MissionManifest (approved=False until pre-flight).
         """
-        if not user_intent.strip():
-            return MissionManifest(
+        normalized_intent, legacy_mode = self._extract_user_intent(user_intent)
+
+        if not normalized_intent.strip():
+            manifest = MissionManifest(
                 mission_id="noop-001",
                 intent="(empty)",
                 steps=[],
                 required_scopes=[CapabilityScope.READ_ONLY],
-                execution_mode="fast",
+                execution_mode="fast",  # type: ignore[arg-type]
             )
+            return self._to_legacy_manifest_dict(manifest, mission_type_hint="conversation") if legacy_mode else manifest
 
         try:
             response = await self.llm.ainvoke([
                 SystemMessage(content=self.planning_prompt),
-                HumanMessage(content=user_intent),
+                HumanMessage(content=normalized_intent),
             ])
             raw = response.content.strip()
             # Strip markdown fences if model adds them
@@ -112,36 +213,38 @@ Rules:
 
             parsed = json.loads(raw)
 
-            # Coerce scope strings to CapabilityScope enum
-            def coerce_scopes(scope_list: list) -> List[CapabilityScope]:
-                result = []
-                for s in scope_list:
-                    try:
-                        result.append(CapabilityScope(s))
-                    except ValueError:
-                        logger.warning(f"Unknown scope '{s}' — defaulting to execute")
-                        result.append(CapabilityScope.EXECUTE)
-                return result
+            mission_type = parsed.get("mission_type")
+            mode = parsed.get("execution_mode", "standard")
+            if mode == "quick":
+                mode = "fast"
 
             steps = []
             for raw_step in parsed.get("steps", []):
+                description = raw_step.get("description") or raw_step.get("instruction", "")
+                assigned_role = raw_step.get("assigned_role") or raw_step.get("role", "coder")
                 steps.append(PlanStep(
-                    description=raw_step.get("description", ""),
-                    assigned_role=raw_step.get("assigned_role", "coder"),
-                    required_scopes=coerce_scopes(raw_step.get("required_scopes", [])),
+                    description=description,
+                    assigned_role=assigned_role,
+                    required_scopes=self._coerce_scopes(raw_step.get("required_scopes", [])),
                 ))
 
+            raw_required_scopes = parsed.get("required_scopes")
+            if not raw_required_scopes:
+                # Legacy schema: single "scope" key.
+                raw_scope = parsed.get("scope")
+                raw_required_scopes = [raw_scope] if raw_scope else ["read_only"]
+
             manifest = MissionManifest(
-                mission_id=parsed.get("mission_id", "mission-001"),
-                intent=parsed.get("intent", user_intent),
+                mission_id=parsed.get("mission_id", f"{(mission_type or 'mission').replace('_', '-')}-001"),
+                intent=parsed.get("intent", normalized_intent),
                 steps=steps,
-                required_scopes=coerce_scopes(parsed.get("required_scopes", ["read_only"])),
+                required_scopes=self._coerce_scopes(raw_required_scopes),
                 estimated_depth=int(parsed.get("estimated_depth", 1)),
                 estimated_agents=int(parsed.get("estimated_agents", 1)),
-                execution_mode=parsed.get("execution_mode", "standard"),
+                execution_mode=mode,
             )
             logger.info(f"📋 Plan ready: '{manifest.mission_id}' ({len(steps)} steps, mode={manifest.execution_mode})")
-            return manifest
+            return self._to_legacy_manifest_dict(manifest, mission_type_hint=mission_type) if legacy_mode else manifest
 
         except json.JSONDecodeError as e:
             logger.error(f"Planner JSON parse failed: {e}. Falling back to safe default plan.")
@@ -149,14 +252,15 @@ Rules:
             logger.error(f"Planner LLM call failed: {e}. Falling back to safe default plan.")
 
         # Safe fallback — treat as simple read-only chat
-        return MissionManifest(
+        fallback_manifest = MissionManifest(
             mission_id="fallback-chat",
-            intent=user_intent,
+            intent=normalized_intent,
             steps=[PlanStep(
                 description="Respond conversationally",
                 assigned_role="planner",
                 required_scopes=[CapabilityScope.READ_ONLY],
             )],
             required_scopes=[CapabilityScope.READ_ONLY],
-            execution_mode="fast",
+            execution_mode="fast",  # type: ignore[arg-type]
         )
+        return self._to_legacy_manifest_dict(fallback_manifest, mission_type_hint="conversation") if legacy_mode else fallback_manifest

@@ -14,7 +14,8 @@ Flow (Sprint 4):
 from __future__ import annotations
 
 import logging
-from src.agents.nia.state import AgentState
+from src.core.schema.states import AgentState
+from src.core.approval.preflight import run_preflight_approval
 
 logger = logging.getLogger("NIA.Nodes.Planner")
 
@@ -64,7 +65,8 @@ async def planner_node(state: AgentState) -> AgentState:
         - ``next``                  -- target node name
     """
     from src.agents.nia.planner import MissionPlanner
-    from src.core.approval.preflight import run_preflight_approval
+    from src.core.schema.mission import MissionManifest
+    from src.core.policy.scopes import CapabilityScope
 
     # ── Extract user input ──────────────────────────────────────────────
     user_input = state.get("user_input", "")
@@ -86,9 +88,40 @@ async def planner_node(state: AgentState) -> AgentState:
     # ── 1. Generate MissionManifest ─────────────────────────────────────
     planner = MissionPlanner()
     manifest = await planner.plan(user_input)
+    if isinstance(manifest, dict):
+        # Compatibility path for legacy dict manifests.
+        mode = manifest.get("execution_mode", "standard")
+        if mode == "quick":
+            mode = "fast"
+        steps = manifest.get("steps", [])
+        mission_steps = []
+        for step in steps:
+            mission_steps.append(
+                {
+                    "description": step.get("instruction", step.get("description", "")),
+                    "assigned_role": step.get("role", step.get("assigned_role", "coder")),
+                    "required_scopes": [CapabilityScope.EXECUTE],
+                }
+            )
+        manifest = MissionManifest.model_validate(
+            {
+                "mission_id": "legacy-001",
+                "intent": user_input,
+                "steps": mission_steps,
+                "required_scopes": [manifest.get("scope", "read_only")],
+                "execution_mode": mode,
+            }
+        )
 
     # ── 2. Pre-Flight Approval Gate ─────────────────────────────────────
-    manifest = await run_preflight_approval(manifest)
+    approved = await run_preflight_approval(manifest)
+    if isinstance(approved, tuple):
+        is_approved, _ = approved
+        manifest.approved = bool(is_approved)
+        if manifest.approved and not manifest.approved_scopes:
+            manifest.approved_scopes = manifest.required_scopes[:]
+    else:
+        manifest = approved
 
     # ── 3. Cancelled? Short-circuit to supervisor ───────────────────────
     if not manifest.approved:
@@ -103,7 +136,12 @@ async def planner_node(state: AgentState) -> AgentState:
         }
 
     # ── 4. Persist manifest in metadata ─────────────────────────────────
-    new_meta = {**state.get("metadata", {}), "manifest": manifest.model_dump()}
+    manifest_dump = manifest.model_dump()
+    new_meta = {
+        **state.get("metadata", {}),
+        "manifest": manifest_dump,
+        "mission_manifest": manifest_dump,  # backward compatibility
+    }
 
     # ── 5. Route: coordinator vs. legacy direct node ────────────────────
     if _needs_coordinator(manifest):

@@ -18,11 +18,11 @@ IMPORT_ALIASES = {
     'tara.tools.interface': 'src.capabilities.interface',
     
     # Desktop tools
-    'tara.tools.desktop.app_launcher': 'src.capabilities.desktop.apps',
-    'tara.tools.desktop.window_ops': 'src.capabilities.desktop.windows',
+    'tara.tools.desktop.app_launcher': 'src.capabilities.desktop.app_launcher',
+    'tara.tools.desktop.window_ops': 'src.capabilities.desktop.window_ops',
     'tara.tools.desktop.screen_ops': 'src.capabilities.desktop.screen',
     'tara.tools.desktop.uia_ops': 'src.capabilities.desktop.uia',
-    'tara.tools.desktop.window_manager': 'src.capabilities.desktop.window_manager',
+    'tara.tools.desktop.window_manager': 'src.capabilities.desktop.window_registry',
     
     # System tools
     'tara.tools.system.file_ops': 'src.capabilities.system.files',

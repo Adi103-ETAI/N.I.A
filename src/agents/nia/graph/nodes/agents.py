@@ -20,8 +20,8 @@ except ImportError:
     SystemMessage = None  # type: ignore
     AIMessage     = None  # type: ignore
 
-from src.agents.nia.state import AgentState, safe_get_content
-from .helpers import get_prompts, asummarize_oldest
+from src.core.schema.states import AgentState, safe_get_content
+from src.core.utils.graph_utils import get_prompts, asummarize_oldest
 
 logger = setup_logger("NIA.Nodes.Agents")
 

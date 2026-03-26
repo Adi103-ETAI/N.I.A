@@ -317,6 +317,11 @@ See [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md) for full migration detail
 - ✅ **Improved Testing** — unit/integration/e2e structure
 - ✅ **ServiceRegistry DI** — Circular dependency detection
 
+### v4.1.0 (Current Progress)
+- ✅ **Phase 1 Complete** — module renames/moves, compatibility shims, and centralized defaults path fixes
+- ✅ **Phase 2 Complete** — new `core/security`, `core/utils`, and split `src/models/*` architecture
+- ⚠️ **Filesystem Consolidation Deferred** — kept intentionally split per project decision
+
 ### v5.0.0 (Future)
 - 🚀 **Multi-Platform** — macOS and Linux support
 - 🌐 **REST API** — Remote control interface

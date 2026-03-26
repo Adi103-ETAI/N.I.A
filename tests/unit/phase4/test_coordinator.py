@@ -10,7 +10,7 @@ import pytest
 from src.core.policy.scopes import CapabilityScope
 from src.core.schema.mission import MissionManifest, PlanStep
 from src.agents.nia.subagents.coordinator import coordinator_router
-from src.agents.nia.subagents.state import create_coordinator_state
+from src.core.schema.states import create_coordinator_state
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ from src.core.schema.coordinator import (
     ContextObservation,
     SwarmLimits,
 )
-from src.agents.nia.subagents.state import create_coordinator_state
+from src.core.schema.states import create_coordinator_state
 
 
 # ---------------------------------------------------------------------------

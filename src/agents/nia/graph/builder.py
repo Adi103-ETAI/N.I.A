@@ -16,7 +16,7 @@ except ImportError:
 logger = setup_logger("NIA.Graph")
 
 # Import state and nodes
-from src.agents.nia.state import (
+from src.core.schema.states import (
     AgentState,
     AGENT_SUPERVISOR,
     AGENT_IRIS,

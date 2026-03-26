@@ -20,7 +20,7 @@ except ImportError:
     HumanMessage = None  # type: ignore
     AIMessage    = None  # type: ignore
 
-from src.agents.nia.state import AgentState, AGENT_END, safe_get_content
+from src.core.schema.states import AgentState, AGENT_END, safe_get_content
 
 logger = setup_logger("NIA.Nodes.Docker")
 

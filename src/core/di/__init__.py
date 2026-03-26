@@ -12,7 +12,7 @@ Re-exports:
 Backward-compat:
     ``from src.core.registry import ServiceRegistry``  also works.
 """
-from src.core.di.registry import (
+from src.core.di.service_registry import (
     ServiceRegistry,
     ServiceInfo,
     ServiceNotFoundError,

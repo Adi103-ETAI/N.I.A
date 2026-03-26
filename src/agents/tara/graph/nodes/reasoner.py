@@ -14,13 +14,13 @@ from langchain_core.messages import BaseMessage, SystemMessage
 
 from src.core.logger import setup_logger
 from src.core.config import get_settings
-from src.agents.nia.state import safe_get_content
+from src.core.schema.states import safe_get_content
 from src.agents.tara.graph.state import TaraState, TaraStateUpdate
 from src.agents.tara.graph.prompts import TARA_SYSTEM_PROMPT, build_tara_context
 from src.capabilities.interface import get_tara_tools
 from src.models.manager import get_smart_model
 
-from .utils import _parse_llama_tool_calls
+from src.core.utils.text_utils import _parse_llama_tool_calls
 
 logger = setup_logger("TARA.Nodes.Reasoner")
 settings = get_settings()

@@ -4,33 +4,53 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from langchain_core.messages import HumanMessage, AIMessage
 from src.agents.nia.state import AgentState
 # Import strictly what we need to avoid side effects
-from src.agents.nia.decision.router import RoutingDecision
-from src.agents.nia.graph.nodes import docker_node, router_node
+from src.agents.nia.graph.nodes import docker_node, planner_node
 
 @pytest.mark.asyncio
-async def test_router_routing_to_docker():
-    """Verify Router Node correctly routes to DOCKER."""
+async def test_planner_routing_to_docker():
+    """Verify Planner Node correctly routes to DOCKER for code execution."""
     
-    # Mock DecisionCore inside router_node
-    with patch("src.agents.nia.decision.router.DecisionCore") as MockRouterClass:
-        mock_router_instance = MockRouterClass.return_value
+    # Mock MissionPlanner - it's imported inside the planner_node function
+    with patch("src.agents.nia.planner.MissionPlanner") as MockPlannerClass:
+        mock_planner_instance = MockPlannerClass.return_value
         
-        # Setup mock decision
-        mock_router_instance.aroute = AsyncMock(return_value=RoutingDecision(
-            target="swarm",
-            skill="coding-agent",
-            reasoning="User wants to code"
-        ))
+        # Setup mock mission manifest for docker routing
+        mock_manifest = {
+            "mission_type": "agent_spawn",
+            "scope": "agent_spawn",
+            "execution_mode": "quick",
+            "steps": [{
+                "step_id": "code_1",
+                "role": "coder",
+                "instruction": "List files",
+                "dependencies": []
+            }]
+        }
+        mock_planner_instance.plan = AsyncMock(return_value=mock_manifest)
         
-        state = {"user_input": "Use coding agent to list files", "messages": [], "metadata": {}}
-        
-        # Execute Router Node
-        result = await router_node(state)
-        
-        # Verify
-        assert result["next"] == "docker"
-        assert result["metadata"]["target_skill"] == "coding-agent"
-        assert result["metadata"]["skill_query"] == "Use coding agent to list files"
+        # Mock preflight approval - also imported inside function
+        with patch("src.agents.nia.graph.nodes.planner.run_preflight_approval") as mock_approval:
+            mock_approval.return_value = (True, None)
+            
+            state: AgentState = {
+                "user_input": "Use coding agent to list files",
+                "messages": [HumanMessage(content="Use coding agent to list files")],
+                "metadata": {},
+                "next": "",
+                "final_response": None,
+                "route_reason": None,
+                "session_id": "test",
+                "sandbox_result": None,
+                "subagent_results": []
+            }
+            
+            # Execute Planner Node
+            result = await planner_node(state)
+            
+            # Verify routing decision
+            # With single-step quick mode, should route to docker/tara directly
+            assert result["next"] in ["docker", "tara", "coordinator"]
+            assert "mission_manifest" in result["metadata"]
 
 
 

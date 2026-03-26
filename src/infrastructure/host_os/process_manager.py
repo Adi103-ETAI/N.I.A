@@ -143,7 +143,7 @@ class HostProcessManager:
         # Step 1: AppIndex Oracle — resolve to exe filename ONLY
         # =====================================================================
         try:
-            from src.infrastructure.host_os.app_index import get_app_index
+            from src.capabilities.desktop.app_discovery import get_app_index
             app_index = get_app_index()
             entry = app_index.search(query_lower)
 

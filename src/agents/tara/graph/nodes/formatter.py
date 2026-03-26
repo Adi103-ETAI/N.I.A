@@ -23,7 +23,7 @@ from langchain_core.messages import AIMessage
 
 from src.core.logger import setup_logger
 from src.core.config import get_settings
-from src.agents.nia.state import safe_get_content
+from src.core.schema.states import safe_get_content
 from src.agents.tara.graph.state import TaraState, TaraNextStep
 
 logger = setup_logger("TARA.Nodes.Formatter")
