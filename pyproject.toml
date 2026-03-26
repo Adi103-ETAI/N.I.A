@@ -7,9 +7,9 @@ requires-python = ">=3.11"
 dependencies = [
     "aioconsole>=0.8.1",
     "aiosqlite>=0.21.0",
-    "appopener>=1.7",
+    "appopener>=1.7; sys_platform == 'win32'",
     "chromadb>=0.6.3",
-    "comtypes>=1.4.10",
+    "comtypes>=1.4.10; sys_platform == 'win32'",
     "duckduckgo-search>=7.3",
     "edge-tts>=7.0.0",
     "langchain>=0.3.17",
@@ -20,7 +20,7 @@ dependencies = [
     "langchain-ollama>=0.2.3",
     "langchain-openai>=0.3.4",
     "langgraph>=0.2.70",
-    "mss>=10.0.0",
+    "mss>=10.0.0; sys_platform == 'win32'",
     "networkx>=3.4.2",
     "numpy>=2.2.2",
     "opencv-python>=4.11.0.86",
@@ -28,26 +28,29 @@ dependencies = [
     "playwright>=1.50.0",
     "prompt-toolkit>=3.0.50",
     "psutil>=7.0.0",
-    "pyautogui>=0.9.54",
-    "pycaw>=20240818",
+    "pyautogui>=0.9.54; sys_platform == 'win32'",
+    "pycaw>=20240818; sys_platform == 'win32'",
     "pydantic-settings>=2.7.1",
-    "pygetwindow>=0.0.9",
+    "pygetwindow>=0.0.9; sys_platform == 'win32'",
     "pygame>=2.6.1",
     "pyperclip>=1.9.0",
     "python-dotenv>=1.0.1",
-    "pywin32>=308",
+    "pywin32>=308; sys_platform == 'win32'",
     "requests>=2.32.3",
     "send2trash>=1.8.3",
     "sounddevice>=0.5.1",
     "vosk>=0.3.45",
     "watchdog>=6.0.0",
-    "winsdk>=1.0.0b10",
+    "winsdk>=1.0.0b10; sys_platform == 'win32'",
     "langgraph-checkpoint-sqlite>=3.0.3",
     "docker>=7.1.0",
 ]
 
 [project.scripts]
 nia = "main:main"
+
+[tool.uv]
+default-groups = ["dev"]
 
 [build-system]
 requires = ["hatchling"]

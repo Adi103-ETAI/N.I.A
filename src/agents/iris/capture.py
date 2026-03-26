@@ -2,23 +2,34 @@
 
 Handles raw image capture from screen and webcam.
 Does NOT include analysis, OCR, or face recognition - just capture and save.
+Cross-platform support: Windows, Linux, macOS
 
 Usage:
     from src.agents.iris.capture import capture_screen, capture_webcam
-    
+
     # Take a screenshot
     path = capture_screen(delay=1.0)
-    
+
     # Capture from webcam
     path = capture_webcam()
 """
 from __future__ import annotations
 
 import os
+import sys
 import time
 from datetime import datetime
 
 from src.agents.tara.protocols import tara_tool
+
+# =============================================================================
+# Platform Detection
+# =============================================================================
+
+_PLATFORM = sys.platform
+_IS_WINDOWS = sys.platform == "win32"
+_IS_LINUX = sys.platform.startswith("linux")
+_IS_MACOS = sys.platform == "darwin"
 
 # Optional imports with graceful fallback
 try:
@@ -116,43 +127,53 @@ def capture_screen(delay: float = 0.5, **kwargs) -> str:
     description="Capture a single frame from the webcam and save it. Returns the file path."
 )
 def capture_webcam(**kwargs) -> str:
-    """Capture a single frame from the webcam.
-    
+    """Capture a single frame from the webcam (cross-platform).
+
     Args:
         **kwargs: Ignored (catches LLM hallucinated args).
-        
+
     Returns:
         Absolute path to the saved image, or error message.
     """
     if not _HAS_CV2:
         return "Error: OpenCV not installed. Run: uv add opencv-python"
-    
+
     cap = None
     try:
-        # Try to open the default camera (index 0)
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)  # CAP_DSHOW for Windows
-        
+        # Select appropriate video backend based on platform
+        if _IS_WINDOWS:
+            # Windows: use DirectShow
+            cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        elif _IS_LINUX:
+            # Linux: use V4L2 (Video4Linux2)
+            cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+        elif _IS_MACOS:
+            # macOS: use default backend (AVFoundation)
+            cap = cv2.VideoCapture(0)
+        else:
+            cap = cv2.VideoCapture(0)
+
         if not cap.isOpened():
             return "Error: Camera unavailable. It may be in use by Sentry or another app."
-        
+
         # Allow camera to warm up
         time.sleep(0.3)
-        
+
         # Read a single frame
         ret, frame = cap.read()
-        
+
         if not ret or frame is None:
             return "Error: Failed to capture frame from webcam."
-        
+
         # Generate filename and save
         filepath = _generate_filename("webcam", "jpg")
         cv2.imwrite(filepath, frame)
-        
+
         return filepath
-        
+
     except Exception as e:
         return f"Error capturing webcam: {e}"
-        
+
     finally:
         # Always release the camera
         if cap is not None:

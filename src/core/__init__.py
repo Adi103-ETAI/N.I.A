@@ -10,9 +10,11 @@ from typing import TYPE_CHECKING
 # 🌊 LAZY LOADING: Only declare __all__ with eventual exports
 __all__ = [
     "MemoryManager",
-    "NIAAssistant", 
+    "NIAAssistant",
     "check_dependencies",
     "print_system_status",
+    "get_features",
+    "get_os_context",
 ]
 
 # =============================================================================
@@ -30,7 +32,7 @@ if TYPE_CHECKING:
 
 def __getattr__(name: str):
     """Lazy loading of heavy modules on first access.
-    
+
     This enables:
     - Fast `from src.core.logger import setup_logger` (no memory/engine loaded)
     - `from core import MemoryManager` still works (loads on access)
@@ -47,6 +49,12 @@ def __getattr__(name: str):
     elif name == "print_system_status":
         from .health import print_system_status
         return print_system_status
+    elif name == "get_features":
+        from .features import get_features
+        return get_features
+    elif name == "get_os_context":
+        from .os import get_os_context
+        return get_os_context
     raise AttributeError(f"module 'core' has no attribute '{name}'")
 
 

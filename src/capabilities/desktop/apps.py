@@ -5,12 +5,17 @@ STRICT SCOPE: Start, Kill, List Processes.
 CONSTRAINTS: No Window manipulation. No generic 'app_control'.
 RETURNS: PIDs and Process Objects only.
 
-TARA 2.0 Atomic Tool Module - ASYNC UPDATE.
+TARA 2.0 Atomic Tool Module - ASYNC UPDATE - Cross-platform (Windows, Linux, macOS).
+
+Platform Support:
+    - Windows: tasklist, taskkill, Start Menu integration
+    - Linux: ps, kill, xdg-open, /usr/bin direct
+    - macOS: ps, kill, open, LaunchServices
 
 Verification Logic (Trust But Verify):
     - launch_app(): Uses PID tracking + window polling to verify launch success.
       Takes pre/post window snapshot, waits for visible HWND, kills zombie PIDs.
-    - kill_app(): Verifies process termination via tasklist before returning.
+    - kill_app(): Verifies process termination via ps/tasklist before returning.
 
 Error Handling:
     - All tools return emoji-prefixed strings (✅/❌/⚠️) for LLM parsing.
@@ -28,6 +33,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
@@ -40,9 +46,19 @@ from .window_manager import get_registry
 logger = setup_logger("TARA.Tools.AppLauncher")
 
 # =============================================================================
-# Optional Dependencies
+# Platform Detection
 # =============================================================================
 
+_PLATFORM = sys.platform
+_IS_WINDOWS = sys.platform == "win32"
+_IS_LINUX = sys.platform.startswith("linux")
+_IS_MACOS = sys.platform == "darwin"
+
+# =============================================================================
+# Optional Dependencies (Platform-Specific)
+# =============================================================================
+
+# Windows-specific
 try:
     import pygetwindow as gw
     _HAS_PYGETWINDOW = True
@@ -148,6 +164,147 @@ def _get_window_title(hwnd: int) -> str:
 
 
 # =============================================================================
+# Cross-Platform Process Management Helpers
+# =============================================================================
+
+async def _kill_process_by_pid_windows(pid: int) -> bool:
+    """Kill process by PID on Windows."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "taskkill", "/F", "/PID", str(pid),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        returncode = (await proc.communicate())[0] if await proc.wait() is not None else -1
+        return returncode == 0
+    except Exception:
+        return False
+
+
+async def _kill_process_by_pid_unix(pid: int) -> bool:
+    """Kill process by PID on Linux/macOS."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "kill", "-9", str(pid),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        returncode = (await proc.communicate())[0] if await proc.wait() is not None else -1
+        return returncode == 0
+    except Exception:
+        return False
+
+
+async def _kill_process_by_name_windows(exe_name: str) -> bool:
+    """Kill process by name on Windows."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "taskkill", "/F", "/IM", exe_name, "/T",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        await proc.communicate()
+        return True
+    except Exception:
+        return False
+
+
+async def _kill_process_by_name_unix(app_name: str) -> bool:
+    """Kill process by name on Linux/macOS using pkill."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "pkill", "-9", "-f", app_name,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        await proc.communicate()
+        return True
+    except Exception:
+        return False
+
+
+async def _list_processes_windows(filter_name: Optional[str] = None) -> List[str]:
+    """List running processes on Windows."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tasklist", "/FO", "CSV", "/NH",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        output = stdout.decode('utf-8', errors='ignore')
+
+        lines = output.strip().split("\n")
+        processes = []
+
+        for line in lines[:50]:  # Limit output
+            parts = line.replace('"', '').split(",")
+            if len(parts) >= 2:
+                name, pid = parts[0], parts[1]
+                if filter_name is None or filter_name.lower() in name.lower():
+                    processes.append(f"{name} (PID: {pid})")
+
+        return processes
+    except Exception as e:
+        logger.error(f"Failed to list processes on Windows: {e}")
+        return []
+
+
+async def _list_processes_unix(filter_name: Optional[str] = None) -> List[str]:
+    """List running processes on Linux/macOS."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ps", "aux",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        output = stdout.decode('utf-8', errors='ignore')
+
+        lines = output.strip().split("\n")[1:]  # Skip header
+        processes = []
+
+        for line in lines[:50]:  # Limit output
+            parts = line.split()
+            if len(parts) >= 11:
+                pid = parts[1]
+                name = " ".join(parts[10:])  # Rest is command/name
+                if filter_name is None or filter_name.lower() in name.lower():
+                    processes.append(f"{name} (PID: {pid})")
+
+        return processes
+    except Exception as e:
+        logger.error(f"Failed to list processes on Unix: {e}")
+        return []
+
+
+async def _is_process_running_windows(exe_name: str) -> bool:
+    """Check if process is running on Windows."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tasklist", "/FI", f"IMAGENAME eq {exe_name}",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        output = stdout.decode('utf-8', errors='ignore')
+        return exe_name.lower() in output.lower()
+    except Exception:
+        return False
+
+
+async def _is_process_running_unix(app_name: str) -> bool:
+    """Check if process is running on Linux/macOS."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "pgrep", "-f", app_name,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        returncode = await proc.wait()
+        return returncode == 0
+    except Exception:
+        return False
 from ..decorators import security_level
 
 # =============================================================================
@@ -362,91 +519,90 @@ async def launch_app(app_name: str) -> str:
 
 async def kill_app(app_name: str) -> str:
     """
-    Kill an application by name.
-    
+    Kill an application by name (cross-platform).
+
     ONE ACTION: Terminate process(es) matching the app name.
-    
+
     Args:
         app_name: Application name or alias (e.g., "notepad", "notepad_1").
-        
+
     Returns:
         Success or failure message.
     """
     if not app_name:
         return "❌ Error: app_name is required"
-    
+
     registry = get_registry()
     app_lower = app_name.lower().strip()
-    
-    # Check if it's a registry alias
+
+    # Check if it's a registry alias first
     if app_lower in registry:
         info = registry.get(app_lower)
         if info and info.pid:
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    "taskkill", "/F", "/PID", str(info.pid),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
-                await proc.communicate()
-                
-                registry.deregister(app_lower)
-                return f"💀 Killed: {app_lower} (PID {info.pid})"
+                # Use platform-specific kill
+                if _IS_WINDOWS:
+                    success = await _kill_process_by_pid_windows(info.pid)
+                else:
+                    success = await _kill_process_by_pid_unix(info.pid)
+
+                if success:
+                    registry.deregister(app_lower)
+                    return f"💀 Killed: {app_lower} (PID {info.pid})"
+                else:
+                    return f"❌ Failed to kill PID {info.pid}"
             except Exception as e:
                 return f"❌ Failed to kill PID {info.pid}: {e}"
         # Fallback: deregister anyway
         registry.deregister(app_lower)
-    
-    # Kill by exe name
+
+    # Kill by name (cross-platform)
     clean_name = app_lower.replace(".exe", "")
-    exe_name = f"{clean_name}.exe"
-    
-    # Check if process is running
+
+    # Check if process is running first
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "tasklist", "/FI", f"IMAGENAME eq {exe_name}",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        stdout, _ = await proc.communicate()
-        output = stdout.decode('utf-8', errors='ignore')
-        
-        if exe_name.lower() not in output.lower():
+        if _IS_WINDOWS:
+            exe_name = f"{clean_name}.exe"
+            is_running = await _is_process_running_windows(exe_name)
+        else:
+            is_running = await _is_process_running_unix(clean_name)
+
+        if not is_running:
             return f"⚠️ {clean_name} is not running"
     except Exception:
         pass
-    
+
     # Kill the process
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "taskkill", "/F", "/IM", exe_name, "/T",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        await proc.communicate()
-        
-        # Verify it's dead
-        await asyncio.sleep(0.5)
-        
-        proc_verify = await asyncio.create_subprocess_exec(
-            "tasklist", "/FI", f"IMAGENAME eq {exe_name}",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        stdout, _ = await proc_verify.communicate()
-        verify_output = stdout.decode('utf-8', errors='ignore')
-        
-        if exe_name.lower() not in verify_output.lower():
-            # Deregister any aliases for this app
-            for alias in list(registry.list_aliases()):
-                info = registry.get(alias)
-                if info and info.app_name.lower() == app_lower:
-                    registry.deregister(alias)
-            
-            return f"💀 Killed: {clean_name}"
+        if _IS_WINDOWS:
+            exe_name = f"{clean_name}.exe"
+            success = await _kill_process_by_name_windows(exe_name)
         else:
-            return f"❌ {clean_name} refused to die (try running as admin)"
-            
+            success = await _kill_process_by_name_unix(clean_name)
+
+        if success:
+            # Verify it's dead
+            await asyncio.sleep(0.5)
+
+            if _IS_WINDOWS:
+                exe_name = f"{clean_name}.exe"
+                is_still_running = await _is_process_running_windows(exe_name)
+            else:
+                is_still_running = await _is_process_running_unix(clean_name)
+
+            if not is_still_running:
+                # Deregister any aliases for this app
+                for alias in list(registry.list_aliases()):
+                    info = registry.get(alias)
+                    if info and info.app_name.lower() == app_lower:
+                        registry.deregister(alias)
+
+                return f"💀 Killed: {clean_name}"
+            else:
+                return f"❌ {clean_name} refused to die (try running as admin/sudo)"
+        else:
+            return f"❌ Failed to kill {clean_name}"
+
     except Exception as e:
         return f"❌ Failed to kill {clean_name}: {e}"
 
@@ -457,40 +613,27 @@ async def kill_app(app_name: str) -> str:
 
 async def list_processes(filter_name: Optional[str] = None) -> str:
     """
-    List running processes, optionally filtered by name.
-    
+    List running processes, optionally filtered by name (cross-platform).
+
     ONE ACTION: Read process list from OS.
-    
+
     Args:
         filter_name: Optional filter string for process names.
-        
+
     Returns:
         Formatted list of processes.
     """
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "tasklist", "/FO", "CSV", "/NH",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        stdout, _ = await proc.communicate()
-        output = stdout.decode('utf-8', errors='ignore')
-        
-        lines = output.strip().split("\n")
-        processes = []
-        
-        for line in lines[:50]:  # Limit output
-            parts = line.replace('"', '').split(",")
-            if len(parts) >= 2:
-                name, pid = parts[0], parts[1]
-                if filter_name is None or filter_name.lower() in name.lower():
-                    processes.append(f"{name} (PID: {pid})")
-        
+        if _IS_WINDOWS:
+            processes = await _list_processes_windows(filter_name)
+        else:
+            processes = await _list_processes_unix(filter_name)
+
         if not processes:
-            return "No matching processes found."
-        
-        return f"Running processes ({len(processes)}):\n" + "\n".join(processes[:20])
-        
+            return "📋 No matching processes found."
+
+        return f"📋 Running processes ({len(processes)}):\n" + "\n".join(processes[:20])
+
     except Exception as e:
         return f"❌ Failed to list processes: {e}"
 

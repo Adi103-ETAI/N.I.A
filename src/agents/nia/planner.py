@@ -15,11 +15,40 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from src.core.schema.mission import MissionManifest, PlanStep
 from src.core.policy.scopes import CapabilityScope
+from src.core.config.prompts import load_prompt
 
 logger = logging.getLogger("NIA.Planner")
 
 
-_PLANNING_SYSTEM_PROMPT = """\
+class MissionPlanner:
+    """LLM-driven planner that turns user intent into a MissionManifest."""
+
+    def __init__(self):
+        self._llm = None
+        self._planning_prompt = None
+
+    @property
+    def llm(self):
+        if not self._llm:
+            from src.models.manager import get_smart_model
+            self._llm = get_smart_model(temperature=0.0)
+        return self._llm
+
+    @property
+    def planning_prompt(self) -> str:
+        """Load planning prompt from markdown file (cached)."""
+        if self._planning_prompt is None:
+            try:
+                self._planning_prompt = load_prompt("planner")
+                logger.info("✅ Loaded planner prompt from markdown")
+            except FileNotFoundError:
+                logger.warning("Planner prompt file not found — using fallback")
+                self._planning_prompt = self._get_fallback_prompt()
+        return self._planning_prompt
+
+    def _get_fallback_prompt(self) -> str:
+        """Fallback prompt if markdown file not available."""
+        return """\
 You are N.I.A.'s Strategic Planner. Your job is to read the user's intent and
 produce a structured execution plan as a JSON object.
 
@@ -39,26 +68,18 @@ Output ONLY a raw JSON object matching this schema:
 Scope values must be one of: read_only, write, execute, network, agent_spawn, destructive
 
 Rules:
-- Be conservative: if a scope might be needed, include it.
-- fast = 1-2 steps, simple read/write tasks.
+- Only include scopes that are DEFINITELY needed, not "might be needed".
+- read_only: For viewing information, analysis, questions.
+- write: For creating/modifying files, saving results.
+- execute: For running code or scripts.
+- network: For internet requests and API calls.
+- agent_spawn: For delegating to sub-agents.
+- destructive: For delete/remove operations.
+- fast = 1-2 steps, simple tasks.
 - standard = 3-5 steps, typical tasks.
 - deep = 6+ steps, complex multi-agent research and code tasks.
 - Do NOT include any text outside the JSON object.
 """
-
-
-class MissionPlanner:
-    """LLM-driven planner that turns user intent into a MissionManifest."""
-
-    def __init__(self):
-        self._llm = None
-
-    @property
-    def llm(self):
-        if not self._llm:
-            from src.models.manager import get_smart_model
-            self._llm = get_smart_model(temperature=0.0)
-        return self._llm
 
     async def plan(self, user_intent: str) -> MissionManifest:
         """Turn raw user intent into a structured MissionManifest.
@@ -80,7 +101,7 @@ class MissionPlanner:
 
         try:
             response = await self.llm.ainvoke([
-                SystemMessage(content=_PLANNING_SYSTEM_PROMPT),
+                SystemMessage(content=self.planning_prompt),
                 HumanMessage(content=user_intent),
             ])
             raw = response.content.strip()
