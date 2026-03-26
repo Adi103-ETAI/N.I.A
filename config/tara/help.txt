@@ -1,7 +1,0 @@
-N.I.A. Command List:
-- exit / quit      : Shutdown System
-- help             : Show this menu
-- mic on / off     : Toggle Voice Input
-- iris on / off    : Toggle Vision Sentry
-- stop speaking    : Silence TTS
-- clear            : Clear Terminal

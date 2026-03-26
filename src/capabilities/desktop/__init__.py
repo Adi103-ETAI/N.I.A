@@ -1,9 +1,25 @@
 # src/capabilities/desktop/__init__.py
-"""Desktop automation capabilities."""
+"""Desktop Automation Capabilities.
 
-from .apps import *
-from .windows import *
+Provides all host-side desktop control tools used by TARA.
+Imports are star-exported so the executor node can discover them via
+``get_tara_tools()``.
+
+Modules:
+    apps.py          — Application launching (``launch_app``)
+    windows.py       — Window management (focus, resize, move)
+    screen.py        — Screen capture and inspection
+    uia.py           — UIAutomation element interaction (click by text/role)
+    input.py         — Keyboard & mouse input (``type_text``, ``click``, hotkeys)
+    window_manager.py — Named window registry for multi-window workflows
+
+Security: most tools carry ``@security_level("host_standard")``;
+file-destructive operations are tagged ``"high_risk"``.
+"""
+
+from .app_launcher import *
+from .window_ops import *
 from .screen import *
 from .uia import *
 from .input import *
-from .window_manager import *
+from .window_registry import *

@@ -1,11 +1,15 @@
 # src/agents/__init__.py
-"""Agent modules for N.I.A. system.
+"""N.I.A. Agent Layer — All Specialist Agents.
+
+The N.I.A. system is composed of specialized agents, each with a distinct
+role.  This package provides lazy access to each agent to avoid circular
+imports and heavy optional dependencies on startup.
 
 Agents:
-- nia: Supervisor agent that coordinates all other agents
-- tara: Tool execution agent
-- iris: Vision/sentry agent
-- nola: Voice I/O agent (requires audio dependencies)
+    nia      — Supervisor & LangGraph orchestrator (the "General")
+    tara     — Tool-use specialist for desktop/system/web automation
+    iris     — Vision specialist powered by a multimodal LLM
+    nola     — Voice I/O manager (requires audio hardware + dependencies)
 """
 
 # Lazy imports to avoid circular dependency and missing optional deps

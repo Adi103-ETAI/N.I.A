@@ -1,504 +1,27 @@
-"""Model Manager for NIA - Multi-Provider LLM Factory.
-
-This module provides a clean, decoupled interface for working with multiple
-LLM providers (NVIDIA NIM, OpenAI, Ollama, Groq) through a unified API.
-
-v2.5.2 "Velocity" - Key Features:
-    - Hot-Swap Provider Switching: Change active provider at runtime via
-      `set_active_provider()`. All agents automatically use the new provider.
-    - SafeLLM Circuit Breaker: All models are wrapped with automatic retry
-      and fallback logic. If Provider A fails (429), switches to Provider B.
-    - Dynamic Access Pattern: Agents use `@property` to fetch models on each
-      access, enabling seamless hot-swap without restart.
-
-Data Flow:
-    User -> Supervisor -> SafeLLM -> ModelManager -> [NVIDIA|OpenAI|Groq|Ollama]
-                            ^
-                            |__ Circuit Breaker: Auto-fallback on 429/503
-
-Architecture:
-    ┌─────────────────────────────────────────────────────────────────┐
-    │                       ModelManager                              │
-    │                                                                 │
-    │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-    │  │ ModelConfig │  │ ModelFactory│  │      Model Presets      │  │
-    │  │ (API Keys)  │  │ (Providers) │  │ smart/fast/vision/embed │  │
-    │  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
-    │         │                │                     │                │
-    │         ▼                ▼                     ▼                │
-    │  ┌───────────────────────────────────────────────────────────┐  │
-    │  │               SafeLLM Wrapped Chat Models                 │  │
-    │  │  ChatNVIDIA  │  ChatOpenAI  │  ChatOllama  │  ChatGroq    │  │
-    │  └───────────────────────────────────────────────────────────┘  │
-    └─────────────────────────────────────────────────────────────────┘
-
-Usage:
-    from src.models import ModelManager
-    
-    manager = ModelManager()
-    
-    # Use presets (all wrapped with SafeLLM)
-    smart = manager.get_smart_model()   # Best quality
-    fast = manager.get_fast_model()     # Fastest response
-    vision = manager.get_vision_model() # Image understanding
-    
-    # Hot-swap provider at runtime
-    manager.set_active_provider("openai")  # All agents now use OpenAI
-    
-    # Or get specific provider/model
-    model = manager.get_chat_model("nvidia", "meta/llama-3.1-70b-instruct")
-    response = model.invoke("Hello!")
-
-Version: 2.5.2
-"""
+"""Model manager compatibility facade and orchestration API."""
 from __future__ import annotations
 
 import base64
-import json
 import mimetypes
-import os
-from dataclasses import dataclass, field
-from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from src.core.logger import setup_logger
+
 from src.core.config import settings
+from src.core.logger import setup_logger
+from .config import ModelConfig
+from .embeddings import get_embedding_function
+from .factory import ModelFactory
+from .presets import (
+    DEFAULT_PROVIDER,
+    MODEL_CATALOG,
+    VALID_PROVIDERS,
+    ModelSpec,
+    Provider,
+)
 
-# v2.5.2: SafeLLM import (deferred to avoid circular import)
-# SafeLLM is imported lazily in _wrap_with_safety()
-
-# Load environment variables
 load_dotenv()
-
-# Configure module logger
 logger = setup_logger("Models")
-
-def _load_general_config() -> dict:
-    config_path = Path(__file__).resolve().parents[2] / "config" / "nia" / "general.json"
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.warning(f"Failed to load general.json: {e}")
-        return {}
-
-_GENERAL_CONFIG = _load_general_config()
-
-# Default fallback provider (NVIDIA supremacy)
-DEFAULT_PROVIDER = _GENERAL_CONFIG.get("DEFAULT_PROVIDER", "nvidia")
-
-# Valid providers for runtime switching
-VALID_PROVIDERS = frozenset(_GENERAL_CONFIG.get("VALID_PROVIDERS", ["nvidia", "openai", "groq", "ollama"]))
-
-# v2.5.2: Enable/disable SafeLLM wrapping (for testing/debugging)
-ENABLE_SAFE_LLM = True
-
-
-# =============================================================================
-# Provider Enum
-# =============================================================================
-
-class Provider(str, Enum):
-    """Supported LLM providers."""
-    NVIDIA = "nvidia"
-    OPENAI = "openai"
-    OLLAMA = "ollama"
-    GROQ = "groq"
-    HUGGINGFACE = "huggingface"
-    LOCAL = "local"
-
-
-# =============================================================================
-# Model Definitions
-# =============================================================================
-
-@dataclass
-class ModelSpec:
-    """Specification for an LLM model."""
-    provider: Provider
-    model_name: str
-    display_name: str
-    context_window: int = 4096
-    supports_vision: bool = False
-    supports_function_calling: bool = False
-    is_local: bool = False
-    cost_tier: str = "medium"  # 'free', 'low', 'medium', 'high'
-    speed_tier: str = "medium"  # 'fast', 'medium', 'slow'
-    
-
-# =============================================================================
-# Catalog Loader (Dynamic from JSON)
-# =============================================================================
-
-def _load_catalog() -> Dict[str, ModelSpec]:
-    """Load model catalog from external JSON file.
-    
-    Returns:
-        Dictionary mapping model keys to ModelSpec objects.
-        
-    Raises:
-        FileNotFoundError: If catalog.json is missing.
-        json.JSONDecodeError: If catalog.json has invalid JSON.
-    """
-    catalog_path = Path(__file__).resolve().parents[2] / "config" / "nia" / "models.json"
-    
-    if not catalog_path.exists():
-        logger.warning("models.json not found, using empty catalog")
-        return {}
-    
-    with open(catalog_path, "r", encoding="utf-8") as f:
-        raw_catalog = json.load(f)
-    
-    # Convert raw dicts to ModelSpec objects
-    catalog = {}
-    for key, spec_dict in raw_catalog.items():
-        catalog[key] = _spec_from_dict(spec_dict)
-    
-    logger.debug("Loaded %d models from src.models.json", len(catalog))
-    return catalog
-
-
-def _spec_from_dict(data: dict) -> ModelSpec:
-    """Convert a dictionary to a ModelSpec object.
-    
-    Args:
-        data: Dictionary with model specification fields.
-        
-    Returns:
-        ModelSpec instance.
-    """
-    return ModelSpec(
-        provider=Provider(data["provider"]),
-        model_name=data["model_name"],
-        display_name=data["display_name"],
-        context_window=data.get("context_window", 4096),
-        supports_vision=data.get("supports_vision", False),
-        supports_function_calling=data.get("supports_function_calling", False),
-        is_local=data.get("is_local", False),
-        cost_tier=data.get("cost_tier", "medium"),
-        speed_tier=data.get("speed_tier", "medium"),
-    )
-
-
-# Load catalog at module level (cached)
-MODEL_CATALOG: Dict[str, ModelSpec] = _load_catalog()
-
-
-# =============================================================================
-# Model Configuration
-# =============================================================================
-
-@dataclass
-class ModelConfig:
-    """Configuration for model providers and settings.
-    
-    Loads API keys from centralized settings (secure SecretStr).
-    """
-    # API Keys (Securely fetched from settings)
-    nvidia_api_key: Optional[str] = field(default_factory=lambda: settings.NVIDIA_API_KEY.get_secret_value() if settings.NVIDIA_API_KEY else None)
-    openai_api_key: Optional[str] = field(default_factory=lambda: settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else None)
-    groq_api_key: Optional[str] = field(default_factory=lambda: settings.GROQ_API_KEY.get_secret_value() if settings.GROQ_API_KEY else None)
-    huggingface_api_key: Optional[str] = field(default_factory=lambda: settings.HUGGINGFACE_API_KEY.get_secret_value() if settings.HUGGINGFACE_API_KEY else None)
-    
-    # Endpoints
-    ollama_base_url: str = field(default_factory=lambda: os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
-    nvidia_base_url: str = field(default_factory=lambda: os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"))
-    
-    # Default model settings
-    default_temperature: float = 0.7
-    default_max_tokens: int = 2048
-    default_timeout: int = 60
-    
-    # Provider preferences (ordered by priority)
-    preferred_providers: List[str] = field(default_factory=lambda: ["nvidia", "openai", "ollama"])
-    
-    # Preset model selections
-    smart_model: str = "nvidia/llama-3.1-70b"
-    fast_model: str = "nvidia/llama-3.1-8b"
-    vision_model: str = "nvidia/llama-3.2-11b-vision"
-    embedding_model: str = "openai/text-embedding-3-small"
-    
-    def get_api_key(self, provider: Union[str, Provider]) -> Optional[str]:
-        """Get API key for a provider."""
-        provider_str = provider.value if isinstance(provider, Provider) else provider.lower()
-        return {
-            "nvidia": self.nvidia_api_key,
-            "openai": self.openai_api_key,
-            "groq": self.groq_api_key,
-            "huggingface": self.huggingface_api_key,
-        }.get(provider_str)
-    
-    def has_api_key(self, provider: Union[str, Provider]) -> bool:
-        """Check if API key is available for provider."""
-        return bool(self.get_api_key(provider))
-    
-    def get_available_providers(self) -> List[str]:
-        """Get list of providers with valid API keys."""
-        available = []
-        for provider in ["nvidia", "openai", "groq"]:
-            if self.has_api_key(provider):
-                available.append(provider)
-        # Ollama doesn't need API key
-        available.append("ollama")
-        return available
-
-
-# =============================================================================
-# Model Factory
-# =============================================================================
-
-class ModelFactory:
-    """Factory for creating LangChain chat models.
-    
-    Supports multiple providers with automatic fallback.
-    
-    Example:
-        factory = ModelFactory()
-        model = factory.get_chat_model("nvidia", "meta/llama-3.1-70b-instruct")
-        response = model.invoke("Hello!")
-    """
-    
-    # Track available providers
-    _available_providers: Dict[str, bool] = {}
-    
-    def __init__(self, config: Optional[ModelConfig] = None) -> None:
-        """Initialize the factory.
-        
-        Args:
-            config: Model configuration. Uses defaults if not provided.
-        """
-        self.config = config or ModelConfig()
-        self._check_providers()
-    
-    def _check_providers(self) -> None:
-        """Check which providers are available."""
-        # Check NVIDIA
-        try:
-            self._available_providers["nvidia"] = True
-        except ImportError:
-            self._available_providers["nvidia"] = False
-            logger.debug("langchain-nvidia-ai-endpoints not installed")
-        
-        # Check OpenAI
-        try:
-            self._available_providers["openai"] = True
-        except ImportError:
-            self._available_providers["openai"] = False
-            logger.debug("langchain-openai not installed")
-        
-        # Check Ollama
-        try:
-            self._available_providers["ollama"] = True
-        except ImportError:
-            # Try alternative import
-            try:
-                self._available_providers["ollama"] = True
-            except ImportError:
-                self._available_providers["ollama"] = False
-                logger.debug("langchain-ollama not installed")
-        
-        # Check Groq
-        try:
-            self._available_providers["groq"] = True
-        except ImportError:
-            self._available_providers["groq"] = False
-            logger.debug("langchain-groq not installed")
-    
-    def is_provider_available(self, provider: str) -> bool:
-        """Check if a provider is available."""
-        return self._available_providers.get(provider.lower(), False)
-    
-    def get_available_providers(self) -> List[str]:
-        """Get list of installed providers."""
-        return [p for p, available in self._available_providers.items() if available]
-    
-    def get_chat_model(
-        self,
-        provider: str,
-        model_name: str,
-        temperature: float = 0.7,
-        max_tokens: Optional[int] = None,
-        **kwargs,
-    ) -> Any:
-        """Create a LangChain chat model for the specified provider.
-        
-        Args:
-            provider: Provider name ('nvidia', 'openai', 'ollama', 'groq').
-            model_name: Model identifier for the provider.
-            temperature: Sampling temperature (0.0-2.0).
-            max_tokens: Maximum tokens in response.
-            **kwargs: Additional provider-specific arguments.
-            
-        Returns:
-            LangChain chat model instance.
-            
-        Raises:
-            ImportError: If provider's package is not installed.
-            ValueError: If API key is missing for cloud provider.
-        """
-        provider = provider.lower()
-        
-        if provider == "nvidia":
-            return self._create_nvidia_model(model_name, temperature, max_tokens, **kwargs)
-        elif provider == "openai":
-            return self._create_openai_model(model_name, temperature, max_tokens, **kwargs)
-        elif provider == "ollama":
-            return self._create_ollama_model(model_name, temperature, max_tokens, **kwargs)
-        elif provider == "groq":
-            return self._create_groq_model(model_name, temperature, max_tokens, **kwargs)
-        else:
-            raise ValueError(f"Unsupported provider: {provider}")
-    
-    def _create_nvidia_model(
-        self,
-        model_name: str,
-        temperature: float,
-        max_tokens: Optional[int],
-        **kwargs,
-    ) -> Any:
-        """Create NVIDIA NIM chat model."""
-        if not self._available_providers.get("nvidia"):
-            raise ImportError(
-                "langchain-nvidia-ai-endpoints not installed. "
-                "Install with: uv add langchain-nvidia-ai-endpoints"
-            )
-        
-        api_key = self.config.nvidia_api_key
-        if not api_key:
-            raise ValueError("NVIDIA_API_KEY not set in environment")
-        
-        from langchain_nvidia_ai_endpoints import ChatNVIDIA
-        
-        return ChatNVIDIA(
-            model=model_name,
-            api_key=api_key,
-            temperature=temperature,
-            max_tokens=max_tokens or self.config.default_max_tokens,
-            base_url=self.config.nvidia_base_url,
-            timeout=5,  # Fast fail on startup - prevents 60s hang
-            **kwargs,
-        )
-    
-    def _create_openai_model(
-        self,
-        model_name: str,
-        temperature: float,
-        max_tokens: Optional[int],
-        **kwargs,
-    ) -> Any:
-        """Create OpenAI chat model."""
-        if not self._available_providers.get("openai"):
-            raise ImportError(
-                "langchain-openai not installed. "
-                "Install with: uv add langchain-openai"
-            )
-        
-        api_key = self.config.openai_api_key
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY not set in environment")
-        
-        from langchain_openai import ChatOpenAI
-        
-        return ChatOpenAI(
-            model=model_name,
-            api_key=api_key,
-            temperature=temperature,
-            max_tokens=max_tokens or self.config.default_max_tokens,
-            request_timeout=5,  # Fast fail on startup
-            **kwargs,
-        )
-    
-    def _create_ollama_model(
-        self,
-        model_name: str,
-        temperature: float,
-        max_tokens: Optional[int],
-        **kwargs,
-    ) -> Any:
-        """Create Ollama chat model (local)."""
-        if not self._available_providers.get("ollama"):
-            raise ImportError(
-                "langchain-ollama not installed. "
-                "Install with: uv add langchain-ollama"
-            )
-        
-        # Try modern import first
-        try:
-            from langchain_ollama import ChatOllama
-        except ImportError:
-            from langchain_community.chat_models import ChatOllama
-        
-        return ChatOllama(
-            model=model_name,
-            base_url=self.config.ollama_base_url,
-            temperature=temperature,
-            num_predict=max_tokens or self.config.default_max_tokens,
-            timeout=5,  # Fast fail if Ollama not running
-            **kwargs,
-        )
-    
-    def _create_groq_model(
-        self,
-        model_name: str,
-        temperature: float,
-        max_tokens: Optional[int],
-        **kwargs,
-    ) -> Any:
-        """Create Groq chat model."""
-        if not self._available_providers.get("groq"):
-            raise ImportError(
-                "langchain-groq not installed. "
-                "Install with: uv add langchain-groq"
-            )
-        
-        api_key = self.config.groq_api_key
-        if not api_key:
-            raise ValueError("GROQ_API_KEY not set in environment")
-        
-        from langchain_groq import ChatGroq
-        
-        return ChatGroq(
-            model=model_name,
-            api_key=api_key,
-            temperature=temperature,
-            max_tokens=max_tokens or self.config.default_max_tokens,
-            request_timeout=5,  # Fast fail on startup
-            **kwargs,
-        )
-    
-    def get_model_from_spec(
-        self,
-        spec_key: str,
-        temperature: float = 0.7,
-        **kwargs,
-    ) -> Any:
-        """Create a model from a catalog specification.
-        
-        Args:
-            spec_key: Key in MODEL_CATALOG (e.g., 'nvidia/llama-3.1-70b').
-            temperature: Sampling temperature.
-            **kwargs: Additional arguments.
-            
-        Returns:
-            LangChain chat model.
-        """
-        if spec_key not in MODEL_CATALOG:
-            raise ValueError(f"Unknown model spec: {spec_key}")
-        
-        spec = MODEL_CATALOG[spec_key]
-        return self.get_chat_model(
-            provider=spec.provider.value,
-            model_name=spec.model_name,
-            temperature=temperature,
-            **kwargs,
-        )
-
-
-# =============================================================================
-# Model Manager (Main Interface)
-# =============================================================================
 
 class ModelManager:
     """Unified model manager with preset models and provider management.
@@ -800,40 +323,16 @@ class ModelManager:
     def _wrap_with_safety(self, model: Any) -> Any:
         """Wrap a model with SafeLLM circuit breaker.
         
-        v2.5.2: All models are wrapped for automatic 429 handling
-        and provider fallback.
+        v4.0.0 Update: SafeLLM was deprecated. Models are now returned directly.
+        This method is kept as a pass-through for API compatibility.
         
         Args:
             model: Raw LangChain chat model.
             
         Returns:
-            SafeLLM wrapper (or raw model if disabled).
+            The raw model.
         """
-        if not ENABLE_SAFE_LLM:
-            return model
-        
-        try:
-            from src.models.safe_llm import SafeLLM
-            
-            # Determine fallback based on current provider
-            # If we're on NVIDIA, fallback to OpenAI; otherwise fallback to NVIDIA
-            if self.active_provider == "nvidia":
-                fallback = "openai" if self.config.has_api_key("openai") else "nvidia"
-            else:
-                fallback = "nvidia"
-            
-            wrapped = SafeLLM(
-                primary_model=model,
-                manager=self,
-                fallback_provider=fallback,
-                max_retries=2,
-            )
-            self.logger.debug(f"Model wrapped with SafeLLM (fallback={fallback})")
-            return wrapped
-            
-        except ImportError as e:
-            self.logger.warning(f"SafeLLM not available, using raw model: {e}")
-            return model
+        return model
     
     # =========================================================================
     # High-Level API
@@ -1034,13 +533,7 @@ class ModelManager:
             self.logger.debug("render_response failed: %s", exc)
             return None
 
-
-# =============================================================================
-# Module-level Functions
-# =============================================================================
-
 _default_manager: Optional[ModelManager] = None
-
 
 def get_model_manager(**kwargs) -> ModelManager:
     """Get or create the default ModelManager singleton."""
@@ -1049,25 +542,17 @@ def get_model_manager(**kwargs) -> ModelManager:
         _default_manager = ModelManager(**kwargs)
     return _default_manager
 
-
 def get_smart_model(**kwargs) -> Any:
     """Convenience function to get the smart model."""
     return get_model_manager().get_smart_model(**kwargs)
-
 
 def get_fast_model(**kwargs) -> Any:
     """Convenience function to get the fast model."""
     return get_model_manager().get_fast_model(**kwargs)
 
-
 def get_vision_model(**kwargs) -> Any:
     """Convenience function to get the vision model."""
     return get_model_manager().get_vision_model(**kwargs)
-
-
-# =============================================================================
-# Status Check
-# =============================================================================
 
 def print_status() -> None:
     """Print model system status."""
@@ -1107,8 +592,69 @@ def print_status() -> None:
     
     print()
 
+def switch_llm_provider(provider: str) -> str:
+    """Switch the active AI model provider at runtime.
 
-# Demo
+    Allows changing between LLM providers (nvidia, openai, groq, ollama)
+    without restarting the application. All agents will use the new provider.
+
+    Args:
+        provider: The provider to switch to. Valid: 'nvidia', 'openai', 'groq', 'ollama'.
+
+    Returns:
+        Success message or error description.
+    """
+    import logging
+    _log = logging.getLogger("Models.LLMOps")
+    provider_clean = provider.lower().strip()
+    _log.info(f"Attempting to switch LLM provider to: {provider_clean}")
+    try:
+        mm = get_model_manager()
+        old = mm.get_active_provider()
+        mm.set_active_provider(provider_clean)
+        _log.info(f"Switched: {old} → {provider_clean}")
+        return f"✅ Switched active LLM provider from '{old}' to '{provider_clean}'."
+    except ValueError as e:
+        return f"❌ Cannot switch to '{provider_clean}': {e}"
+    except Exception as e:
+        return f"❌ Unexpected error: {e}"
+
+def get_current_provider() -> str:
+    """Get the name of the currently active LLM provider."""
+    try:
+        return f"🧠 Current provider: '{get_model_manager().get_active_provider()}'"
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+def list_available_providers() -> str:
+    """List all available LLM providers."""
+    try:
+        mm = get_model_manager()
+        available = ", ".join(sorted(mm.factory.get_available_providers()))
+        current = mm.get_active_provider()
+        return f"📋 Available: {available}\n🧠 Using: '{current}'"
+    except Exception as e:
+        return f"❌ Error: {e}"
+
 if __name__ == "__main__":
     print_status()
 
+__all__ = [
+    "ModelManager",
+    "ModelFactory",
+    "ModelConfig",
+    "Provider",
+    "ModelSpec",
+    "MODEL_CATALOG",
+    "DEFAULT_PROVIDER",
+    "VALID_PROVIDERS",
+    "get_model_manager",
+    "get_smart_model",
+    "get_fast_model",
+    "get_vision_model",
+    "get_embedding_function",
+    "switch_llm_provider",
+    "get_current_provider",
+    "list_available_providers",
+    "print_status",
+]

@@ -1,17 +1,21 @@
 """IRIS Sentry Module - Background Screen Monitoring.
 
-Uses Windows Native OCR to passively monitor screen for errors.
+Uses native OCR to passively monitor screen for errors.
 Runs in a background thread and alerts when danger keywords are detected.
+
+Cross-platform support:
+    - Windows: Native Windows SDK OCR (fastest)
+    - Linux/macOS: Tesseract OCR or EasyOCR (fallback)
 
 Usage:
     from src.agents.iris.sentry import start_sentry, stop_sentry
-    
+
     # Start monitoring in background
     start_sentry(callback=lambda msg: print(msg))
-    
+
     # Start in stealth mode (no visible window)
     start_sentry(callback=lambda msg: print(msg), headless=True)
-    
+
     # Stop monitoring
     stop_sentry()
 """
@@ -19,12 +23,22 @@ from __future__ import annotations
 
 import asyncio
 import io
+import sys
 import threading
 from typing import Callable, List, Optional, Tuple
 
 from src.core.logger import setup_logger
 
 logger = setup_logger("IRIS.Sentry")
+
+# =============================================================================
+# Platform Detection
+# =============================================================================
+
+_PLATFORM = sys.platform
+_IS_WINDOWS = sys.platform == "win32"
+_IS_LINUX = sys.platform.startswith("linux")
+_IS_MACOS = sys.platform == "darwin"
 
 # Try imports
 try:
@@ -42,6 +56,8 @@ except ImportError:
     Image = None  # type: ignore
 
 # Windows OCR imports
+_HAS_WINSDK = False
+OcrEngine = None
 try:
     from winsdk.windows.media.ocr import OcrEngine
     from winsdk.windows.graphics.imaging import (
@@ -54,9 +70,24 @@ try:
     )
     _HAS_WINSDK = True
 except ImportError:
-    _HAS_WINSDK = False
-    OcrEngine = None  # type: ignore
-    logger.warning("winsdk not available - Sentry mode disabled")
+    logger.debug("winsdk not available - Windows OCR disabled")
+
+# Cross-platform OCR backends
+_HAS_PYTESSERACT = False
+try:
+    import pytesseract
+    _HAS_PYTESSERACT = True
+    logger.debug("pytesseract available")
+except ImportError:
+    logger.debug("pytesseract not available")
+
+_HAS_EASYOCR = False
+try:
+    import easyocr
+    _HAS_EASYOCR = True
+    logger.debug("easyocr available")
+except ImportError:
+    logger.debug("easyocr not available")
 
 
 # =============================================================================
@@ -67,7 +98,8 @@ import json
 from pathlib import Path
 
 def _load_config() -> dict:
-    config_path = Path(__file__).resolve().parents[3] / "config" / "iris" / "sentry.json"
+    # Centralized config path: iris -> agents -> src -> core/config/defaults/iris
+    config_path = Path(__file__).resolve().parents[2] / "core" / "config" / "defaults" / "iris" / "sentry.json"
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -102,6 +134,62 @@ CAPTURE_REGION = None
 
 # Debug mode flag
 # DEBUG_MODE = False
+
+
+# =============================================================================
+# Cross-Platform OCR Helper Functions
+# =============================================================================
+
+async def _run_ocr_pytesseract(pil_image: "Image.Image") -> str:
+    """Run OCR using pytesseract (cross-platform Tesseract wrapper)."""
+    if not _HAS_PYTESSERACT or not pil_image:
+        return ""
+
+    try:
+        text = pytesseract.image_to_string(pil_image)
+        return text.strip() if text else ""
+    except Exception as e:
+        logger.debug(f"Pytesseract OCR failed: {e}")
+        return ""
+
+
+async def _run_ocr_easyocr(pil_image: "Image.Image") -> str:
+    """Run OCR using easyocr (cross-platform, heavier)."""
+    if not _HAS_EASYOCR or not pil_image:
+        return ""
+
+    try:
+        import numpy as np
+        # Convert PIL image to numpy array
+        img_array = np.array(pil_image)
+        # Initialize reader (cached after first use)
+        reader = easyocr.Reader(['en'])
+        results = reader.readtext(img_array)
+        # Extract text from results
+        text_lines = [detection[1] for detection in results]
+        return "\n".join(text_lines) if text_lines else ""
+    except Exception as e:
+        logger.debug(f"EasyOCR failed: {e}")
+        return ""
+
+
+async def _select_ocr_backend(pil_image: "Image.Image") -> str:
+    """Select and run the best available OCR backend."""
+    # Priority: Windows SDK > Pytesseract > EasyOCR
+
+    if _IS_WINDOWS and _HAS_WINSDK:
+        logger.debug("Using Windows SDK OCR")
+        # This will be handled by the Windows-specific function
+        return "winsdk"
+    elif _HAS_PYTESSERACT:
+        logger.debug("Using Pytesseract OCR")
+        return await _run_ocr_pytesseract(pil_image)
+    elif _HAS_EASYOCR:
+        logger.debug("Using EasyOCR")
+        return await _run_ocr_easyocr(pil_image)
+    else:
+        logger.warning("No OCR backend available (install pytesseract or easyocr)")
+        return ""
 
 
 # =============================================================================
@@ -184,48 +272,60 @@ async def _run_ocr(software_bitmap: "SoftwareBitmap") -> str:
 
 
 async def scan_screen_for_text() -> str:
-    """Capture screen and extract text using Windows OCR.
-    
+    """Capture screen and extract text using the best available OCR (cross-platform).
+
     Returns:
         Text found on screen.
     """
-    if not _HAS_MSS or not _HAS_PIL or not _HAS_WINSDK:
+    if not _HAS_PIL:
         return ""
-    
+
     try:
-        with mss.mss() as sct:
-            # Capture primary monitor
-            monitor = sct.monitors[1]
-            sct_img = sct.grab(monitor)
-            
-            # Convert to PIL (smaller size for faster OCR)
-            img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-            
-            # Resize to reduce OCR time (max 1280px wide)
-            max_width = 1280
-            if img.width > max_width:
-                ratio = max_width / img.width
-                new_size = (max_width, int(img.height * ratio))
-                img = img.resize(new_size, Image.Resampling.LANCZOS)
-            
-            # Convert to Windows bitmap and run OCR
+        # Use PIL/pyautogui for cross-platform screen capture
+        from src.capabilities.desktop.screen import take_screenshot
+        from pathlib import Path
+
+        # Take a screenshot
+        result = take_screenshot()
+        if "❌" in result or "Error" in result:
+            return ""
+
+        # Extract path from result message "📸 Screenshot saved: /path/to/file"
+        screenshot_path = result.split(": ")[-1].strip() if ": " in result else ""
+        if not screenshot_path or not Path(screenshot_path).exists():
+            return ""
+
+        # Open the screenshot
+        img = Image.open(screenshot_path)
+
+        # Resize to reduce OCR time (max 1280px wide)
+        max_width = 1280
+        if img.width > max_width:
+            ratio = max_width / img.width
+            new_size = (max_width, int(img.height * ratio))
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+        # Run appropriate OCR backend
+        if _IS_WINDOWS and _HAS_WINSDK:
+            # Use Windows SDK for best quality on Windows
             software_bitmap = await _image_to_software_bitmap(img)
             if software_bitmap:
                 text = await _run_ocr(software_bitmap)
-                
-                # DEBUG: Print what OCR reads
-                # if DEBUG_MODE and text.strip():
-                if text.strip():
-                    preview = text.replace('\n', ' ')[:80]
-                    # print(f"[DEBUG OCR] Read: {preview}...")
-                    logger.debug(f"[OCR READ] {preview}...")
-                
                 return text
-            
-        return ""
-        
+        elif _HAS_PYTESSERACT:
+            # Use Tesseract on Linux/macOS
+            text = await _run_ocr_pytesseract(img)
+            return text
+        elif _HAS_EASYOCR:
+            # Fallback to EasyOCR
+            text = await _run_ocr_easyocr(img)
+            return text
+        else:
+            logger.warning("No OCR backend available for screen scanning")
+            return ""
+
     except Exception as exc:
-        logger.debug("Screen scan failed: %s", exc)
+        logger.debug(f"Screen scan failed: {exc}")
         return ""
 
 

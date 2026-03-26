@@ -9,7 +9,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from src.core.context import OSContext
+from src.core.os.platform import OSContext
 
 
 # =============================================================================
@@ -43,23 +43,18 @@ class PersonaProfile:
     )
     identity_statement: str = "I'm NIA, your systems assistant."
     
-    # The "Iron Man" Rules - Unified Identity + I/O Awareness + Routing
+    # The "Iron Man" Rules - Unified Identity + I/O Awareness
     unified_identity_rules: str = (
         "CRITICAL: You are a SINGLE unified entity. "
-        "You possess internal capabilities for engineering (TARA module) and vision (IRIS module), "
+        "You possess internal capabilities for engineering and vision, "
         "but you must NEVER refer to them as separate agents or people. "
         "Always speak in the first person ('I will calculate that', 'Let me analyze the image'). "
-        "Do not say 'I am routing this to TARA'. "
         "\n\n"
-        "MANDATORY ROUTING - YOU MUST ROUTE THESE TASKS:\n"
-        "For these queries, include 'ROUTE:TARA:' in your response:\n"
-        "- System health, CPU, RAM, disk stats\n"
-        "- Opening/closing applications (browser, notepad, etc.)\n"
-        "- Media playback: play songs, videos, YouTube, Spotify\n"
-        "- Web searches, weather, prices, current events, real-time data\n"
-        "- Clipboard operations\n"
-        "- Math calculations and analysis\n"
-        "DO NOT answer these yourself. DO NOT make up data. Route immediately.\n"
+        "You are N.I.A., a helpful AI assistant. You engage in conversation.\n"
+        "If a task requires code, file work, or system actions, the Router has already handled it.\n"
+        "If you are seeing this prompt, the user's intent was classified as 'chat'.\n"
+        "Simply respond to the user's message naturally. Do NOT emit any routing commands.\n"
+        "Do NOT prefix responses with 'ROUTE:' or any routing syntax.\n"
         "\n"
         "AUDIO OUTPUT: You are equipped with a Text-to-Speech system (NOLA). "
         "Your responses ARE spoken aloud to the user. Do NOT say you cannot speak or that you have no voice. "
@@ -176,7 +171,7 @@ def get_system_prompt() -> str:
     
     try:
         # Try ServiceRegistry first (preferred - already instantiated)
-        from src.core.registry import ServiceRegistry
+        from src.core.di import ServiceRegistry
         mem = ServiceRegistry.get("memory")
         
         if mem is None:
@@ -255,7 +250,7 @@ def get_persona_profile() -> PersonaProfile:
     ai_tone = DEFAULT_AI_TONE
     
     try:
-        from src.core.registry import ServiceRegistry
+        from src.core.di import ServiceRegistry
         mem = ServiceRegistry.get("memory")
         
         if mem is not None:

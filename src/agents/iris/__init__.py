@@ -31,7 +31,7 @@ Usage:
     if agent.is_ready:
         result = agent.analyze("What's on my screen?")
 
-Version: 3.0.0
+Version: 4.0.0
 """
 from __future__ import annotations
 

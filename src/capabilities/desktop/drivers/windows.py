@@ -12,6 +12,11 @@ from __future__ import annotations
 import asyncio
 import time
 import json
+
+try:
+    import yaml
+except ImportError:
+    yaml = None  # type: ignore
 from pathlib import Path
 from typing import Optional, Tuple, TYPE_CHECKING
 
@@ -39,30 +44,33 @@ except ImportError:
 # =============================================================================
 
 def _load_config() -> dict:
-    """Load UIA configuration from centralized ROOT/config/tara/."""
-    config_path = Path(__file__).resolve().parents[4] / "config" / "tara" / "uia.json"
+    """Load UIA config from src/core/config/defaults/capabilities/desktop.yaml."""
+    config_path = Path(__file__).resolve().parents[3] / "core" / "config" / "defaults" / "capabilities" / "desktop.yaml"
+    if yaml is None:
+        return {}
     try:
         with open(config_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = yaml.safe_load(f) or {}
+        return data.get("uia", {})
     except Exception as e:
-        logger.debug(f"Failed to load uia.json: {e}")
+        logger.debug(f"Failed to load desktop.yaml UIA config: {e}")
         return {}
 
 _UIA_CONFIG = _load_config()
 
-ACTIONABLE_TYPES = set(_UIA_CONFIG.get("ACTIONABLE_TYPES", [
+ACTIONABLE_TYPES = set(_UIA_CONFIG.get("actionable_types", [
     "ButtonControl", "EditControl", "TextControl", "DocumentControl",
     "MenuItemControl", "ListControl", "ListItemControl", "TabItemControl",
     "HyperlinkControl", "CheckBoxControl", "RadioButtonControl",
     "ComboBoxControl", "TreeItemControl",
 ]))
 
-SKIP_TYPES = set(_UIA_CONFIG.get("SKIP_TYPES", [
+SKIP_TYPES = set(_UIA_CONFIG.get("skip_types", [
     "PaneControl", "GroupControl", "WindowControl", "ScrollBarControl",
     "ThumbControl", "SeparatorControl",
 ]))
 
-MAX_ELEMENTS = _UIA_CONFIG.get("MAX_ELEMENTS", 100)
+MAX_ELEMENTS = _UIA_CONFIG.get("max_elements", 100)
 
 
 # =============================================================================
@@ -89,7 +97,7 @@ class WindowsDriver(DesktopDriver):
         if not _HAS_UIA:
             return None, "uiautomation library not installed"
         
-        from ..window_manager import get_registry
+        from ..window_registry import get_registry
         registry = get_registry()
         
         if window_alias not in registry:

@@ -1,26 +1,25 @@
-"""N.O.L.A. Security Module - Input Sanitization & Command Filtering.
+"""N.O.L.A. Security — Input Sanitization & Command Filtering.
 
-VERSION: 2.5.2
-
-Part of the CSO (Chief Security Officer) layer in N.I.A. architecture.
-Provides security-focused input processing for voice commands,
-implementing pattern-based detection of potentially dangerous operations.
-
-Security Architecture (v2.5.2):
-    - InputSanitizer: Regex-based command filtering (SAFE/WARNING/BLOCKED)
-    - RoutingGatekeeper (nia/gatekeeper.py): LLM output validation
-    - SafeLLM (models/safe_llm.py): Circuit breaker for API resilience
-
-Data Flow:
-    Voice Input -> NOLA -> InputSanitizer -> Supervisor -> SafeLLM -> Provider
-                             ^
-                             |__ Blocks dangerous patterns (del *, rm -rf, etc.)
+Part of the CSO (Chief Security Officer) layer in the N.I.A. architecture.
+Provides security-focused input processing for voice commands before they
+reach the engine, blocking dangerous shell phrases, format commands, and
+other harmful patterns.
 
 Classes:
-    SecurityLevel: Enum for input classification (SAFE, WARNING, BLOCKED)
-    SanitizedInput: Container for processed input with security metadata
-    InputSanitizer: Main security filter with configurable patterns
+    SecurityLevel   — Enum: SAFE | WARNING | BLOCKED
+    SanitizedInput  — Dataclass holding sanitized text + classification
+    InputSanitizer  — Pattern-based sanitizer with configurable block/warn lists
+
+Usage::
+
+    from src.agents.nola.security import InputSanitizer
+
+    sanitizer = InputSanitizer()
+    result = sanitizer.sanitize("format C drive")
+    if result.is_blocked():
+        print(f"Blocked: {result.blocked_reason}")
 """
+
 from __future__ import annotations
 
 from src.core.logger import setup_logger

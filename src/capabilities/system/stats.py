@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Dict, Optional
 
 from src.core.logger import setup_logger
+from src.core.os import get_os_context
 
 logger = setup_logger("TARA.Tools.SystemOps")
 
@@ -254,54 +255,25 @@ def get_current_time() -> str:
 
 def mute_volume(mute: bool = True) -> str:
     """
-    Mute or unmute system audio.
-    
+    Mute or unmute system audio (cross-platform).
+
     ONE ACTION: Toggle system volume mute state.
-    
+
+    Uses OSContext for platform-specific implementation.
+
     Args:
         mute: True to mute, False to unmute.
-        
+
     Returns:
         Success or failure message.
     """
-    try:
-        # Windows-specific: use pycaw or ctypes
-        import ctypes
-        from ctypes import wintypes, POINTER, cast
-        
-        # Try pycaw first (cleaner API)
-        try:
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            from comtypes import CLSCTX_ALL
-            
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = cast(interface, POINTER(IAudioEndpointVolume))
-            
-            volume.SetMute(1 if mute else 0, None)
-            return "🔇 System Muted" if mute else "🔊 System Unmuted"
-            
-        except ImportError:
-            # Fallback: Use keyboard simulation
-            import subprocess
-            
-            # Use NirCmd if available, otherwise powershell
-            if mute:
-                # PowerShell audio mute
-                subprocess.run([
-                    'powershell', '-Command',
-                    '(New-Object -ComObject WScript.Shell).SendKeys([char]173)'
-                ], capture_output=True, timeout=5)
-                return "🔇 System Muted"
-            else:
-                subprocess.run([
-                    'powershell', '-Command',
-                    '(New-Object -ComObject WScript.Shell).SendKeys([char]173)'  # Toggle
-                ], capture_output=True, timeout=5)
-                return "🔊 System Unmuted"
-                
-    except Exception as e:
-        return f"❌ Audio control failed: {e}"
+    ctx = get_os_context()
+    success = ctx.mute_audio(mute)
+
+    if success:
+        return "🔇 System Muted" if mute else "🔊 System Unmuted"
+    else:
+        return f"❌ Audio control failed on {ctx.os_name}"
 
 
 __all__ = [

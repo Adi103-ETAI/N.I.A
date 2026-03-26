@@ -1,0 +1,5 @@
+description: Runs bash/python/node commands inside the secure Docker sandbox.
+name: run_in_sandbox
+reversible: false
+scope: execute
+timeout: 300

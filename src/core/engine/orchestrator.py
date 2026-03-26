@@ -1,27 +1,42 @@
-"""N.I.A. Core Engine - Central Nervous System.
+"""N.I.A. Core Engine — Central Orchestrator.
 
-v3.0 "Velocity" - The Orchestrator (Modular Edition)
-    Contains the NIAAssistant class that coordinates all components:
-    - NOLA (Voice I/O) with wake word detection
-    - NIA Supervisor (LLM-based routing) with SafeLLM protection
-    - TARA (Tool Execution) via LangGraph SubGraph
-    - IRIS (Vision) for screen/webcam analysis
-    - Memory (4-Layer Hybrid) for context injection
+The ``NIAAssistant`` class is the single integration point for all N.I.A.
+components. It owns the main run loop, voice/keyboard I/O, and delegates
+all AI reasoning to the NIA LangGraph brain.
 
-Data Flow:
-    User -> NOLA/Terminal -> Reflex Layer -> NIAAssistant
-                                    |
-                                    v
-    Supervisor <-> SafeLLM <-> ModelManager <-> [NVIDIA|OpenAI|Groq|Ollama]
-        |
-        +-> ROUTE:TARA -> Tool Execution
-        +-> ROUTE:IRIS -> Vision Analysis  
-        +-> ROUTE:CHAT -> Direct Response
-        |
-        v
-    Memory Storage -> Response -> NOLA/Terminal -> User
+Component map:
+    NOLA   — Voice I/O layer (TTS + STT + wake-word detection)
+    NIA    — LangGraph brain (Router → Supervisor / TARA / Docker)
+    TARA   — Tool execution sub-graph (50+ desktop automation tools)
+    IRIS   — Vision agent (screen + webcam analysis)
+    Memory — 4-layer hybrid store (SQLite, ChromaDB, NetworkX, in-memory)
 
-Version: 3.0.0
+Data flow::
+
+    User
+      │
+      ├─ Voice ──► NOLA ──► EventBus ──► NIAAssistant.process()
+      └─ Text  ──► Terminal            ──► NIAAssistant.process()
+                                                   │
+                              ┌────────────────────┘
+                              ▼
+                   NIA LangGraph Brain
+                    ├─ router_node  → decide: chat / system / swarm
+                    ├─ supervisor   → conversational response
+                    ├─ call_tara_2  → desktop automation
+                    └─ docker_node  → Docker swarm execution
+                              │
+                              ▼
+              Memory.store() + NOLA.speak() / Terminal.print()
+
+Lifecycle::
+
+    assistant = NIAAssistant(voice_mode=True)
+    await assistant.start()   # lazy-loads all heavy components
+    await assistant.run()     # blocks: voice + keyboard loop
+    await assistant.stop()    # graceful shutdown
+
+Version: 4.0.0
 """
 from __future__ import annotations
 
@@ -29,6 +44,11 @@ import warnings
 warnings.filterwarnings("ignore", message=".*timeout is not default parameter.*")
 
 import json
+
+try:
+    import yaml
+except ImportError:
+    yaml = None  # type: ignore
 import os
 import time
 import sys
@@ -39,8 +59,8 @@ from typing import TYPE_CHECKING, Optional, Tuple
 from src.core.logger import setup_logger
 import asyncio
 import aioconsole
-from src.core.registry import ServiceRegistry
-from src.core.events import get_event_bus
+from src.core.di import ServiceRegistry
+from src.core.bus import get_event_bus
 
 # =============================================================================
 # TYPE_CHECKING Block: IDE-only imports (no runtime cost)
@@ -71,31 +91,22 @@ except ImportError:
 # =============================================================================
 
 def _load_engine_config() -> dict:
-    """Load engine configuration from external files.
-    
-    Returns:
-        Dictionary with command vocabularies and help text.
-    """
-    config_dir = Path(__file__).parent.parent.parent / "config" / "tara"
-    config = {}
-    
-    # Load command vocabularies
-    commands_path = config_dir / "commands.json"
-    if commands_path.exists():
-        with open(commands_path, "r", encoding="utf-8") as f:
-            config["commands"] = json.load(f)
-    else:
-        config["commands"] = {}
-    
-    # Load help text
-    help_path = config_dir / "help.txt"
-    if help_path.exists():
-        with open(help_path, "r", encoding="utf-8") as f:
-            config["help_text"] = f.read()
-    else:
-        config["help_text"] = "Type 'exit' to quit."
-    
-    return config
+    """Load engine configuration from centralized defaults."""
+    config_path = Path(__file__).resolve().parents[1] / "config" / "defaults" / "agents" / "tara.yaml"
+
+    if yaml is None:
+        return {"commands": {}, "help_text": "Type 'exit' to quit."}
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except Exception:
+        data = {}
+
+    return {
+        "commands": data.get("commands", {}),
+        "help_text": "Type 'exit' to quit.",
+    }
 
 
 # Load at module level (cached)

@@ -266,7 +266,26 @@ def get_tara_tools(refresh: bool = False) -> List[StructuredTool]:
     
     # Discover all tools (including subdirectories)
     all_tools = discover_from_path(package_path)
-    
+
+    # Phase 2: Sandboxed Tool Registration (Manual Override)
+    # =========================================================================
+    try:
+        from src.capabilities.execution.tools import SandboxedShell
+        from src.capabilities.execution.lifecycle import StartSession, EndSession
+        
+        sandbox_tool = SandboxedShell()
+        start_session_tool = StartSession()
+        end_session_tool = EndSession()
+        
+        all_tools.extend([sandbox_tool, start_session_tool, end_session_tool])
+        logger.info("✅ Registered SandboxedShell and Lifecycle tools")
+    except ImportError as e:
+        logger.error(f"Failed to register Execution tools: {e}")
+    except Exception as e:
+        logger.error(f"Error instantiating Execution tools: {e}")
+
+    # User explicitly requested filesystem tools back in Phase 2
+    # Keeping all tools enabled
     core_count = len(all_tools)
     
     # =========================================================================
@@ -337,25 +356,19 @@ def get_tools_by_category() -> Dict[str, List[str]]:
     """
     categories: Dict[str, List[str]] = {}
     
-    # Needs recursive implementation similar to get_tara_tools
-    # For now, simplistic implementation not fully recursive or just omitted
-    # But since it's used for listing, we should try to support it.
-    
-    # Simplification: We iterate over cached tools if available
     tools = get_tara_tools()
     for tool in tools:
-        # tool.func.__module__ gives e.g. "src.capabilities.system.files"
-        # We want "system.files"
-        if tool.func:
-            mod_name = tool.func.__module__.replace("src.capabilities.", "")
-            if mod_name not in categories:
-                categories[mod_name] = []
-            categories[mod_name].append(tool.name)
-        elif tool.coroutine:
-            mod_name = tool.coroutine.__module__.replace("src.capabilities.", "")
-            if mod_name not in categories:
-                categories[mod_name] = []
-            categories[mod_name].append(tool.name)
+        # StructuredTool has .func/.coroutine; BaseTool subclasses (SandboxedShell etc.) do not.
+        func = getattr(tool, "func", None) or getattr(tool, "coroutine", None)
+        if func:
+            mod_name = func.__module__.replace("src.capabilities.", "")
+        else:
+            # Fallback: use tool class module
+            mod_name = type(tool).__module__.replace("src.capabilities.", "")
+        
+        if mod_name not in categories:
+            categories[mod_name] = []
+        categories[mod_name].append(tool.name)
             
     return categories
 

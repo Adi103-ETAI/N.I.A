@@ -114,9 +114,14 @@ async def main() -> int:
     if args.voice:
         logger.debug(f"Wake words: {args.wake_words} | Wake required: {not args.no_wake}")
     
+    # Register cleanup
+    import atexit
+    from src.infrastructure.container_engine.manager import DockerEngine
+    atexit.register(DockerEngine().cleanup)
+
     # Import and run engine
     # Import components for Dependency Injection
-    from src.core.registry import ServiceRegistry
+    from src.core.di import ServiceRegistry
     from src.core.engine import NIAAssistant
     from src.agents.nola.manager import get_nola_manager, NOLAConfig
     from src.agents.iris.agent import IrisAgent
@@ -124,7 +129,7 @@ async def main() -> int:
     wake_words = [w.strip() for w in args.wake_words.split(",") if w.strip()]
     
     # 0. Event Bus (The Spine)
-    from src.core.events import get_event_bus
+    from src.core.bus import get_event_bus
     ServiceRegistry.register("events", get_event_bus())
     
     # --- SERVICE REGISTRY WIRING ---

@@ -1,0 +1,5 @@
+description: Edits an existing file.
+name: edit_file
+reversible: false
+scope: write
+timeout: 60

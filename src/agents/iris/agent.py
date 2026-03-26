@@ -11,7 +11,7 @@ Dynamic Provider Access:
     without restarting. All calls are wrapped with SafeLLM circuit breaker.
 
 Data Flow:
-    Supervisor -> ROUTE:IRIS -> IrisAgent.process()
+    Decision Core -> iris_node -> IrisAgent.process()
                                     |
                                     v
                              Screen/Webcam Capture
@@ -34,6 +34,7 @@ Version: 2.5.2
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 from typing import Any, Dict, Optional, Union
@@ -78,8 +79,8 @@ def _load_iris_config() -> dict:
     Returns:
         Dictionary with intent keywords and vision prompt.
     """
-    # Centralized config path: iris -> ROOT (1 level up via .parents[1])
-    config_dir = Path(__file__).resolve().parents[3] / "config" / "iris"
+    # Centralized config path: iris -> agents -> src -> core/config/defaults/iris
+    config_dir = Path(__file__).resolve().parents[2] / "core" / "config" / "defaults" / "iris"
     config = {}
     
     vision_config_path = config_dir / "triggers.json"
@@ -402,12 +403,31 @@ class IrisAgent:
         
         return {"messages": [ai_message], "next": "__end__"}
     
+    async def aprocess(
+        self,
+        input_data: Union[str, Dict[str, Any]],
+        image_path: str = None,
+    ) -> Union[str, Dict[str, Any]]:
+        """Non-blocking async wrapper around process().
+
+        Offloads the synchronous vision model call to a thread pool so the
+        event loop is never blocked.  Use this in all LangGraph nodes.
+
+        Args:
+            input_data: Either a string query or LangGraph state dict.
+            image_path: Optional path to existing image file.
+
+        Returns:
+            Same as process() — string or updated state dict.
+        """
+        return await asyncio.to_thread(self.process, input_data, image_path)
+
     def run(self, query: str) -> str:
         """Convenience method - same as process() with string input.
-        
+
         Args:
             query: User's question about what they see.
-            
+
         Returns:
             Description/analysis of the visual content.
         """
@@ -474,17 +494,17 @@ class IrisAgent:
 # LangGraph Node Function
 # =============================================================================
 
-def run_iris_agent(state: dict) -> dict:
-    """IRIS LangGraph Node function.
-    
+async def run_iris_agent(state: dict) -> dict:
+    """IRIS LangGraph Node function (async — non-blocking).
+
     Args:
         state: LangGraph state dict.
-        
+
     Returns:
         Updated state with IRIS response.
     """
     agent = IrisAgent()
-    return agent.process(state)
+    return await agent.aprocess(state)
 
 
 # =============================================================================

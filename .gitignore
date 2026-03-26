@@ -19,7 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
+.ruff_cache/
 # Virtual Environment
 .venv/
 venv/
@@ -79,9 +79,7 @@ nola/models/
 *.onnx
 
 # Temporary Scripts & Artifacts
-scripts/test_*.py
-scripts/verify_*.py
-scripts/manual_test.py
+
 *.bak
 *.tmp
 *.temp
@@ -95,3 +93,18 @@ ghost_state.json
 
 # Models Folder (if re-created)
 models/
+!/src/models/
+!/src/models/*.py
+
+# Workspace (Docker sandbox mount)
+workspace/
+
+# Debug & one-off verification scripts
+scripts/debug_*.py
+scripts/verify_*.py
+gen_manifests.py
+
+# AI Agent artifacts
+.gemini/
+.agent/
+.testsprite/

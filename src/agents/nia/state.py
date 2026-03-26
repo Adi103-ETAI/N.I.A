@@ -23,7 +23,6 @@ from typing import (
     List,
     Literal,
     Optional,
-    Sequence,
     Union,
 )
 from datetime import datetime
@@ -36,10 +35,13 @@ from datetime import datetime
 AGENT_SUPERVISOR = "supervisor"
 AGENT_IRIS = "iris"       # Vision specialist
 AGENT_TARA = "tara"       # Logic/reasoning specialist
+AGENT_DOCKER = "docker"   # Docker execution node (skills)
+AGENT_SANDBOX = "sandbox" # Static sandbox execution (Phase 3)
+AGENT_COORDINATOR = "coordinator"  # Sprint 4: Multi-step coordinator
 AGENT_END = "__end__"     # Terminal state
 
 # Valid routing destinations
-AgentName = Literal["supervisor", "iris", "tara", "__end__"]
+AgentName = Literal["supervisor", "iris", "tara", "docker", "sandbox", "coordinator", "__end__"]
 
 
 # =============================================================================
@@ -86,14 +88,29 @@ def _get_add_messages() -> Callable[[List, List], List]:
     """Lazy-load LangGraph's add_messages reducer."""
     if "add_messages" not in _langgraph_cache:
         try:
-            from langgraph.graph import add_messages
+            from langgraph.graph.message import add_messages
             _langgraph_cache["add_messages"] = add_messages
         except ImportError:
-            # Fallback: simple list append
-            def add_messages(left: List, right: List) -> List:
-                return left + right
-            _langgraph_cache["add_messages"] = add_messages
+            try:
+                from langgraph.graph import add_messages
+                _langgraph_cache["add_messages"] = add_messages
+            except ImportError:
+                # Fallback: simple list append
+                def add_messages(left: List, right: List) -> List:
+                    return left + right
+                _langgraph_cache["add_messages"] = add_messages
     return _langgraph_cache["add_messages"]
+
+
+# Eagerly resolve add_messages at module load for Annotated[] usage
+try:
+    from langgraph.graph.message import add_messages as _add_messages_reducer
+except ImportError:
+    try:
+        from langgraph.graph import add_messages as _add_messages_reducer
+    except ImportError:
+        def _add_messages_reducer(left: List, right: List) -> List:  # type: ignore
+            return left + right
 
 
 # =============================================================================
@@ -112,23 +129,28 @@ except ImportError:
 class AgentState(TypedDict, total=False):
     """
     State shared across all agents in the NIA supervisor graph.
-    
-    Migrated to TypedDict for LangGraph v1 compatibility.
-    
+
     Attributes:
-        messages: Conversation history (Sequence of BaseMessage).
+        messages: Conversation history. Uses add_messages reducer for safe
+                  parallel writes — LangGraph merges lists automatically.
         next: Name of the next agent to execute.
         user_input: Original user input for the current turn.
         final_response: The response to return to the user.
         route_reason: Why the supervisor chose this route.
-        metadata: Additional context.
+        metadata: Additional context and routing metadata.
+        session_id: Persistent session ID for checkpointing.
+        sandbox_result: Output from the last container execution.
+        subagent_results: Accumulated results from spawned subagents.
     """
-    messages: Sequence[Any]  # BaseMessage at runtime
+    messages: Annotated[List[Any], _add_messages_reducer]  # safe parallel writes
     next: AgentName
     user_input: str
     final_response: Optional[str]
     route_reason: Optional[str]
     metadata: Dict[str, Any]
+    session_id: str
+    sandbox_result: Optional[str]   # output from static Docker sandbox
+    subagent_results: List[str]     # summaries from spawned subagents
 
 
 # =============================================================================
@@ -152,12 +174,18 @@ def create_initial_state(user_input: str) -> dict:
     else:
         messages = [{"role": "user", "content": user_input}]
     
+    import uuid
+    session_id = str(uuid.uuid4())
+    
     return {
         "messages": messages,
         "next": AGENT_SUPERVISOR,
         "user_input": user_input,
         "final_response": None,
         "route_reason": None,
+        "session_id": session_id,
+        "sandbox_result": None,
+        "subagent_results": [],
         "metadata": {
             "timestamp": datetime.now().isoformat(),
             "turn_id": 0,
@@ -255,18 +283,19 @@ __all__ = [
     # State
     "AgentState",
     "AgentName",
-    
+
     # Constants
     "AGENT_SUPERVISOR",
     "AGENT_IRIS",
     "AGENT_TARA",
+    "AGENT_COORDINATOR",
     "AGENT_END",
-    
+
     # Helpers
     "create_initial_state",
     "extract_response",
     "safe_get_content",
-    
+
     # Lazy-loaded re-exports for convenience
     "BaseMessage",
     "HumanMessage",

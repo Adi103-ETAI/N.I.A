@@ -396,7 +396,7 @@ def start_log_listener() -> None:
     Must be called after EventBus is ready.
     """
     # Local import prevents circular dependency
-    from src.core.events import get_event_bus
+    from src.core.bus import get_event_bus
     
     try:
         bus = get_event_bus()

@@ -1,0 +1,5 @@
+description: Finds a file by name.
+name: find_by_name
+reversible: true
+scope: read_only
+timeout: 60

@@ -37,7 +37,7 @@ def test_context_builder():
 
 def test_state_creation():
     """Verify state factory works."""
-    from src.agents.tara.graph.state import create_initial_tara_state
+    from src.core.schema.states import create_initial_tara_state
     
     state = create_initial_tara_state("Test goal")
     assert state.get('user_goal') == "Test goal"

@@ -1,11 +1,9 @@
-"""Backward-compatible context module.
+"""Backward-compat shim for OS context imports.
 
-This module re-exports OSContext and get_os_context from src.core.platform
-to maintain compatibility with imports using 'src.core.context'.
+Legacy code may import from ``src.core.context``. The canonical
+implementation now lives in ``src.core.os.context``.
 """
-from src.core.platform import OSContext, get_os_context
 
-__all__ = [
-    "OSContext",
-    "get_os_context",
-]
+from src.core.os.context import OSContext, get_os_context
+
+__all__ = ["OSContext", "get_os_context"]

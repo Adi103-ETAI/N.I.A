@@ -99,7 +99,7 @@ def cmd_ghost_control(engine: 'NIAAssistant', text: str) -> bool:
 
 def cmd_mic_control(engine: 'NIAAssistant', text: str) -> bool:
     """Handle mic on/off."""
-    from src.core.registry import ServiceRegistry
+    from src.core.di import ServiceRegistry
     
     if "off" in text or "mute" in text:
         nola = ServiceRegistry.get("voice")
@@ -306,7 +306,7 @@ def print_status(engine: 'NIAAssistant') -> None:
     """Displays the Precision Aligned Dashboard (Strict Grid Layout)."""
     import psutil
     from datetime import datetime
-    from src.core.registry import ServiceRegistry
+    from src.core.di import ServiceRegistry
     
     # 1. Gather Data
     cpu_p = psutil.cpu_percent(interval=0.1)
