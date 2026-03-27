@@ -109,7 +109,7 @@ async def general_assistant(state: AgentState) -> AgentState:
         messages = state.get("messages", [])
 
         # Inject unified persona as system message if not already present
-        from src.persona.profile import get_system_prompt
+        from src.persona.prompts import get_system_prompt
         system_prompt_text = get_system_prompt()
 
         if _HAS_LANGCHAIN_MESSAGES:

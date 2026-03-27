@@ -97,7 +97,7 @@ class SupervisorAgent:
         
         # System Prompt: Prefer Persona module, fallback to text file
         try:
-            from src.persona.profile import get_system_prompt
+            from src.persona.prompts import get_system_prompt
             prompt_text = get_system_prompt()
             logger.debug("System prompt loaded from Persona module")
         except Exception as persona_err:
@@ -137,7 +137,7 @@ class SupervisorAgent:
             - retry_buffer: Empty list for retry attempts.
         """
         # 🎲 DYNAMIC PERSONA: Regenerate system prompt each call for fresh 80/20 roll
-        from src.persona.profile import get_system_prompt
+        from src.persona.prompts import get_system_prompt
         fresh_system_prompt = get_system_prompt()
         
         # 🛠️ SKILL INJECTION (Phase 2)
@@ -297,7 +297,7 @@ class SupervisorAgent:
                 current_messages, _ = asyncio.run(self._build_context(state))
         except RuntimeError:
             logger.warning("Sync process() could not resolve async context, proceeding without memory")
-            from src.persona.profile import get_system_prompt
+            from src.persona.prompts import get_system_prompt
             current_messages = [SystemMessage(content=get_system_prompt())]
             current_messages.extend(state.get("messages", []))
         

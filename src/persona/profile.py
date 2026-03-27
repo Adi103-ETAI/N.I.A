@@ -9,17 +9,6 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from src.core.os.platform import OSContext
-
-
-# =============================================================================
-# Default Values (Fallbacks if Memory is empty/unavailable)
-# =============================================================================
-
-DEFAULT_USER_NAME = "Aditya"
-DEFAULT_USER_TITLE = "Director"
-DEFAULT_AI_TONE = "Professional, Direct, and Loyal"
-
 
 # =============================================================================
 # PersonaProfile Dataclass
@@ -30,12 +19,12 @@ class PersonaProfile:
     """Declarative description of the chatbot personality."""
 
     name: str = "NIA"
-    owner: str = DEFAULT_USER_NAME
-    owner_title: str = DEFAULT_USER_TITLE
+    owner: str = "Aditya"
+    owner_title: str = "Director"
     owner_aliases: tuple[str, ...] = ("Director", "Aditya", "Adi", "A", "Boss", "Sir") 
     role: str = "a proactive, empathetic systems assistant"
     voice: str = "concise, confident, and friendly"
-    ai_tone: str = DEFAULT_AI_TONE
+    ai_tone: str = "Professional, Direct, and Loyal"
     
     introduction_policy: str = (
         "Introduce yourself as NIA only during the very first greeting of a session "
@@ -78,64 +67,13 @@ class PersonaProfile:
         return random.choice(alias_options) if alias_options else self.owner_title
 
     def persona_prompt(self) -> str:
-        """Return the base persona prompt text used for all reasoning.
+        """Generate persona system prompt - delegates to prompts module.
         
-        Constructs a structured System Prompt with:
-        - System Identity
-        - Authority Profile
-        - Protocol
-        - Core Directives
+        Wraps build_persona_prompt() for backward compatibility.
+        Returns the base persona prompt text used for all reasoning.
         """
-        rules = " ".join(self.additional_rules.values())
-        
-        # === STRUCTURED SYSTEM PROMPT (OS-Style) ===
-        sections = []
-        
-        # 1. SYSTEM IDENTITY
-        sections.append(
-            f"[SYSTEM IDENTITY]\n"
-            f"Designation: {self.name} (Neural Intelligence Assistant)\n"
-            f"Function: {self.role}\n"
-            f"Status: ONLINE"
-        )
-        
-        # 2. AUTHORITY PROFILE
-        sections.append(
-            f"[AUTHORITY PROFILE]\n"
-            f"User: {self.owner}\n"
-            f"Title: {self.owner_title}\n"
-            f"Status: Verified"
-        )
-        
-        # 3. PROTOCOL
-        sections.append(
-            f"[PROTOCOL]\n"
-            f"Address the user as '{self.owner_title}' or '{self.owner}' based on context.\n"
-            f"Current Tone: {self.ai_tone}\n"
-            f"Voice Profile: {self.voice}"
-        )
-        
-        # 4. BEHAVIORAL DIRECTIVES
-        sections.append(
-            f"[BEHAVIORAL DIRECTIVES]\n"
-            f"IDENTITY PROTOCOL: If asked 'Who are you?' or similar, state your designation (N.I.A.) and your function clearly BEFORE asking for commands. Be direct, but NEVER evasive.\n"
-            f"{self.introduction_policy}\n"
-            f"Identity Statement: \"{self.identity_statement}\""
-        )
-        
-        # 5. CORE SYSTEM RULES
-        sections.append(
-            f"[CORE SYSTEM RULES]\n"
-            f"{self.unified_identity_rules}"
-        )
-        
-        # 6. ADDITIONAL CONSTRAINTS
-        sections.append(
-            f"[CONSTRAINTS]\n"
-            f"{rules}"
-        )
-        
-        return "\n\n".join(sections)
+        from src.persona.prompts import build_persona_prompt
+        return build_persona_prompt(self)
 
     def to_config(self) -> Dict[str, Any]:
         """Render persona data into ModelManager/LLM config fields."""
@@ -145,106 +83,16 @@ class PersonaProfile:
 
 
 # =============================================================================
-# Dynamic System Prompt Generator
+# Dynamic Persona Profile Getter
 # =============================================================================
-
-def get_system_prompt() -> str:
-    """Get the System Prompt with dynamic identity from Memory and skills.
-    
-    Fetches user preferences from the Memory System:
-    - username: User's name (default: "Aditya")
-    - user_title: Authority title (default: "Director")
-    - ai_tone: Preferred AI response style (default: "Professional, Concise, and Loyal")
-    
-    Also loads dynamic skills from skills/ directory via SkillLoader.
-    
-    Returns:
-        Fully constructed System Prompt string with [DYNAMIC SKILLS] section.
-        
-    Note:
-        Gracefully degrades to defaults if Memory or Skills are unavailable.
-    """
-    # Defaults (used if memory unavailable)
-    user_name = DEFAULT_USER_NAME
-    user_title = DEFAULT_USER_TITLE
-    ai_tone = DEFAULT_AI_TONE
-    
-    try:
-        # Try ServiceRegistry first (preferred - already instantiated)
-        from src.core.di import ServiceRegistry
-        mem = ServiceRegistry.get("memory")
-        
-        if mem is None:
-            # Fallback to direct import (may trigger lazy load)
-            from src.core.memory import get_memory_manager
-            mem = get_memory_manager()
-        
-        if mem is not None:
-            # Fetch preferences with safe defaults
-            # Use sync wrapper since get_system_prompt is synchronous
-            try:
-                user_name = mem.get_preference_sync("username") or DEFAULT_USER_NAME
-                user_title = mem.get_preference_sync("user_title") or DEFAULT_USER_TITLE
-                ai_tone = mem.get_preference_sync("ai_tone") or DEFAULT_AI_TONE
-            except AttributeError:
-                # Fallback if running with old memory manager or mock
-                user_name = DEFAULT_USER_NAME
-            
-    except ImportError:
-        # Memory module not available
-        pass
-    except Exception:
-        # Any other error - fail safe to defaults
-        pass
-    
-    # Construct profile with dynamic values
-    profile = PersonaProfile(
-        owner=user_name,
-        owner_title=user_title,
-        ai_tone=ai_tone,
-    )
-    
-    base_prompt = profile.persona_prompt()
-    
-    # === Inject OS Context for Path Awareness ===
-    try:
-        ctx = OSContext()
-        system_context = (
-            "[SYSTEM CONTEXT]\n"
-            f"CURRENT_OS: {ctx.os_name}\n"
-            f"USER_HOME: {ctx.home_dir}\n"
-            f"DESKTOP_PATH: {ctx.desktop_dir}\n"
-            f"DOWNLOADS_PATH: {ctx.downloads_dir}"
-        )
-        base_prompt = f"{base_prompt}\n\n{system_context}"
-    except Exception:
-        # If OSContext fails, continue without it
-        pass
-    
-    # Load dynamic skills
-    skills_block = ""
-    try:
-        from src.core.skills import load_skills
-        skills_block = load_skills()
-    except ImportError:
-        # Skills module not available
-        pass
-    except Exception:
-        # Any skill loading error - continue without skills
-        pass
-    
-    # Combine base prompt with skills
-    if skills_block:
-        return f"{base_prompt}\n\n{skills_block}"
-    else:
-        return base_prompt
-
 
 def get_persona_profile() -> PersonaProfile:
     """Get a PersonaProfile instance with dynamic values from Memory.
     
     Useful when you need access to individual persona attributes.
     """
+    from src.persona.prompts import DEFAULT_USER_NAME, DEFAULT_USER_TITLE, DEFAULT_AI_TONE
+    
     user_name = DEFAULT_USER_NAME
     user_title = DEFAULT_USER_TITLE
     ai_tone = DEFAULT_AI_TONE
@@ -276,9 +124,5 @@ def get_persona_profile() -> PersonaProfile:
 
 __all__ = [
     "PersonaProfile",
-    "get_system_prompt",
     "get_persona_profile",
-    "DEFAULT_USER_NAME",
-    "DEFAULT_USER_TITLE",
-    "DEFAULT_AI_TONE",
 ]
