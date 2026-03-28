@@ -17,9 +17,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
+
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+from src.core.bus.context_wormhole import ContextWormhole
+from src.core.memory.namespaces import get_namespace_manager
+from src.core.telemetry.middleware import get_token_counter
+
+# Telemetry span helpers
+try:
+    from src.core.telemetry.spans import coordinator_span, record_dispatch_event
+    _HAS_SPANS = True
+except ImportError:
+    _HAS_SPANS = False
 
 logger = logging.getLogger("NIA.Coordinator")
 
@@ -96,6 +110,17 @@ async def dispatch_node(state: Dict[str, Any]) -> Dict[str, Any]:
     Uses ``asyncio.gather(return_exceptions=True)`` so one failing task
     does not cancel siblings.
     """
+    mission_id = state.get("mission", {}).get("mission_id", "unknown")
+    
+    if _HAS_SPANS:
+        with coordinator_span(mission_id, "dispatch"):
+            return await _dispatch_node_inner(state)
+    else:
+        return await _dispatch_node_inner(state)
+
+
+async def _dispatch_node_inner(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Inner dispatch logic wrapped by telemetry span."""
     from src.core.schema.coordinator import SwarmLimits, ROLE_TIMEOUTS
     from src.core.schema.mission import MissionManifest, SubagentResult
     from src.core.bus.events import get_event_bus
@@ -161,14 +186,31 @@ async def dispatch_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # ---- Build manifest for wrapper calls ----------------------------------
     manifest = MissionManifest(**mission_dict)
+    
+    # ✅ Extract wormhole from state for context injection
+    wormhole = state.get("_wormhole")
 
     # ---- Dispatch coroutines -----------------------------------------------
-    async def _run_step(step: dict) -> SubagentResult:
-        """Invoke the right agent wrapper with a per-role timeout."""
+    async def _run_step(step: dict, wormhole, manifest) -> SubagentResult:
+        """Invoke the right agent wrapper with context injection and per-role timeout."""
         role: str = step.get("assigned_role", "tara")
         objective: str = step.get("description", "")
         timeout: int = _get_timeout_for_role(role)
         target = _role_to_dispatch_target(role)
+        
+        # ✅ Enrich objective with wormhole context
+        if wormhole:
+            try:
+                context = wormhole.get_condensed_summary(max_items=5)
+                if context:
+                    enriched_objective = f"""## Recent Team Observations:
+{context}
+
+## Your Task:
+{objective}"""
+                    objective = enriched_objective
+            except Exception as e:
+                logger.debug(f"Could not get wormhole context: {e}")
 
         try:
             if target == "iris":
@@ -208,7 +250,7 @@ async def dispatch_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # Fire all in parallel (return_exceptions=True keeps siblings alive).
     raw_results = await asyncio.gather(
-        *(_run_step(s) for s in batch),
+        *(_run_step(s, wormhole, manifest) for s in batch),
         return_exceptions=True,
     )
 
@@ -311,6 +353,16 @@ async def evaluate_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "step_index": result.get("_step_index"),
             })
+            
+            # ✅ Merge agent namespace to global memory
+            agent_id = result.get("agent_id", "")
+            if agent_id:
+                try:
+                    ns_manager = get_namespace_manager()
+                    await ns_manager.merge_namespace(agent_id)
+                    logger.debug(f"Merged namespace for {agent_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to merge namespace for {agent_id}: {e}")
 
         elif status == "failed":
             retries = retry_counts.get(step_key, 0)
@@ -325,6 +377,16 @@ async def evaluate_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 human_question = _build_escalation_message(
                     objective, [result], max_retries_hit=True,
                 )
+                
+                # ✅ Cleanup failed agent namespace
+                agent_id = result.get("agent_id", "")
+                if agent_id:
+                    try:
+                        ns_manager = get_namespace_manager()
+                        ns_manager.drop_namespace(agent_id)
+                        logger.debug(f"Dropped namespace for failed agent {agent_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to drop namespace for {agent_id}: {e}")
 
         elif status == "scope_violation":
             logger.warning("Scope violation on step %s — escalating.", step_key)
@@ -340,6 +402,18 @@ async def evaluate_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 f"Subagent is {status} on step {step_key}. "
                 "Please provide guidance."
             )
+        
+        # ✅ Record token usage after processing result
+        try:
+            token_counter = get_token_counter()
+            if token_counter:
+                token_counter.record(
+                    agent_id=result.get("agent_id", ""),
+                    prompt_tokens=result.get("prompt_tokens", 0),
+                    completion_tokens=result.get("completion_tokens", 0),
+                )
+        except Exception as e:
+            logger.debug(f"Token counter error: {e}")
 
     # ---- Determine next status ---------------------------------------------
     # Clear completed_results so they are not re-evaluated on the next pass.
@@ -461,11 +535,14 @@ def coordinator_router(state: Dict[str, Any]) -> str:
 # Graph Builder
 # ============================================================================
 
-def _build_coordinator_graph():
+def _build_coordinator_graph(checkpointer=None):
     """Construct and compile the Coordinator StateGraph.
 
     Lazy-imports LangGraph so the module can be imported without
     triggering heavy dependency loading at module scope.
+
+    Args:
+        checkpointer: Optional AsyncSqliteSaver for crash recovery.
 
     Returns:
         A compiled LangGraph ``CompiledGraph`` ready for ``ainvoke()``.
@@ -498,7 +575,7 @@ def _build_coordinator_graph():
     # reflect loops back to dispatch
     graph.add_edge("reflect", "dispatch")
 
-    compiled = graph.compile()
+    compiled = graph.compile(checkpointer=checkpointer)
     logger.info("Coordinator StateGraph compiled.")
     return compiled
 
@@ -507,20 +584,21 @@ def _build_coordinator_graph():
 # Public API
 # ============================================================================
 
-async def run_coordinator(manifest) -> dict:
+async def run_coordinator(manifest, db_path: str = "data/checkpoints") -> dict:
     """Run the full coordinator loop for an approved MissionManifest.
 
     This is the single entry point called by the outer NIA graph (or
     directly for testing).  It:
 
     1. Creates the initial ``CoordinatorState`` from the manifest.
-    2. Builds and compiles the coordinator sub-graph.
+    2. Builds and compiles the coordinator sub-graph with crash recovery.
     3. Executes the graph to completion via ``ainvoke()``.
     4. Emits a ``coordinator_complete`` event on the bus.
     5. Returns the final state as a plain dict.
 
     Args:
-        manifest: An approved ``MissionManifest`` instance.
+        manifest: An approved ``MissionManifest`` instance or dict.
+        db_path: Directory for checkpoint database (default: data/checkpoints).
 
     Returns:
         The final ``CoordinatorState`` as a dict.  Key fields:
@@ -531,50 +609,103 @@ async def run_coordinator(manifest) -> dict:
     """
     from src.core.schema.states import create_coordinator_state
     from src.core.bus.events import get_event_bus
+    from src.core.schema.mission import MissionManifest
+
+    # Handle both dict and MissionManifest object types
+    if isinstance(manifest, dict):
+        # Already a dict, use as-is
+        mission_id = manifest.get("mission_id", "unknown")
+        steps = manifest.get("steps", [])
+        execution_mode = manifest.get("execution_mode", "standard")
+    else:
+        # Handle Pydantic or other object types
+        mission_id = getattr(manifest, "mission_id", "unknown")
+        steps = getattr(manifest, "steps", [])
+        execution_mode = getattr(manifest, "execution_mode", "standard")
 
     logger.info(
         "Starting coordinator for mission '%s' (%d steps, mode=%s)",
-        manifest.mission_id,
-        len(manifest.steps),
-        manifest.execution_mode,
+        mission_id,
+        len(steps),
+        execution_mode,
     )
 
-    # 1. Initial state
-    initial_state = create_coordinator_state(manifest)
-
-    # 2. Build graph
-    compiled = _build_coordinator_graph()
-
-    # 3. Execute
+    # ✅ Create context wormhole for agent communication
+    wormhole = ContextWormhole(mission_id)
+    
     try:
-        final_state = await compiled.ainvoke(initial_state)
-    except Exception as exc:
-        logger.error("Coordinator graph execution failed: %s", exc, exc_info=True)
-        final_state = {
-            **initial_state,
-            "status": "failed",
-            "final_output": f"Coordinator crashed: {exc}",
-        }
+        wormhole.subscribe()  # Start listening for observations
+        logger.info(f"Context wormhole active for mission {mission_id}")
+        
+        # 1. Initial state
+        initial_state = create_coordinator_state(manifest)
+        initial_state["_wormhole"] = wormhole  # Pass to nodes
 
-    # 4. Emit completion event
-    bus = get_event_bus()
-    try:
-        await bus.emit("coordinator_complete", {
-            "mission_id": manifest.mission_id,
-            "status": final_state.get("status"),
-            "total_nodes_spawned": final_state.get("total_nodes_spawned", 0),
-        })
-    except Exception:
-        logger.debug("coordinator_complete event emit failed (non-critical)", exc_info=True)
+        # 2. Set up checkpointer for crash recovery
+        try:
+            db_file = os.path.join(db_path, "coordinator.db")
+            os.makedirs(db_path, exist_ok=True)
+            
+            async with AsyncSqliteSaver.from_conn_string(db_file) as checkpointer:
+                # 3. Build graph with checkpointer
+                compiled = _build_coordinator_graph(checkpointer=checkpointer)
 
-    logger.info(
-        "Coordinator finished mission '%s' — status=%s, nodes_spawned=%d",
-        manifest.mission_id,
-        final_state.get("status"),
-        final_state.get("total_nodes_spawned", 0),
-    )
+                # 4. Execute
+                try:
+                    final_state = await compiled.ainvoke(
+                        initial_state,
+                        config={"configurable": {"thread_id": mission_id}},
+                    )
+                except Exception as exc:
+                    logger.error("Coordinator graph execution failed: %s", exc, exc_info=True)
+                    final_state = {
+                        **initial_state,
+                        "status": "failed",
+                        "final_output": f"Coordinator crashed: {exc}",
+                    }
+        except Exception as checkpoint_exc:
+            logger.warning(
+                "Failed to initialize checkpointer: %s (continuing without checkpoints)",
+                checkpoint_exc,
+                exc_info=True,
+            )
+            # Fall back to building graph without checkpointer
+            compiled = _build_coordinator_graph()
 
-    return dict(final_state)
+            try:
+                final_state = await compiled.ainvoke(initial_state)
+            except Exception as exc:
+                logger.error("Coordinator graph execution failed: %s", exc, exc_info=True)
+                final_state = {
+                    **initial_state,
+                    "status": "failed",
+                    "final_output": f"Coordinator crashed: {exc}",
+                }
+
+        # 5. Emit completion event
+        bus = get_event_bus()
+        try:
+            await bus.emit("coordinator_complete", {
+                "mission_id": mission_id,
+                "status": final_state.get("status"),
+                "total_nodes_spawned": final_state.get("total_nodes_spawned", 0),
+            })
+        except Exception:
+            logger.debug("coordinator_complete event emit failed (non-critical)", exc_info=True)
+
+        logger.info(
+            "Coordinator finished mission '%s' — status=%s, nodes_spawned=%d",
+            mission_id,
+            final_state.get("status"),
+            final_state.get("total_nodes_spawned", 0),
+        )
+
+        return dict(final_state)
+    
+    finally:
+        # ✅ Cleanup wormhole on completion
+        wormhole.unsubscribe()
+        logger.info(f"Context wormhole closed for mission {mission_id}")
 
 
 # ============================================================================

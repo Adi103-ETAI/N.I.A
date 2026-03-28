@@ -15,6 +15,7 @@ import traceback
 from src.core.schema.mission import MissionManifest, SubagentResult
 from src.core.policy.scopes import CapabilityScope
 from src.core.policy.engine import enforce_at_runtime, ScopeViolation
+from src.core.bus.context_wormhole import emit_observation
 
 logger = logging.getLogger("Capabilities.InvokeIRIS")
 
@@ -89,6 +90,16 @@ async def invoke_iris(
             output = str(result)
 
         logger.info(f"✅ [{agent_id}] IRIS completed: {output[:100]}...")
+
+        # ✅ Emit observation for other agents
+        try:
+            await emit_observation(
+                agent_id=agent_id,
+                observation=output[:500] if output else "",  # Truncate
+                relevance_tags=["vision", "iris", "analysis"],
+            )
+        except Exception as e:
+            logger.debug(f"Could not emit observation: {e}")
 
         return SubagentResult(
             agent_id=agent_id,

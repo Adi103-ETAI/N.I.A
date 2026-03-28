@@ -29,6 +29,18 @@ try:
 except ImportError:
     pass
 
+# Initialize telemetry if endpoint configured
+otel_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+if otel_endpoint:
+    try:
+        from src.core.telemetry.tracer import init_tracer
+        init_tracer(service_name="nia-core", endpoint=otel_endpoint)
+        print(f"✅ Telemetry enabled: {otel_endpoint}")
+    except ImportError:
+        print("⚠️ OpenTelemetry not installed, tracing disabled")
+    except Exception as e:
+        print(f"⚠️ Tracer init failed: {e}")
+
 
 # =============================================================================
 # UI Helper Functions

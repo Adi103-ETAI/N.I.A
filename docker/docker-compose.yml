@@ -57,3 +57,17 @@ services:
       - sandbox-common
     profiles:
       - build
+
+  # ---------------------------------------------------------------------------
+  # Jaeger: Distributed tracing and trace visualization
+  # ---------------------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: nia-jaeger
+    ports:
+      - "16686:16686"  # UI
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    restart: unless-stopped

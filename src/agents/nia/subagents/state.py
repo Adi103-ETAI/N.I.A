@@ -107,16 +107,22 @@ def create_coordinator_state(manifest: MissionManifest) -> dict:
         A plain dict conforming to ``CoordinatorState``, ready to be
         passed as the initial state to ``StateGraph.invoke()``.
     """
-    manifest_dict = manifest.model_dump()
+    # Handle both Pydantic models and plain dicts
+    if isinstance(manifest, dict):
+        manifest_dict = manifest
+        steps = manifest.get("steps", [])
+    else:
+        manifest_dict = manifest.model_dump()
+        steps = manifest.steps
 
     pending = [
         {
             "step_index": idx,
-            "description": step.description,
-            "required_scopes": [s.value for s in step.required_scopes],
-            "assigned_role": step.assigned_role,
+            "description": step.get("description") if isinstance(step, dict) else step.description,
+            "required_scopes": step.get("required_scopes", []) if isinstance(step, dict) else [s.value for s in step.required_scopes],
+            "assigned_role": step.get("assigned_role") if isinstance(step, dict) else step.assigned_role,
         }
-        for idx, step in enumerate(manifest.steps)
+        for idx, step in enumerate(steps)
     ]
 
     return {

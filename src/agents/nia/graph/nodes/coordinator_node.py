@@ -17,6 +17,7 @@ Flow:
 from __future__ import annotations
 
 import logging
+import os
 from src.core.schema.states import AgentState, AGENT_END
 
 logger = logging.getLogger("NIA.Nodes.Coordinator")
@@ -108,7 +109,9 @@ async def coordinator_node(state: AgentState) -> AgentState:
 
     # ── 3. Invoke the Coordinator ──────────────────────────────────────
     try:
-        coord_result = await run_coordinator(manifest)
+        # Pass checkpoint path for crash recovery
+        db_path = os.path.join("data", "checkpoints")
+        coord_result = await run_coordinator(manifest, db_path=db_path)
     except Exception as exc:
         logger.exception("Coordinator execution failed: %s", exc)
         err_text = f"Mission execution failed: {exc}"

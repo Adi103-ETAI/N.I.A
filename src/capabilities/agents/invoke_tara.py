@@ -15,6 +15,7 @@ import traceback
 from src.core.schema.mission import MissionManifest, SubagentResult
 from src.core.policy.scopes import CapabilityScope
 from src.core.policy.engine import enforce_at_runtime, ScopeViolation
+from src.core.bus.context_wormhole import emit_observation
 
 logger = logging.getLogger("Capabilities.InvokeTARA")
 
@@ -95,6 +96,16 @@ async def invoke_tara(
         final_response = final_response or "Task completed (no explicit response)."
 
         logger.info(f"✅ [{agent_id}] TARA completed: {final_response[:100]}...")
+
+        # ✅ Emit observation for other agents
+        try:
+            await emit_observation(
+                agent_id=agent_id,
+                observation=final_response[:500] if final_response else "",  # Truncate
+                relevance_tags=["execution", "tara"],
+            )
+        except Exception as e:
+            logger.debug(f"Could not emit observation: {e}")
 
         return SubagentResult(
             agent_id=agent_id,
