@@ -12,16 +12,12 @@ if sys.platform == "win32":
         pass  # Python < 3.7
 
 BANNER = r"""
-╔═══════════════════════════════════════════════════════════════════════════╗
-║                                                                           ║
-║    ███╗   ██╗   ██╗    █████╗                                             ║
-║    ████╗  ██║   ██║   ██╔══██╗     Neural Intelligence Assistant          ║
-║    ██╔██╗ ██║   ██║   ███████║     ─────────────────────────────          ║
-║    ██║╚██╗██║   ██║   ██╔══██║     CLASSIFICATION: DIRECTOR_LEVEL_ACCESS  ║
-║    ██║ ╚████║██╗██║██╗██║  ██║     DEVELOPER: SentArc Labs                ║
-║    ╚═╝  ╚═══╝╚═╝╚═╝╚═╝╚═╝  ╚═╝     VERSION: Velocity                      ║
-║                                                                           ║
-╚═══════════════════════════════════════════════════════════════════════════╝
+███╗   ██╗██╗ █████╗ 
+████╗  ██║██║██╔══██╗
+██╔██╗ ██║██║███████║    Neural Intelligence Assistant
+██║╚██╗██║██║██╔══██║    ────────────────────────────────
+██║ ╚████║██║██║  ██║    Version: 4.0.0 (Velocity)
+╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝    SentArc Labs
 """
 
 MINI_BANNER = """
@@ -38,7 +34,24 @@ def supports_color() -> bool:
     if not sys.stdout.isatty():
         return False
     term = os.environ.get("TERM", "")
-    return term not in {"", "dumb"}
+    if term in {"", "dumb"}:
+        return False
+    return True
+
+
+def detect_theme() -> str:
+    """Detect terminal theme (dark/light) from environment hints."""
+    theme_hint = os.environ.get("COLORFGBG", "")
+    if theme_hint:
+        try:
+            bg = theme_hint.split(";")[-1]
+            if bg in {"0", "8", "black"}:
+                return "dark"
+            elif bg in {"7", "15", "white"}:
+                return "light"
+        except Exception:
+            pass
+    return "dark"
 
 
 def style(text: str, code: str) -> str:
@@ -49,18 +62,23 @@ def style(text: str, code: str) -> str:
 
 
 def render_banner() -> str:
-    """Render the main banner with optional gradient-like accent color."""
-    return style(BANNER, "1;96")
+    """Render the main banner with theme-aware styling."""
+    theme = detect_theme()
+    color = "1;96" if theme == "dark" else "1;94"
+    return style(BANNER, color)
 
 
 def render_hint() -> str:
     """Render startup command hint."""
     return (
-        f"{style('Commands', '1;94')}: "
-        f"{style('help', '1;92')}, "
-        f"{style('status', '1;93')}, "
-        f"{style('exit', '1;91')}"
+        f"\n{style('Ready to assist.', '2;37')} "
+        f"Type {style('help', '1;92')} for commands or just ask a question.\n"
     )
+
+
+def render_separator(char: str = "─", width: int = 80) -> str:
+    """Render a horizontal separator line."""
+    return style(char * width, "2;90")
 
 
 # Version info

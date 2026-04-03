@@ -17,13 +17,17 @@ import atexit
 import logging
 import os
 import sys
+import warnings
 
 import asyncio
 
 # Suppress pygame welcome message before any imports
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
 # Reduce ONNX Runtime non-actionable warnings in normal CLI sessions.
-os.environ.setdefault("ORT_LOG_SEVERITY_LEVEL", "3")
+os.environ.setdefault("ORT_LOG_SEVERITY_LEVEL", "4")
+# Suppress Python warnings unless in debug mode
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 # Load environment variables
 try:

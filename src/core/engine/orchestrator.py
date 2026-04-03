@@ -560,24 +560,18 @@ class NIAAssistant:
         print("\033[0m", end="", flush=True) # Reset terminal colors
         
         # Show Splash Screen (High-Quality ASCII)
-        from src.interface.banner import render_banner, render_hint, style
+        from src.interface.banner import render_banner, render_hint, render_separator, style
 
-        print("\n" + render_banner() + "\n")
+        print(render_separator("═"))
+        print(render_banner())
+        print(render_separator("═"))
+        print(render_hint())
         
         if not await self.start():
             return
         
-        # We no longer use TerminalUI's context manager strictly if we want async input
-        ui_print = print
-        if TerminalUI:
-            try:
-                _ui = TerminalUI()
-                ui_print = _ui.print
-            except:
-                pass
-
-        print(style("Ready for directives.", "1;92"))
-        print(render_hint() + "\n")
+        print(style("\nReady for directives.", "2;92"))
+        print(render_separator("─", 60) + "\n")
         
         # Capture the loop for EventBus thread-safety
         self.bus.set_loop(asyncio.get_running_loop())
@@ -621,10 +615,7 @@ class NIAAssistant:
                     response = await self.process(input_text)
                     
                     # UI Output
-                    if ui_print:
-                        ui_print(f"\n{style('💬 NIA', '1;96')}: {response}\n")
-                    else:
-                        print(f"\n{style('💬 NIA', '1;96')}: {response}\n")
+                    print(f"\n{style('💬 NIA', '1;96')}: {response}\n")
                     
                     # Speak Response (Blocking I/O wrapped in thread)
                     await asyncio.to_thread(self.speak, response)

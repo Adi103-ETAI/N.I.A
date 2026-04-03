@@ -289,9 +289,32 @@ def handle_reflex(engine: 'NIAAssistant', text: str) -> bool:
 # =============================================================================
 
 def print_help(engine: 'NIAAssistant') -> None:
-    """Print help information from external file."""
-    from .orchestrator import _HELP_TEXT
-    print(f"\n{_HELP_TEXT}\n")
+    """Display formatted help text with available commands."""
+    from src.interface.banner import style, render_separator
+    
+    help_text = f"""
+{render_separator("─", 60)}
+{style("N.I.A. Command Reference", "1;96")}
+{render_separator("─", 60)}
+
+{style("System Commands", "1;94")}
+  {style("help", "1;92")}      - Show this help message
+  {style("status", "1;92")}    - Display system health and resource usage
+  {style("exit", "1;92")}      - Quit N.I.A.
+  
+{style("Hardware Control", "1;94")}
+  {style("wake up", "1;92")}   - Enable voice listening (if voice mode active)
+  {style("sleep", "1;92")}     - Pause voice listening
+  {style("mute", "1;92")}      - Toggle system audio mute
+
+{style("Usage", "1;94")}
+  Just type your request naturally. N.I.A. will plan and execute
+  multi-step tasks, use tools, and coordinate multiple agents.
+
+{render_separator("─", 60)}
+"""
+    
+    print(help_text)
 
 
 def draw_bar(percent: float) -> str:
