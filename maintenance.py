@@ -149,7 +149,7 @@ def clean_dbs(force=False, verbose=False):
                 log(f"   ℹ️ Preserved {db.name}", verbose, force)
 
 def run_verification(verbose=False):
-    """Runs the integration verification script."""
+    """Run post-cleanup verification if script is available."""
     print("\n🔎 Running Post-Cleanup Verification...")
     script_path = ROOT_DIR / "scripts" / "verify_integration.py"
     if script_path.exists():
@@ -168,7 +168,7 @@ def run_verification(verbose=False):
         except Exception as e:
             print(f"   ⚠️ Failed to run verification: {e}")
     else:
-        print("   ⚠️ Verification script not found.")
+        print("   ℹ️ Verification script not available (scripts/verify_integration.py missing).")
 
 def main():
     parser = argparse.ArgumentParser(description="N.I.A. System Maintenance Tool")

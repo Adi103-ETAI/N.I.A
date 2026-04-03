@@ -16,6 +16,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from src.core.config.prompts import load_prompt
 
 if TYPE_CHECKING:
     from src.core.schema.coordinator import BudgetExtensionRequest
@@ -26,40 +27,40 @@ logger = logging.getLogger("NIA.Coordinator.Reflect")
 # Prompts
 # ---------------------------------------------------------------------------
 
-_REFLECT_SYSTEM = """\
-You are a failure-analysis specialist inside an autonomous AI framework.
-
-A subagent was given an objective and failed.  Your job:
-1. Analyse the failure trace and identify the specific failure mode.
-2. Reformulate the original objective so the next attempt avoids that \
-failure mode.
-3. Be more specific and concrete than the original objective.
-4. Do NOT change the goal — only change the approach.
-5. Return ONLY the reformulated objective as a single plain-text string — \
-no explanation, no markdown, no JSON, no preamble."""
-
-_HIGH_ATTEMPT_ADDENDUM = """
-
-IMPORTANT: This is already attempt {attempt}.  Previous reformulations did \
-not resolve the problem.  You MUST suggest a fundamentally different approach \
-— change the strategy, use alternative tools, or decompose the task into \
-smaller pieces.  Do NOT simply rephrase the same plan."""
-
-_REFLECT_USER = """\
-Original objective:
-{objective}
-
-Failure trace:
-{trace}
-
-Attempt number: {attempt}
-{context_section}
-Produce the reformulated objective now."""
-
-_CONTEXT_SECTION = """
-Relevant context observations from sibling agents:
-{observations}
-"""
+_REFLECT_SYSTEM = load_prompt(
+    "reflect_system",
+    fallback=(
+        "You are a failure-analysis specialist inside an autonomous AI framework.\n\n"
+        "A subagent was given an objective and failed. Your job:\n"
+        "1. Analyse the failure trace and identify the specific failure mode.\n"
+        "2. Reformulate the original objective so the next attempt avoids that failure mode.\n"
+        "3. Be more specific and concrete than the original objective.\n"
+        "4. Do NOT change the goal — only change the approach.\n"
+        "5. Return ONLY the reformulated objective as a single plain-text string — no explanation, no markdown, no JSON, no preamble."
+    ),
+)
+_HIGH_ATTEMPT_ADDENDUM = load_prompt(
+    "reflect_high_attempt",
+    fallback=(
+        "IMPORTANT: This is already attempt {attempt}. Previous reformulations did not resolve the problem. "
+        "You MUST suggest a fundamentally different approach — change the strategy, use alternative tools, "
+        "or decompose the task into smaller pieces. Do NOT simply rephrase the same plan."
+    ),
+)
+_REFLECT_USER = load_prompt(
+    "reflect_user",
+    fallback=(
+        "Original objective:\n{objective}\n\n"
+        "Failure trace:\n{trace}\n\n"
+        "Attempt number: {attempt}\n"
+        "{context_section}\n"
+        "Produce the reformulated objective now."
+    ),
+)
+_CONTEXT_SECTION = load_prompt(
+    "reflect_context_section",
+    fallback="Relevant context observations from sibling agents:\n{observations}",
+)
 
 # ---------------------------------------------------------------------------
 # LLM accessor (lazy, mirrors MissionPlanner pattern)

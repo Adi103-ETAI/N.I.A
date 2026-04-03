@@ -1,0 +1,1 @@
+IMPORTANT: This is already attempt {attempt}. Previous reformulations did not resolve the problem. You MUST suggest a fundamentally different approach — change the strategy, use alternative tools, or decompose the task into smaller pieces. Do NOT simply rephrase the same plan.

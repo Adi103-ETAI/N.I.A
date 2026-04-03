@@ -63,7 +63,8 @@ class SandboxedShell(BaseTool):
             image = "python:3.11-slim" 
             
             logger.info(f"Executing in sandbox [{session_id}]: {command[:50]}...")
-            print(f"DEBUG SHELL COMMAND: {command}") # Debug for verification script
+            if settings.DEBUG:
+                print(f"DEBUG SHELL COMMAND: {command}")
             
             # Phase 3 Update: Pass session_id to engine
             exit_code, stdout, stderr = engine.run_command(

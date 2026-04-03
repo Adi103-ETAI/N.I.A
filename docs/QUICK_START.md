@@ -13,7 +13,7 @@
 
 ### 1. Text Mode (Keyboard Input)
 ```bash
-python main.py
+uv run python main.py
 ```
 **Output**:
 ```
@@ -27,7 +27,7 @@ python main.py
 
 ### 2. Voice Mode (with wake words)
 ```bash
-python main.py --voice
+uv run python main.py --voice
 ```
 - Requires microphone
 - Listens for wake words: "jarvis", "nia", "hey nia"
@@ -35,21 +35,21 @@ python main.py --voice
 
 ### 3. Voice Mode (Always Listening)
 ```bash
-python main.py --voice --no-wake
+uv run python main.py --voice --no-wake
 ```
 - Starts listening immediately (no wake word needed)
 
 ### 4. Debug Mode
 ```bash
-python main.py --debug
+uv run python main.py --debug
 # or
-DEBUG=true python main.py
+DEBUG=true uv run python main.py
 ```
 Shows all internal logs and diagnostic information
 
 ### 5. System Status Check
 ```bash
-python main.py --status
+uv run python main.py --status
 ```
 Displays:
 - Python version
@@ -63,47 +63,47 @@ Displays:
 
 ### Run All Tests
 ```bash
-pytest tests/ -v
+uv run pytest tests/ -v
 ```
 
 ### Run Specific Test Categories
 
 **Cross-Platform Tests** (Desktop automation, system operations):
 ```bash
-pytest tests/test_cross_platform.py -v
+uv run pytest tests/test_cross_platform.py -v
 ```
 
 **Unit Tests** (Individual components):
 ```bash
-pytest tests/unit/ -v
+uv run pytest tests/unit/ -v
 ```
 
 **Integration Tests** (Component interactions):
 ```bash
-pytest tests/integration/ -v
+uv run pytest tests/integration/ -v
 ```
 
 **E2E Tests** (Full workflow):
 ```bash
-pytest tests/e2e/ -v
+uv run pytest tests/e2e/ -v
 ```
 
 ### Quick Verification
 
 **Check Installation**:
 ```bash
-python -c "from src.core.features import get_features; print(get_features().summary())"
+uv run python -c "from src.core.features import get_features; print(get_features().summary())"
 ```
 Output shows which features are available on your platform.
 
 **Test Core Imports**:
 ```bash
-python -c "import langgraph; import chromadb; import docker; print('✅ Core dependencies OK')"
+uv run python -c "import langgraph; import chromadb; import docker; print('✅ Core dependencies OK')"
 ```
 
 **Test Cross-Platform Detection**:
 ```bash
-python -c "from src.core.os import get_os_context; print(get_os_context())"
+uv run python -c "from src.core.os import get_os_context; print(get_os_context())"
 ```
 
 ---
@@ -120,7 +120,7 @@ Tests all desktop automation features:
 
 **Run it**:
 ```bash
-pytest tests/test_cross_platform.py -v
+uv run pytest tests/test_cross_platform.py -v
 ```
 
 ### test_memory.py
@@ -154,25 +154,25 @@ Tests Docker Swarm execution:
 
 ```bash
 # Show print statements
-pytest tests/ -v -s
+uv run pytest tests/ -v -s
 
 # Stop on first failure
-pytest tests/ -x
+uv run pytest tests/ -x
 
 # Show slowest 10 tests
-pytest tests/ --durations=10
+uv run pytest tests/ --durations=10
 
 # Run tests matching pattern
-pytest tests/ -k "cross_platform" -v
+uv run pytest tests/ -k "cross_platform" -v
 
 # Run with coverage report
-pytest tests/ --cov=src --cov-report=html
+uv run pytest tests/ --cov=src --cov-report=html
 
 # Run specific test function
-pytest tests/test_cross_platform.py::test_screenshot -v
+uv run pytest tests/test_cross_platform.py::test_screenshot -v
 
 # Run tests for specific OS (optional)
-pytest tests/test_cross_platform.py -v -m "not xdotool"  # Skip xdotool tests
+uv run pytest tests/test_cross_platform.py -v -m "not xdotool"  # Skip xdotool tests
 ```
 
 ---
@@ -220,7 +220,7 @@ uv sync --all-groups
 # Install window management tool
 sudo apt install xdotool libxdo3
 # Then test
-python main.py
+uv run python main.py
 ```
 
 ### "ImportError: cannot import name 'pycaw'" (Windows audio)
@@ -242,7 +242,7 @@ pip install Pillow
 ### "pytest: command not found"
 ```bash
 # Install pytest (already in dependencies, but can reinstall)
-pip install pytest pytest-asyncio
+uv sync --all-groups
 ```
 
 ---
@@ -251,22 +251,22 @@ pip install pytest pytest-asyncio
 
 ```
 1. Install & Verify
-   └─ python main.py --status
+   └─ uv run python main.py --status
 
 2. Run Quick Tests
-   └─ pytest tests/test_cross_platform.py -v
+   └─ uv run pytest tests/test_cross_platform.py -v
 
 3. Run Full Test Suite
-   └─ pytest tests/ -v --tb=short
+   └─ uv run pytest tests/ -v --tb=short
 
 4. Test Specific Feature
-   └─ python -c "from src.capabilities.desktop import screen; print(screen.take_screenshot())"
+   └─ uv run python -c "from src.capabilities.desktop import screen; print(screen.take_screenshot())"
 
 5. Run with Debug Logs
-   └─ pytest tests/test_cross_platform.py -v -s --log-cli-level=DEBUG
+   └─ uv run pytest tests/test_cross_platform.py -v -s --log-cli-level=DEBUG
 
 6. Run Full System
-   └─ python main.py --voice --debug
+   └─ uv run python main.py --voice --debug
 ```
 
 ---
@@ -275,13 +275,13 @@ pip install pytest pytest-asyncio
 
 **Measure startup time**:
 ```bash
-time python main.py --status
+time uv run python main.py --status
 ```
 Expected: < 5 seconds (due to lazy loading)
 
 **Count dependencies loaded**:
 ```bash
-python -c "import sys; from src.agents import nia; print(f'Modules loaded: {len(sys.modules)}')"
+uv run python -c "import sys; from src.agents import nia; print(f'Modules loaded: {len(sys.modules)}')"
 ```
 Expected: < 200 modules on startup (lazy loading works)
 
@@ -289,21 +289,21 @@ Expected: < 200 modules on startup (lazy loading works)
 
 ## ✅ Success Checklist
 
-- [ ] `python main.py --status` shows your platform
-- [ ] `pytest tests/test_cross_platform.py -v` passes
-- [ ] `python main.py` accepts text input
-- [ ] `python main.py --voice` detects microphone (if available)
-- [ ] Screenshots work: `python -c "from src.capabilities.desktop import screen; screen.take_screenshot()"`
-- [ ] All tests pass: `pytest tests/ -v`
+- [ ] `uv run python main.py --status` shows your platform
+- [ ] `uv run pytest tests/test_cross_platform.py -v` passes
+- [ ] `uv run python main.py` accepts text input
+- [ ] `uv run python main.py --voice` detects microphone (if available)
+- [ ] Screenshots work: `uv run python -c "from src.capabilities.desktop import screen; screen.take_screenshot()"`
+- [ ] All tests pass: `uv run pytest tests/ -v`
 
 ---
 
 ## 📚 Next Steps
 
-1. **Test Basic Features**: `python main.py`
-2. **Verify Desktop Automation**: `pytest tests/test_cross_platform.py -v`
-3. **Check System Status**: `python main.py --status`
-4. **Run Full Test Suite**: `pytest tests/ -v`
-5. **Try Voice Mode**: `python main.py --voice` (if microphone available)
+1. **Test Basic Features**: `uv run python main.py`
+2. **Verify Desktop Automation**: `uv run pytest tests/test_cross_platform.py -v`
+3. **Check System Status**: `uv run python main.py --status`
+4. **Run Full Test Suite**: `uv run pytest tests/ -v`
+5. **Try Voice Mode**: `uv run python main.py --voice` (if microphone available)
 
-**Ready to go! Let's test it!** 🚀
+**System is ready. Execute and validate.** 🚀

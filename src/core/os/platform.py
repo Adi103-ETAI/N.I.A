@@ -5,13 +5,11 @@ enabling N.I.A. to run on Windows, Linux, and macOS without platform guards
 scattered throughout the codebase.
 
 This module is the **canonical implementation**. The public API is exposed
-through ``src.core.os`` (package ``__init__.py``) and a backward-compat shim
-at ``src.core.context``.
+through ``src.core.os`` (package ``__init__.py``).
 
 Usage::
 
-    from src.core.os import get_os_context        # preferred (new)
-    from src.core.context import get_os_context   # also works (shim)
+    from src.core.os import get_os_context
 
     ctx = get_os_context()
     print(ctx.os_name)            # "windows", "linux", or "darwin"

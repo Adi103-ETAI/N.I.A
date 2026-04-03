@@ -10,7 +10,7 @@ Re-exports:
     require_service     — Shortcut for ServiceRegistry.require()
 
 Backward-compat:
-    ``from src.core.registry import ServiceRegistry``  also works.
+    Legacy imports should use ``from src.core.di.registry import ServiceRegistry``.
 """
 from src.core.di.service_registry import (
     ServiceRegistry,

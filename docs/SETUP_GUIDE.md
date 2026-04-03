@@ -4,7 +4,7 @@
 
 ```bash
 # 1. Clone the repository
-git clone <repo-url>
+git clone https://github.com/Adi103-ETAI/N.I.A.git
 cd N.I.A
 
 # 2. Install dependencies with uv
@@ -15,8 +15,7 @@ cp .env.example .env
 # Edit .env with your API keys (NVIDIA, OpenAI, etc.)
 
 # 4. Run the system
-python main.py
-# or: uv run nia
+uv run python main.py
 ```
 
 ## Platform-Specific Setup
@@ -212,20 +211,20 @@ LLM_MODEL=meta/llama-3.1-70b-instruct
 LLM_MODEL_VISION=meta/llama-3.2-90b-vision-instruct
 ```
 
-## Running N.I.A
+## Running N.I.A (Strong Defaults)
 
 ```bash
 # Standard execution
-uv run nia
+uv run python main.py
 
 # With specific mode
 uv run python main.py --help
 
 # Debug mode
-DEBUG=true uv run nia
+DEBUG=true uv run python main.py --debug
 
 # Specific LLM provider
-ACTIVE_LLM_PROVIDER=openai uv run nia
+ACTIVE_LLM_PROVIDER=openai uv run python main.py
 ```
 
 ## Testing
@@ -307,4 +306,4 @@ $env:PYTHONIOENCODING="utf-8"
 - **Check logs**: See `logs/nia.log` for detailed error messages
 - **Platform detection**: Run health check to see available features
 - **Feature test**: Run `pytest tests/test_cross_platform.py -v`
-- **Documentation**: See `PLATFORM_COMPATIBILITY.md` for architecture details
+- **Documentation**: See `docs/REFERENCE.md` and `README.md`

@@ -198,7 +198,7 @@ The v4.0.0 capabilities system unifies tools and skills:
 
 ### Prerequisites
 - **Python 3.10+**
-- **Windows 10/11** (Primary platform)
+- **Windows, Linux, or macOS**
 - **NVIDIA GPU** (Optional, for faster inference)
 
 ### Quick Start
@@ -208,12 +208,17 @@ The v4.0.0 capabilities system unifies tools and skills:
 git clone https://github.com/Adi103-ETAI/N.I.A.git
 cd N.I.A
 
-# Create venv
+# Create and activate virtual environment
 python -m venv .venv
-.venv\Scripts\activate
+
+# Linux/macOS
+source .venv/bin/activate
+
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
 
 # Install dependencies
-uv sync
+uv sync --all-groups
 
 # Install Playwright browsers
 uv run playwright install chromium
@@ -245,19 +250,19 @@ DEBUG=false
 
 ```bash
 # Standard Run (Silent Mode)
-python main.py
+uv run python main.py
 
 # Voice mode
-python main.py --voice
+uv run python main.py --voice
 
 # Always listening (no wake word)
-python main.py --voice --no-wake
+uv run python main.py --voice --no-wake
 
 # Debug Run (Verbose Logs)
-python main.py -d
+uv run python main.py -d
 
 # Check version
-python main.py --version
+uv run python main.py --version
 ```
 
 ### Example Commands
@@ -287,7 +292,7 @@ registry = SkillRegistry()
 registry.register("my_custom_skill", my_custom_skill, "A custom tool")
 ```
 
-See [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md) for full migration details.
+See [docs/REFERENCE.md](docs/REFERENCE.md) for command reference and [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) for platform setup.
 
 ---
 

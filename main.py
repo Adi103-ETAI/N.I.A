@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import atexit
 import logging
 import os
 import sys
@@ -21,6 +22,8 @@ import asyncio
 
 # Suppress pygame welcome message before any imports
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
+# Reduce ONNX Runtime non-actionable warnings in normal CLI sessions.
+os.environ.setdefault("ORT_LOG_SEVERITY_LEVEL", "3")
 
 # Load environment variables
 try:
@@ -127,7 +130,6 @@ async def main() -> int:
         logger.debug(f"Wake words: {args.wake_words} | Wake required: {not args.no_wake}")
     
     # Register cleanup
-    import atexit
     from src.infrastructure.container_engine.manager import DockerEngine
     atexit.register(DockerEngine().cleanup)
 

@@ -42,9 +42,9 @@ IMPORT_ALIASES = {
     'core.logger': 'src.core.logger',
     'core.memory': 'src.core.memory',
     'core.config': 'src.core.config',
-    'core.services': 'src.core.registry',
-    'core.event_bus': 'src.core.events',
-    'core.os_context': 'src.core.platform',
+    'core.services': 'src.core.di.service_registry',
+    'core.event_bus': 'src.core.bus.events',
+    'core.os_context': 'src.core.os.platform',
     'core.engine.system': 'src.core.engine.orchestrator',
     
     # Agent imports

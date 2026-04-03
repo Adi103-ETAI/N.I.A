@@ -17,7 +17,7 @@ import sys
 from typing import TYPE_CHECKING, Tuple
 
 if TYPE_CHECKING:
-    from .system import NIAAssistant
+    from .orchestrator import NIAAssistant
 
 # Lazy imports for modules needed by specific commands
 # Avoids circular imports and speeds up module load
@@ -38,7 +38,7 @@ def cmd_toggle_debug(engine: 'NIAAssistant', text: str) -> bool:
     elif "off" in text:
         from src.core.logger import set_console_level
         import logging
-        set_console_level(logging.WARNING)
+        set_console_level(logging.INFO)
         engine.debug = False
         print("🐞 Debug Mode: OFF")
     else:
@@ -290,7 +290,7 @@ def handle_reflex(engine: 'NIAAssistant', text: str) -> bool:
 
 def print_help(engine: 'NIAAssistant') -> None:
     """Print help information from external file."""
-    from .system import _HELP_TEXT
+    from .orchestrator import _HELP_TEXT
     print(f"\n{_HELP_TEXT}\n")
 
 

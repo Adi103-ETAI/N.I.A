@@ -20,7 +20,7 @@ from src.agents.tara.graph.prompts import TARA_SYSTEM_PROMPT, build_tara_context
 from src.capabilities.interface import get_tara_tools
 from src.models.manager import get_smart_model
 
-from src.core.utils.text_utils import _parse_llama_tool_calls
+from src.core.utils.text_utils import _parse_llama_tool_calls, parse_tool_call_json
 
 logger = setup_logger("TARA.Nodes.Reasoner")
 settings = get_settings()
@@ -89,7 +89,7 @@ async def reasoner(state: TaraState) -> TaraStateUpdate:
 
         has_tool_calls = hasattr(response, "tool_calls") and len(response.tool_calls) > 0
 
-        # Fallback: parse Llama 3.1 <|python_tag|> format
+        # Fallback 1: parse Llama 3.1 <|python_tag|> format
         content_str = safe_get_content(response)
         if not has_tool_calls and content_str and "<|python_tag|>" in content_str:
             logger.warning("[REASONER] LLM didn't parse tool calls, using fallback parser")
@@ -98,6 +98,17 @@ async def reasoner(state: TaraState) -> TaraStateUpdate:
                 response.tool_calls = parsed_calls
                 has_tool_calls = True
                 logger.debug(f"[REASONER] Fallback parser found {len(parsed_calls)} tool call(s)")
+
+        # Fallback 2: parse plain JSON tool payloads
+        if not has_tool_calls and content_str:
+            parsed_json_calls = parse_tool_call_json(content_str)
+            if parsed_json_calls:
+                response.tool_calls = parsed_json_calls
+                has_tool_calls = True
+                logger.debug(
+                    "[REASONER] JSON parser found %d tool call(s)",
+                    len(parsed_json_calls),
+                )
 
         logger.debug(f"LLM response: {content_str[:100] if content_str else 'Tool call'}...")
         logger.info(f"[REASONER] tool_calls_pending={has_tool_calls}")

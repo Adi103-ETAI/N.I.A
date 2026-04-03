@@ -254,8 +254,8 @@ uv run python main.py --voice
 - 📖 Full Setup Guide: `SETUP_GUIDE.md`
 - 🧪 Testing Guide: `TESTING_GUIDE.md`
 - 🗺️ Architecture Plan: `NIA_Phase4_Master_Plan.md`
-- 💻 Codebase Analysis: `CODEBASE_ANALYSIS.md`
-- ⚙️ Platform Info: `PLATFORM_COMPATIBILITY.md`
+- 🗂️ Setup Guide: `SETUP_GUIDE.md`
+- 🚀 Quick Start: `QUICK_START.md`
 
 ---
 

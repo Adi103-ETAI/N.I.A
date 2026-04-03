@@ -41,6 +41,7 @@ from typing import Any, Dict, Optional, Union
 
 from src.core.logger import setup_logger
 from src.core.config import settings
+from src.core.config.prompts import load_prompt
 
 logger = setup_logger("IRIS")
 
@@ -74,7 +75,7 @@ import json
 from pathlib import Path
 
 def _load_iris_config() -> dict:
-    """Load IRIS configuration from centralized ROOT/config/iris/.
+    """Load IRIS configuration from centralized src/core/config/defaults/iris.
     
     Returns:
         Dictionary with intent keywords and vision prompt.
@@ -96,13 +97,11 @@ def _load_iris_config() -> dict:
         config["screen_keywords"] = ["screen", "window", "monitor", "display"]
         config["webcam_keywords"] = ["camera", "webcam", "photo", "picture"]
     
-    # Load vision prompt template from centralized config
-    prompt_path = config_dir / "prompt.txt"
-    if prompt_path.exists():
-        with open(prompt_path, "r", encoding="utf-8") as f:
-            config["vision_prompt"] = f.read()
-    else:
-        config["vision_prompt"] = "User Query: {query}\n\nDescribe what you see."
+    # Load vision prompt template from centralized markdown prompt system
+    config["vision_prompt"] = load_prompt(
+        "iris-vision",
+        fallback="User Query: {query}\n\nDescribe what you see.",
+    )
     
     return config
 

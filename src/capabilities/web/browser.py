@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -62,6 +64,63 @@ settings = get_settings()
 # Screenshot output directory
 SCREENSHOT_DIR = Path("data/screenshots")
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+async def _ensure_playwright_chromium() -> bool:
+    """Ensure Playwright Chromium browser binary exists.
+
+    If missing, auto-install via `uv run playwright install chromium` when possible.
+    """
+    if not _HAS_PLAYWRIGHT:
+        return False
+
+    cache_root = Path.home() / ".cache" / "ms-playwright"
+    existing = list(cache_root.glob("chromium-*/chrome-linux64/chrome"))
+    if existing:
+        return True
+
+    # Fall back to playwright CLI check/install.
+    install_cmd = (
+        ["uv", "run", "playwright", "install", "chromium"]
+        if shutil.which("uv")
+        else ["playwright", "install", "chromium"]
+    )
+
+    try:
+        logger.warning("Playwright Chromium missing. Attempting auto-install...")
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            install_cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            logger.error(
+                "Playwright auto-install failed (code=%s): %s",
+                proc.returncode,
+                (proc.stderr or proc.stdout or "").strip()[:800],
+            )
+            return False
+        logger.info("Playwright Chromium installed successfully.")
+    except Exception as exc:
+        logger.error("Playwright auto-install error: %s", exc)
+        return False
+
+    existing_after = list(cache_root.glob("chromium-*/chrome-linux64/chrome"))
+    return bool(existing_after)
+
+
+def _linux_playwright_deps_hint(error_text: str) -> str:
+    """Return actionable Linux dependency hint for common Playwright failures."""
+    if "libatk-1.0.so.0" in error_text:
+        return (
+            "❌ Missing Linux shared libraries for Chromium.\n"
+            "Run one of:\n"
+            "  - sudo apt-get update && sudo apt-get install -y libatk1.0-0 libatk-bridge2.0-0 libcups2 libnss3 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64 libpangocairo-1.0-0 libgtk-3-0\n"
+            "  - uv run playwright install-deps chromium\n"
+        )
+    return ""
 
 
 # =============================================================================
@@ -113,6 +172,11 @@ class AsyncBrowserManager:
                 return True
             
             try:
+                ready = await _ensure_playwright_chromium()
+                if not ready:
+                    logger.error("Chromium binary unavailable for Playwright launch")
+                    return False
+
                 logger.info("🌐 Starting async Playwright browser...")
                 
                 # Start Playwright (async)
@@ -155,6 +219,9 @@ class AsyncBrowserManager:
                 return True
                 
             except Exception as e:
+                hint = _linux_playwright_deps_hint(str(e))
+                if hint:
+                    logger.error(hint.strip())
                 logger.error(f"Failed to start browser: {e}")
                 await self._cleanup()
                 return False
@@ -280,7 +347,11 @@ async def browser_open_url(url: str) -> str:
     page = await manager.get_page()
     
     if not page:
-        return "❌ Failed to start browser"
+        return (
+            "❌ Failed to start browser. "
+            "If running on Linux, install runtime deps: "
+            "`uv run playwright install-deps chromium` or apt packages."
+        )
     
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)

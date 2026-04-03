@@ -2,6 +2,31 @@
 
 All notable project updates are tracked here.
 
+## [Docs & CLI Polish] - 2026-04-03
+
+### Changed
+- **Terminal UI upgraded** for a cleaner, more readable operator experience:
+  - Added ANSI-aware styling helpers in `src/interface/banner.py`
+  - Styled startup banner, command hints, prompt labels, and shutdown messages
+  - Consolidated prompt messaging to remove duplicate startup hints
+
+- **Documentation strengthened** with clearer, executable command guidance:
+  - `README.md` now uses cross-platform setup and `uv run` command patterns
+  - `docs/SETUP_GUIDE.md` now uses concrete clone URL and stronger run defaults
+  - `docs/QUICK_START.md` now standardizes all run/test commands with `uv run`
+
+### Removed
+- Obsolete or stale markdown reports:
+  - `DEEP_SCAN_REPORT.md`
+  - `PHASE_STATUS.md`
+  - `docs/RESTRUCTURING_PROPOSAL.md`
+
+### Validation
+- `uv run pytest tests/test_cross_platform.py -q` → 15 passed
+- `uv run pytest tests/integration/test_sprint5_memory.py -q` → 2 passed, 5 skipped
+- `uv run pytest tests/integration/test_sprint6_observability.py -q` → 8 passed
+- `uv run python -m py_compile src/interface/banner.py src/core/engine/orchestrator.py` → pass
+
 ## [Sprint 6] - 2026-03-28
 
 ### Added

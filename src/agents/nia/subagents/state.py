@@ -112,7 +112,8 @@ def create_coordinator_state(manifest: MissionManifest) -> dict:
         manifest_dict = manifest
         steps = manifest.get("steps", [])
     else:
-        manifest_dict = manifest.model_dump()
+        # Use JSON mode so enums (CapabilityScope) become plain strings.
+        manifest_dict = manifest.model_dump(mode="json")
         steps = manifest.steps
 
     pending = [

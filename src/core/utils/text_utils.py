@@ -162,6 +162,47 @@ def _parse_llama_tool_calls(content: str) -> List[Dict[str, Any]]:
     return tool_calls
 
 
+def parse_tool_call_json(content: str) -> List[Dict[str, Any]]:
+    """Parse plain JSON tool-call payloads from model text responses.
+
+    Supports payloads like:
+        {"name":"sandboxed_shell","parameters":{"command":"ls"}}
+        {"tool":"sandboxed_shell","args":{"command":"ls"}}
+    """
+    if not content:
+        return []
+
+    text = content.strip()
+    if not (text.startswith("{") and text.endswith("}")):
+        return []
+
+    try:
+        data = json.loads(text)
+    except Exception:
+        return []
+
+    if not isinstance(data, dict):
+        return []
+
+    tool_name = data.get("name") or data.get("tool")
+    raw_args = data.get("parameters")
+    if raw_args is None:
+        raw_args = data.get("args")
+
+    if not isinstance(tool_name, str) or not tool_name.strip():
+        return []
+
+    args: Dict[str, Any]
+    if isinstance(raw_args, dict):
+        args = raw_args
+    elif raw_args is None:
+        args = {}
+    else:
+        args = {"value": raw_args}
+
+    return [{"name": tool_name.strip(), "args": args, "id": f"call_{tool_name}_json"}]
+
+
 __all__ = [
     "truncate_line",
     "FuzzyMatchResult",
@@ -170,4 +211,5 @@ __all__ = [
     "_sanitize_json_string",
     "_extract_json_objects",
     "_parse_llama_tool_calls",
+    "parse_tool_call_json",
 ]

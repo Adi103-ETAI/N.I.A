@@ -95,7 +95,7 @@ def _build_logging_config(debug: bool = False) -> dict:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     
     # Base console level
-    console_level = "DEBUG" if debug else "INFO"
+    console_level = "DEBUG" if debug else "WARNING"
     noisy_level = "DEBUG" if debug else "WARNING"
     
     config = {

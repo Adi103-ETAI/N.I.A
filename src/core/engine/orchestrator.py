@@ -376,8 +376,6 @@ class NIAAssistant:
         else:
             self.logger.debug("Text mode active")
         
-        print("\nType 'help' for commands, 'exit' to quit.\n")
-        
         return True
     
     def stop(self) -> None:
@@ -562,8 +560,9 @@ class NIAAssistant:
         print("\033[0m", end="", flush=True) # Reset terminal colors
         
         # Show Splash Screen (High-Quality ASCII)
-        from src.interface.banner import BANNER
-        print("\n" + BANNER + "\n")
+        from src.interface.banner import render_banner, render_hint, style
+
+        print("\n" + render_banner() + "\n")
         
         if not await self.start():
             return
@@ -577,7 +576,8 @@ class NIAAssistant:
             except:
                 pass
 
-        print("\nType 'help' for commands, 'exit' to quit.\n")
+        print(style("Ready for directives.", "1;92"))
+        print(render_hint() + "\n")
         
         # Capture the loop for EventBus thread-safety
         self.bus.set_loop(asyncio.get_running_loop())
@@ -588,6 +588,8 @@ class NIAAssistant:
         # Main Processing Loop
         self.logger.info("🚀 Main Loop Started (Concurrent Mode)")
         
+        from src.interface.banner import style
+
         try:
             while self._running:
                 # Ghost Protocol Watchdog - Auto-engage stealth sentry on Layer 3
@@ -620,9 +622,9 @@ class NIAAssistant:
                     
                     # UI Output
                     if ui_print:
-                        ui_print(f"\n💬 NIA: {response}\n")
+                        ui_print(f"\n{style('💬 NIA', '1;96')}: {response}\n")
                     else:
-                        print(f"\n💬 NIA: {response}\n")
+                        print(f"\n{style('💬 NIA', '1;96')}: {response}\n")
                     
                     # Speak Response (Blocking I/O wrapped in thread)
                     await asyncio.to_thread(self.speak, response)
@@ -631,9 +633,9 @@ class NIAAssistant:
                     self.ui_lock.set()
                 
         except asyncio.CancelledError:
-            print("\n👋 Goodbye!")
+            print(style("\n👋 Goodbye!", "1;95"))
         except KeyboardInterrupt:
-            print("\n👋 Interrupted by user")
+            print(style("\n👋 Interrupted by user", "1;93"))
         except Exception as e:
             self.logger.error(f"Loop error: {e}", exc_info=True)
         finally:
@@ -642,13 +644,14 @@ class NIAAssistant:
 
     async def _keyboard_listener(self) -> None:
         """Background task for keyboard input."""
+        from src.interface.banner import style
+
         while self._running:
             try:
                 # 🚦 TURN-TAKING: Wait for Green Light (System Ready)
                 await self.ui_lock.wait()
                 
-                # \033[1;92m = Bold Bright Green, \033[0m = Reset
-                user_input = await aioconsole.ainput("\033[1;92mYou\033[0m: ")
+                user_input = await aioconsole.ainput(f"{style('You', '1;92')}: ")
                 
                 if user_input and user_input.strip():
                     # 🔴 Stop Light: System Busy (Lock UI immediately)

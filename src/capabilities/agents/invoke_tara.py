@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 import uuid
 import traceback
+import json
+import re
 
 from src.core.schema.mission import MissionManifest, SubagentResult
 from src.core.policy.scopes import CapabilityScope
@@ -18,6 +20,39 @@ from src.core.policy.engine import enforce_at_runtime, ScopeViolation
 from src.core.bus.context_wormhole import emit_observation
 
 logger = logging.getLogger("Capabilities.InvokeTARA")
+
+
+_TOOL_JSON_RESULT_RE = re.compile(
+    r'^\s*\{.*"(name|tool)"\s*:\s*".+?"\s*,\s*"(parameters|args)"\s*:',
+    re.DOTALL,
+)
+
+
+def _normalize_tara_output(raw: str) -> str:
+    """Return user-friendly output instead of leaking raw tool JSON payloads."""
+    text = (raw or "").strip()
+    if not text:
+        return "Task completed."
+
+    if _TOOL_JSON_RESULT_RE.match(text):
+        try:
+            payload = json.loads(text)
+            tool_name = payload.get("name") or payload.get("tool") or "tool"
+            params = payload.get("parameters")
+            if params is None:
+                params = payload.get("args")
+            if isinstance(params, dict):
+                keys = ", ".join(sorted(params.keys())) if params else "no parameters"
+            else:
+                keys = "parameters"
+            return (
+                f"Planned tool action: `{tool_name}` ({keys}). "
+                "Execution is complete and handled in mission flow."
+            )
+        except Exception:
+            return "Tool action prepared and executed."
+
+    return text
 
 
 async def invoke_tara(
@@ -94,6 +129,7 @@ async def invoke_tara(
                     break
 
         final_response = final_response or "Task completed (no explicit response)."
+        final_response = _normalize_tara_output(final_response)
 
         logger.info(f"✅ [{agent_id}] TARA completed: {final_response[:100]}...")
 

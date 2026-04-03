@@ -43,6 +43,10 @@ _DEFAULT_TIMEOUT: int = 120
 # Maximum retries per step before the step is declared failed.
 _MAX_RETRIES: int = 3
 
+# Mission-local wormhole registry.
+# Keep non-serializable runtime objects out of LangGraph checkpoint state.
+_MISSION_WORMHOLES: dict[str, ContextWormhole] = {}
+
 
 # ============================================================================
 # Helpers
@@ -187,8 +191,9 @@ async def _dispatch_node_inner(state: Dict[str, Any]) -> Dict[str, Any]:
     # ---- Build manifest for wrapper calls ----------------------------------
     manifest = MissionManifest(**mission_dict)
     
-    # ✅ Extract wormhole from state for context injection
-    wormhole = state.get("_wormhole")
+    # ✅ Fetch mission wormhole from runtime registry (not checkpointed state)
+    mission_id = mission_dict.get("mission_id", "unknown")
+    wormhole = _MISSION_WORMHOLES.get(mission_id)
 
     # ---- Dispatch coroutines -----------------------------------------------
     async def _run_step(step: dict, wormhole, manifest) -> SubagentResult:
@@ -639,7 +644,7 @@ async def run_coordinator(manifest, db_path: str = "data/checkpoints") -> dict:
         
         # 1. Initial state
         initial_state = create_coordinator_state(manifest)
-        initial_state["_wormhole"] = wormhole  # Pass to nodes
+        _MISSION_WORMHOLES[mission_id] = wormhole
 
         # 2. Set up checkpointer for crash recovery
         try:
@@ -704,6 +709,7 @@ async def run_coordinator(manifest, db_path: str = "data/checkpoints") -> dict:
     
     finally:
         # ✅ Cleanup wormhole on completion
+        _MISSION_WORMHOLES.pop(mission_id, None)
         wormhole.unsubscribe()
         logger.info(f"Context wormhole closed for mission {mission_id}")
 

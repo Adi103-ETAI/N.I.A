@@ -56,7 +56,7 @@ try:
 except ImportError:
     _HAS_PYAUTOGUI = False
     pyautogui = None  # type: ignore
-    logger.warning("pyautogui not available - input operations disabled")
+    logger.debug("pyautogui not available - input operations disabled")
 
 
 # =============================================================================

@@ -136,7 +136,7 @@ async def planner_node(state: AgentState) -> AgentState:
         }
 
     # ── 4. Persist manifest in metadata ─────────────────────────────────
-    manifest_dump = manifest.model_dump()
+    manifest_dump = manifest.model_dump(mode="json")
     new_meta = {
         **state.get("metadata", {}),
         "manifest": manifest_dump,

@@ -93,7 +93,7 @@ def _is_valid_tool_function(func: Callable, module_name: str) -> bool:
     
     # Must have a docstring (for tool description)
     if not func.__doc__:
-        logger.warning(f"Skipping {func.__name__}: no docstring")
+        logger.debug(f"Skipping {func.__name__}: no docstring")
         return False
     
     return True

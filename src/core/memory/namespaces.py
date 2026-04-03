@@ -314,7 +314,7 @@ class NamespaceManager:
         """Sync merge — runs inside ``to_thread``."""
         collection = self._get_agent_collection(agent_id)
         if collection is None:
-            logger.warning("merge_namespace: collection for %s not found", agent_id)
+            logger.debug("merge_namespace: collection for %s not found", agent_id)
             return False
 
         count = collection.count()

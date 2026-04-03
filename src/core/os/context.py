@@ -6,8 +6,7 @@ This file lives inside ``src.core.os`` and provides the canonical
     from src.core.os.context import OSContext, get_os_context
 
 The implementation lives in ``src.core.os.platform``.
-The root-level ``src.core.context`` is a backward-compat shim that
-points here, so all existing imports continue to work unchanged.
+Importers should prefer ``src.core.os`` or ``src.core.os.context``.
 """
 from src.core.os.platform import OSContext, get_os_context  # noqa: F401
 
