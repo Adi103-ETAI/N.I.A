@@ -1,5 +1,0 @@
-description: Creates a directory.
-name: mkdir_dir
-reversible: false
-scope: write
-timeout: 30

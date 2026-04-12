@@ -1,5 +1,0 @@
-description: Invokes the TARA technical executor subagent.
-name: invoke_tara
-reversible: false
-scope: execute
-timeout: 300

@@ -1,5 +1,0 @@
-description: Writes a new file to the host filesystem.
-name: write_file
-reversible: false
-scope: write
-timeout: 60

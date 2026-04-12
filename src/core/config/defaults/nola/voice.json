@@ -1,9 +1,0 @@
-{
-    "speech": {
-        "playback_poll_interval": 0.1,
-        "piper_timeout_sec": 30
-    },
-    "hearing": {
-        "model_dir_name": "vosk_model"
-    }
-}

@@ -1,1 +1,0 @@
-"""N.I.A. Subagents Package — Coordinator state and orchestration logic."""

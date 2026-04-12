@@ -20,6 +20,7 @@ wheels/
 .installed.cfg
 *.egg
 .ruff_cache/
+backup/
 # Virtual Environment
 .venv/
 venv/
@@ -63,7 +64,7 @@ Thumbs.db
  
 # Ignore non-Python language folders
 services/
-frontend/
+#frontend/
 
 # Data and logs
 data/
