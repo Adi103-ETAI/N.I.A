@@ -89,7 +89,11 @@ class LLMProvider(ABC):
     All provider implementations must subclass this and implement:
     - config: Provider configuration
     - get_client: Create an API client for this provider
+    - fetch_models: Dynamically fetch models from provider API
     """
+
+    def __init__(self) -> None:
+        self._fetched_models: list[ProviderModel] | None = None
 
     @property
     @abstractmethod
@@ -114,6 +118,14 @@ class LLMProvider(ABC):
         Returns:
             An async client suitable for streaming.
         """
+
+    def configure(self, api_key: str | None = None, base_url: str | None = None) -> None:
+        """Configure provider with credentials."""
+        if api_key:
+            self._api_key = api_key
+        if base_url:
+            self._base_url = base_url
+        self._fetched_models = None  # Reset cache
 
     def resolve_api_key(self, api_key: str | None = None) -> str | None:
         """Resolve API key from argument or environment variables."""
@@ -159,11 +171,29 @@ class LLMProvider(ABC):
 
     def get_model_info(self, model_id: str) -> ProviderModel | None:
         """Get model information by ID."""
-        for model in self.config.models:
+        models = self.list_models()
+        for model in models:
             if model.id == model_id or model.effective_api_name == model_id:
                 return model
         return None
 
     def list_models(self) -> list[ProviderModel]:
-        """List all available models."""
+        """List all available models.
+
+        Returns fetched models if available, otherwise hardcoded defaults.
+        """
+        if self._fetched_models is not None:
+            return self._fetched_models
+        return self.config.models
+
+    async def fetch_models(self) -> list[ProviderModel]:
+        """Dynamically fetch models from the provider's API.
+
+        Override this method in subclasses to fetch models from the API.
+        Falls back to hardcoded models if API call fails.
+
+        Returns:
+            List of available models.
+        """
+        # Default: return hardcoded models
         return self.config.models

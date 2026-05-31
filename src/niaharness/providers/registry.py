@@ -73,6 +73,14 @@ class ProviderRegistry:
         # Auto-detect from environment
         self._auto_detect_providers()
 
+        # Fetch models from configured providers
+        for name, state in self._states.items():
+            if state.configured and name in self._providers:
+                try:
+                    await self._providers[name].fetch_models()
+                except Exception as e:
+                    logger.debug(f"Failed to fetch models from {name}: {e}")
+
         # Set active provider from config
         if self._active_provider_id and self._active_provider_id in self._providers:
             pass  # Already set
@@ -316,6 +324,46 @@ class ProviderRegistry:
 
         logger.info(f"Configured provider: {provider_id}")
         return True
+
+    async def configure_and_fetch_models(
+        self,
+        provider_id: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Configure provider and fetch available models.
+
+        This is the method to call when user provides an API key.
+        It configures the provider and returns the list of available models.
+
+        Args:
+            provider_id: Provider ID
+            api_key: API key
+            base_url: Custom base URL
+
+        Returns:
+            List of available models
+        """
+        self.set_provider_config(provider_id, api_key, base_url)
+
+        # Fetch models from the provider
+        provider = self._providers.get(provider_id)
+        if provider:
+            try:
+                models = await provider.fetch_models()
+                return [
+                    {
+                        "id": m.id,
+                        "label": m.label,
+                        "context_window": m.context_window,
+                        "max_output": m.max_output_tokens,
+                    }
+                    for m in models
+                ]
+            except Exception as e:
+                logger.error(f"Failed to fetch models from {provider_id}: {e}")
+
+        return []
 
     def get_all_models(self) -> list[dict[str, Any]]:
         """Get all models from all configured providers."""

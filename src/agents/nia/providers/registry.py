@@ -64,6 +64,15 @@ class ProviderRegistry:
         """Configure a provider."""
         return self._registry.set_provider_config(provider_id, api_key, base_url)
 
+    async def configure_and_fetch_models(
+        self,
+        provider_id: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Configure provider and fetch available models."""
+        return await self._registry.configure_and_fetch_models(provider_id, api_key, base_url)
+
     def get_all_models(self) -> list[dict[str, Any]]:
         """Get all models from all providers."""
         return self._registry.get_all_models()

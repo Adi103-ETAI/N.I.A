@@ -21,6 +21,7 @@ class OpenAIProvider(LLMProvider):
     """OpenAI and OpenAI-compatible providers.
 
     Supports: OpenAI, Ollama, OpenRouter, Groq, Together, DeepSeek, etc.
+    Fetches models from /v1/models endpoint when API key is configured.
     """
 
     @property
@@ -38,59 +39,74 @@ class OpenAIProvider(LLMProvider):
                 default_model="gpt-4o",
             ),
             models=[
-                ProviderModel(
-                    id="gpt-4o",
-                    label="GPT-4o",
-                    context_window=128000,
-                    max_output_tokens=16384,
-                    capabilities=ProviderCapabilities(
-                        supports_vision=True,
-                        supports_streaming=True,
-                        supports_function_calling=True,
-                    ),
-                ),
-                ProviderModel(
-                    id="gpt-4o-mini",
-                    label="GPT-4o Mini",
-                    context_window=128000,
-                    max_output_tokens=16384,
-                    capabilities=ProviderCapabilities(
-                        supports_vision=True,
-                        supports_function_calling=True,
-                    ),
-                ),
-                ProviderModel(
-                    id="o3-mini",
-                    label="o3-mini",
-                    context_window=200000,
-                    max_output_tokens=100000,
-                    capabilities=ProviderCapabilities(
-                        supports_reasoning=True,
-                        supports_function_calling=True,
-                    ),
-                ),
+                # Hardcoded fallbacks - actual models fetched from API
+                ProviderModel(id="gpt-4o", label="GPT-4o", context_window=128000, max_output_tokens=16384),
+                ProviderModel(id="gpt-4o-mini", label="GPT-4o Mini", context_window=128000, max_output_tokens=16384),
+                ProviderModel(id="o3-mini", label="o3-mini", context_window=200000, max_output_tokens=100000),
             ],
             is_first_party=True,
         )
 
     def get_client(self, api_key: str | None = None, **kwargs: Any) -> Any:
         import httpx
-
         resolved_key = self.resolve_api_key(api_key)
         base_url = self.resolve_base_url(kwargs.get("base_url"))
-
         return httpx.AsyncClient(
             base_url=base_url.rstrip("/") + "/",
-            headers={
-                "Authorization": f"Bearer {resolved_key}",
-                "Content-Type": "application/json",
-            },
+            headers={"Authorization": f"Bearer {resolved_key}", "Content-Type": "application/json"},
             timeout=60.0,
         )
 
+    async def fetch_models(self) -> list[ProviderModel]:
+        """Fetch models from /v1/models endpoint."""
+        api_key = self.resolve_api_key()
+        if not api_key:
+            return self.config.models
+
+        try:
+            import httpx
+            base_url = self.resolve_base_url()
+            client = httpx.AsyncClient(
+                base_url=base_url.rstrip("/") + "/",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10.0,
+            )
+            response = await client.get("/models")
+            response.raise_for_status()
+            data = response.json()
+
+            models = []
+            for item in data.get("data", []):
+                model_id = item.get("id", "")
+                if not model_id:
+                    continue
+                # Skip embedding/moderation/tts models
+                skip = ["embedding", "embed", "moderation", "whisper", "tts", "dall-e"]
+                if any(s in model_id.lower() for s in skip):
+                    continue
+                models.append(ProviderModel(
+                    id=model_id,
+                    label=model_id.split("/")[-1],
+                    context_window=128000,
+                    max_output_tokens=4096,
+                ))
+
+            if models:
+                self._fetched_models = models
+                logger.info(f"Fetched {len(models)} models from OpenAI")
+                return models
+
+        except Exception as e:
+            logger.debug(f"Failed to fetch models from OpenAI: {e}")
+
+        return self.config.models
+
 
 class OllamaProvider(LLMProvider):
-    """Ollama local model provider."""
+    """Ollama local model provider.
+
+    Dynamically fetches models from Ollama API.
+    """
 
     @property
     def config(self) -> ProviderConfig:
@@ -99,7 +115,7 @@ class OllamaProvider(LLMProvider):
             label="Ollama (Local)",
             category=ProviderCategory.LOCAL,
             auth=ProviderAuthConfig(
-                mode=AuthMode.API_KEY,  # No key needed
+                mode=AuthMode.API_KEY,
                 default_base_url="http://localhost:11434",
                 default_model="",
             ),
@@ -109,12 +125,8 @@ class OllamaProvider(LLMProvider):
 
     def get_client(self, api_key: str | None = None, **kwargs: Any) -> Any:
         import httpx
-
         base_url = self.resolve_base_url(kwargs.get("base_url"))
-        return httpx.AsyncClient(
-            base_url=base_url.rstrip("/") + "/",
-            timeout=120.0,
-        )
+        return httpx.AsyncClient(base_url=base_url.rstrip("/") + "/", timeout=120.0)
 
     def is_configured(self) -> bool:
         """Check if Ollama is running locally."""
@@ -126,12 +138,13 @@ class OllamaProvider(LLMProvider):
         except Exception:
             return False
 
-    def list_models(self) -> list[ProviderModel]:
-        """Dynamically fetch models from Ollama API."""
-        import httpx
+    async def fetch_models(self) -> list[ProviderModel]:
+        """Fetch models from Ollama API."""
         try:
-            client = httpx.Client(base_url="http://localhost:11434/", timeout=5.0)
-            response = client.get("/api/tags")
+            import httpx
+            base_url = self.resolve_base_url()
+            client = httpx.AsyncClient(base_url=base_url.rstrip("/") + "/", timeout=10.0)
+            response = await client.get("/api/tags")
             response.raise_for_status()
             data = response.json()
 
@@ -142,13 +155,17 @@ class OllamaProvider(LLMProvider):
                     label=m["name"],
                     context_window=4096,
                     max_output_tokens=2048,
-                    capabilities=ProviderCapabilities(
-                        supports_function_calling=True,
-                    ),
                 ))
-            return models
-        except Exception:
-            return []
+
+            if models:
+                self._fetched_models = models
+                logger.info(f"Fetched {len(models)} models from Ollama")
+                return models
+
+        except Exception as e:
+            logger.debug(f"Failed to fetch models from Ollama: {e}")
+
+        return []
 
 
 class OpenRouterProvider(LLMProvider):
