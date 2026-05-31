@@ -1,16 +1,25 @@
-"""Prompt and description for FileReadTool."""
+"""FileReadTool prompt."""
 
-from .constants import MAX_LINES_TO_READ
+from __future__ import annotations
 
 
 def get_file_read_description() -> str:
-    """Get the tool description for FileReadTool."""
-    return f"""Reads a file from the local filesystem. You can access any file directly by using this tool.
+    """Get the file read tool description."""
+    return """Read a file from the local filesystem with line numbers.
+
+Supports:
+- Text files with encoding detection (UTF-8, UTF-16, etc.)
+- Image files (PNG, JPG, GIF, WebP) - returns base64-encoded data
+- PDF files - returns base64-encoded data with optional page range
+- Jupyter notebooks (.ipynb) - returns cell contents
 
 Usage:
-- The file_path parameter must be an absolute path, not a relative path
-- By default, it reads up to {MAX_LINES_TO_READ} lines starting from the beginning of the file
-- You can optionally specify a line offset and limit (especially handy for long files)
-- Results are returned with line numbers starting at 1
-- This tool can only read files, not directories
-- If you read a file that exists but has empty contents you will receive a warning"""
+- Provide the absolute file_path
+- Use offset and limit for large files
+- Use pages parameter for PDF page ranges (e.g., "1-5", "3", "10-20")
+
+Example:
+  file_path: /path/to/file.py
+  offset: 1
+  limit: 100
+"""

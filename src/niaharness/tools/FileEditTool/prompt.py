@@ -1,14 +1,26 @@
-"""Prompt and description for FileEditTool."""
+"""FileEditTool prompt."""
+
+from __future__ import annotations
 
 
 def get_edit_tool_description() -> str:
-    """Get the tool description for FileEditTool."""
-    return """Performs exact string replacements in files.
+    """Get the edit tool description."""
+    return """A tool for editing files.
+
+This tool replaces exact strings in files. It supports:
+- Exact string matching with quote normalization (curly quotes ↔ straight quotes)
+- Replace all occurrences with replace_all=true
+- Diff generation showing changes
+- File modification time tracking to detect concurrent edits
 
 Usage:
-- You must use your file_read tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.
-- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + period + space. Everything after that is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.
-- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
-- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.
-- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.
-- Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance."""
+- Provide the exact old_string to replace
+- Provide the new_string replacement
+- old_string and new_string must be different
+- The file must be read before editing
+
+Example:
+  file_path: /path/to/file.py
+  old_string: def old_function():
+  new_string: def new_function():
+"""

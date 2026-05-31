@@ -1,3 +1,6 @@
-"""BashTool."""
+"""BashTool package."""
+
 from .BashTool import BashTool
-__all__ = ["BashTool"]
+from .schema import BashToolInput
+
+__all__ = ["BashTool", "BashToolInput"]

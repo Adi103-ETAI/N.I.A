@@ -11,24 +11,56 @@ if TYPE_CHECKING:  # pragma: no cover
         ToolResultBlock,
         ToolUseBlock,
     )
-    from niaharness.engine.query_engine import QueryEngine
+    from niaharness.engine.query_engine import (
+        AbortController,
+        FileStateCache,
+        PermissionDenialTracker,
+        QueryEngine,
+    )
     from niaharness.engine.stream_events import (
         AssistantTextDelta,
+        AssistantThinkingDelta,
         AssistantTurnComplete,
+        BudgetExceeded,
+        CompactBoundary,
+        ContinuationNudge,
+        MaxOutputTokensRecovery,
+        MaxTurnsReached,
+        QueryResult,
+        StreamEvent,
+        TerminationReason,
         ToolExecutionCompleted,
         ToolExecutionStarted,
+        ToolFailureLoopDetected,
+        ToolUseSummary,
+        UserInterrupted,
     )
 
 __all__ = [
+    "AbortController",
     "AssistantTextDelta",
+    "AssistantThinkingDelta",
     "AssistantTurnComplete",
+    "BudgetExceeded",
+    "CompactBoundary",
+    "ContinuationNudge",
     "ConversationMessage",
+    "FileStateCache",
+    "MaxOutputTokensRecovery",
+    "MaxTurnsReached",
+    "PermissionDenialTracker",
     "QueryEngine",
+    "QueryResult",
+    "StreamEvent",
+    "TerminationReason",
     "TextBlock",
     "ToolExecutionCompleted",
     "ToolExecutionStarted",
+    "ToolFailureLoopDetected",
     "ToolResultBlock",
     "ToolUseBlock",
+    "ToolUseSummary",
+    "UserInterrupted",
 ]
 
 
@@ -48,29 +80,80 @@ def __getattr__(name: str):
             "ToolUseBlock": ToolUseBlock,
         }[name]
 
-    if name == "QueryEngine":
-        from niaharness.engine.query_engine import QueryEngine
+    if name in {
+        "AbortController",
+        "FileStateCache",
+        "PermissionDenialTracker",
+        "QueryEngine",
+    }:
+        from niaharness.engine.query_engine import (
+            AbortController,
+            FileStateCache,
+            PermissionDenialTracker,
+            QueryEngine,
+        )
 
-        return QueryEngine
+        return {
+            "AbortController": AbortController,
+            "FileStateCache": FileStateCache,
+            "PermissionDenialTracker": PermissionDenialTracker,
+            "QueryEngine": QueryEngine,
+        }[name]
 
     if name in {
         "AssistantTextDelta",
+        "AssistantThinkingDelta",
         "AssistantTurnComplete",
+        "BudgetExceeded",
+        "CompactBoundary",
+        "ContinuationNudge",
+        "MaxOutputTokensRecovery",
+        "MaxTurnsReached",
+        "QueryResult",
+        "StreamEvent",
+        "TerminationReason",
         "ToolExecutionCompleted",
         "ToolExecutionStarted",
+        "ToolFailureLoopDetected",
+        "ToolUseSummary",
+        "UserInterrupted",
     }:
         from niaharness.engine.stream_events import (
             AssistantTextDelta,
+            AssistantThinkingDelta,
             AssistantTurnComplete,
+            BudgetExceeded,
+            CompactBoundary,
+            ContinuationNudge,
+            MaxOutputTokensRecovery,
+            MaxTurnsReached,
+            QueryResult,
+            StreamEvent,
+            TerminationReason,
             ToolExecutionCompleted,
             ToolExecutionStarted,
+            ToolFailureLoopDetected,
+            ToolUseSummary,
+            UserInterrupted,
         )
 
         return {
             "AssistantTextDelta": AssistantTextDelta,
+            "AssistantThinkingDelta": AssistantThinkingDelta,
             "AssistantTurnComplete": AssistantTurnComplete,
+            "BudgetExceeded": BudgetExceeded,
+            "CompactBoundary": CompactBoundary,
+            "ContinuationNudge": ContinuationNudge,
+            "MaxOutputTokensRecovery": MaxOutputTokensRecovery,
+            "MaxTurnsReached": MaxTurnsReached,
+            "QueryResult": QueryResult,
+            "StreamEvent": StreamEvent,
+            "TerminationReason": TerminationReason,
             "ToolExecutionCompleted": ToolExecutionCompleted,
             "ToolExecutionStarted": ToolExecutionStarted,
+            "ToolFailureLoopDetected": ToolFailureLoopDetected,
+            "ToolUseSummary": ToolUseSummary,
+            "UserInterrupted": UserInterrupted,
         }[name]
 
     raise AttributeError(name)

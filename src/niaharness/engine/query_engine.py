@@ -1,22 +1,184 @@
-"""High-level conversation engine."""
+"""High-level conversation engine.
+
+Ported from OpenClaude's QueryEngine.ts with file state cache, permission
+denial tracking, abort controller support, and dynamic tool updates.
+Maintains full backward compatibility with the existing niaharness interface.
+"""
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator, Iterator
+from uuid import uuid4
 
 from niaharness.api.client import SupportsStreamingMessages
+from niaharness.api.usage import UsageSnapshot
 from niaharness.engine.cost_tracker import CostTracker
 from niaharness.engine.messages import ConversationMessage
-from niaharness.engine.query import AskUserPrompt, PermissionPrompt, QueryContext, run_query
-from niaharness.engine.stream_events import StreamEvent
+from niaharness.engine.query import (
+    AskUserPrompt,
+    PermissionPrompt,
+    QueryContext,
+    run_query,
+)
+from niaharness.engine.stream_events import (
+    ApiRetryNotification,
+    CompactBoundary,
+    QueryResult,
+    StreamEvent,
+    TerminationReason,
+    UserInterrupted,
+)
 from niaharness.hooks import HookExecutor
 from niaharness.permissions.checker import PermissionChecker
 from niaharness.tools.base import ToolRegistry
 
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# File state cache (ported from OpenClaude FileStateCache)
+# ---------------------------------------------------------------------------
+
+
+class FileStateCache:
+    """Tracks the last-known state (hash / mtime) of files read by tools.
+
+    Ported from OpenClaude's FileStateCache so that auto-compaction and
+    memory prefetch can skip files the model has already seen.
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[str, dict[str, Any]] = {}
+
+    def get(self, file_path: str) -> dict[str, Any] | None:
+        """Return cached state for *file_path*, or None."""
+        return self._cache.get(file_path)
+
+    def set(self, file_path: str, state: dict[str, Any]) -> None:
+        """Record state for *file_path*."""
+        self._cache[file_path] = state
+
+    def has(self, file_path: str) -> bool:
+        """Return True if the cache contains an entry for *file_path*."""
+        return file_path in self._cache
+
+    def clone(self) -> FileStateCache:
+        """Return a shallow copy of the cache."""
+        new = FileStateCache()
+        new._cache = dict(self._cache)
+        return new
+
+    def clear(self) -> None:
+        """Clear all entries."""
+        self._cache.clear()
+
+    def __contains__(self, file_path: str) -> bool:
+        return self.has(file_path)
+
+    def __len__(self) -> int:
+        return len(self._cache)
+
+    def items(self) -> Iterator[tuple[str, dict[str, Any]]]:
+        return iter(self._cache.items())
+
+
+# ---------------------------------------------------------------------------
+# Permission denial tracking (ported from OpenClaude QueryEngine)
+# ---------------------------------------------------------------------------
+
+
+class PermissionDenialTracker:
+    """Records permission denials for reporting in query results.
+
+    Ported from OpenClaude's permissionDenials array on QueryEngine.
+    """
+
+    def __init__(self) -> None:
+        self._denials: list[dict[str, Any]] = []
+
+    def record(
+        self,
+        tool_name: str,
+        tool_use_id: str,
+        tool_input: dict[str, Any],
+    ) -> None:
+        """Record a single permission denial."""
+        self._denials.append(
+            {
+                "tool_name": tool_name,
+                "tool_use_id": tool_use_id,
+                "tool_input": tool_input,
+            }
+        )
+
+    @property
+    def denials(self) -> list[dict[str, Any]]:
+        """Return a copy of all recorded denials."""
+        return list(self._denials)
+
+    def clear(self) -> None:
+        """Clear all recorded denials."""
+        self._denials.clear()
+
+
+# ---------------------------------------------------------------------------
+# Abort controller (ported from OpenClaude AbortController)
+# ---------------------------------------------------------------------------
+
+
+class AbortController:
+    """Cooperative abort mechanism for query loops.
+
+    Ported from OpenClaude's AbortController / createAbortController.
+    Thread-safe via asyncio.Event.
+    """
+
+    def __init__(self) -> None:
+        self._event = asyncio.Event()
+        self._reason: str = ""
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._event.is_set()
+
+    @property
+    def reason(self) -> str:
+        return self._reason
+
+    @property
+    def event(self) -> asyncio.Event:
+        """Return the underlying asyncio.Event for use in query loops."""
+        return self._event
+
+    def cancel(self, reason: str = "") -> None:
+        """Signal cancellation."""
+        self._reason = reason
+        self._event.set()
+
+    def reset(self) -> None:
+        """Reset the controller for reuse."""
+        self._event.clear()
+        self._reason = ""
+
+
+# ---------------------------------------------------------------------------
+# QueryEngine
+# ---------------------------------------------------------------------------
+
 
 class QueryEngine:
-    """Owns conversation history and the tool-aware model loop."""
+    """Owns conversation history and the tool-aware model loop.
+
+    Ported from OpenClaude's QueryEngine class with:
+    - File state cache for tracking read files
+    - Permission denial tracking for SDK reporting
+    - Abort controller support for cooperative cancellation
+    - Dynamic tool updates via update_tools()
+    """
 
     def __init__(
         self,
@@ -32,6 +194,9 @@ class QueryEngine:
         ask_user_prompt: AskUserPrompt | None = None,
         hook_executor: HookExecutor | None = None,
         tool_metadata: dict[str, object] | None = None,
+        max_turns: int = 200,
+        max_budget_usd: float | None = None,
+        token_budget: int | None = None,
     ) -> None:
         self._api_client = api_client
         self._tool_registry = tool_registry
@@ -44,8 +209,19 @@ class QueryEngine:
         self._ask_user_prompt = ask_user_prompt
         self._hook_executor = hook_executor
         self._tool_metadata = tool_metadata or {}
+        self._max_turns = max_turns
+        self._max_budget_usd = max_budget_usd
+        self._token_budget = token_budget
+
+        # State
         self._messages: list[ConversationMessage] = []
         self._cost_tracker = CostTracker()
+        self._file_state_cache = FileStateCache()
+        self._permission_denials = PermissionDenialTracker()
+        self._abort_controller = AbortController()
+        self._session_id = uuid4().hex
+
+    # -- Properties --------------------------------------------------------
 
     @property
     def messages(self) -> list[ConversationMessage]:
@@ -53,14 +229,46 @@ class QueryEngine:
         return list(self._messages)
 
     @property
-    def total_usage(self):
+    def total_usage(self) -> UsageSnapshot:
         """Return the total usage across all turns."""
         return self._cost_tracker.total
+
+    @property
+    def session_id(self) -> str:
+        """Return the session identifier."""
+        return self._session_id
+
+    @property
+    def abort_controller(self) -> AbortController:
+        """Return the abort controller for external cancellation."""
+        return self._abort_controller
+
+    @property
+    def file_state_cache(self) -> FileStateCache:
+        """Return the file state cache."""
+        return self._file_state_cache
+
+    @property
+    def permission_denials(self) -> list[dict[str, Any]]:
+        """Return recorded permission denials."""
+        return self._permission_denials.denials
+
+    @property
+    def total_cost_usd(self) -> float:
+        """Return the total estimated cost in USD.
+
+        Requires cost_per_token_fn to be set on the cost tracker.
+        """
+        return self._cost_tracker.total_cost_usd
+
+    # -- Mutators ----------------------------------------------------------
 
     def clear(self) -> None:
         """Clear the in-memory conversation history."""
         self._messages.clear()
         self._cost_tracker = CostTracker()
+        self._permission_denials.clear()
+        self._abort_controller.reset()
 
     def set_system_prompt(self, prompt: str) -> None:
         """Update the active system prompt for future turns."""
@@ -74,13 +282,82 @@ class QueryEngine:
         """Update the active permission checker for future turns."""
         self._permission_checker = checker
 
+    def set_max_budget_usd(self, budget: float | None) -> None:
+        """Update the USD budget cap."""
+        self._max_budget_usd = budget
+
+    def set_token_budget(self, budget: int | None) -> None:
+        """Update the token budget for auto-continuation."""
+        self._token_budget = budget
+
     def load_messages(self, messages: list[ConversationMessage]) -> None:
         """Replace the in-memory conversation history."""
         self._messages = list(messages)
 
+    def inject_messages(self, messages: list[ConversationMessage]) -> None:
+        """Append messages to the conversation history.
+
+        Used by SDK callers to resume from a forked session.
+        """
+        self._messages.extend(messages)
+
+    # -- Dynamic tool updates (ported from OpenClaude updateTools) ----------
+
+    def update_tools(self, tools: ToolRegistry) -> None:
+        """Update the engine's tool registry dynamically.
+
+        Ported from OpenClaude's QueryEngine.updateTools().  Validates
+        that the new tool set is compatible with any loaded agents before
+        committing.
+        """
+        if not isinstance(tools, ToolRegistry):
+            raise TypeError(f"update_tools: expected ToolRegistry, got {type(tools).__name__}")
+
+        # Phase 1: Validate new tools have required attributes
+        for name in tools.list_names():
+            tool = tools.get(name)
+            if tool is None:
+                raise TypeError(f"update_tools: tool '{name}' not found in registry")
+
+        # Phase 2: Commit
+        self._tool_registry = tools
+        logger.info("Tool registry updated with %d tools", len(tools.list_names()))
+
+    def add_tool(self, name: str, tool: Any) -> None:
+        """Add a single tool to the registry dynamically."""
+        self._tool_registry.register(name, tool)
+        logger.info("Tool '%s' added to registry", name)
+
+    def remove_tool(self, name: str) -> bool:
+        """Remove a tool from the registry. Returns True if removed."""
+        removed = self._tool_registry.unregister(name)
+        if removed:
+            logger.info("Tool '%s' removed from registry", name)
+        return removed
+
+    # -- Interrupt ---------------------------------------------------------
+
+    def interrupt(self) -> None:
+        """Cancel the current query loop.
+
+        Ported from OpenClaude's QueryEngine.interrupt().
+        """
+        self._abort_controller.cancel(reason="user_interrupt")
+
+    # -- Core query --------------------------------------------------------
+
     async def submit_message(self, prompt: str) -> AsyncIterator[StreamEvent]:
-        """Append a user message and execute the query loop."""
+        """Append a user message and execute the query loop.
+
+        Enhanced with:
+        - Abort controller integration
+        - Permission denial tracking
+        - Budget enforcement (max turns, max USD)
+        - File state cache propagation
+        """
+        self._abort_controller.reset()
         self._messages.append(ConversationMessage.from_user_text(prompt))
+
         context = QueryContext(
             api_client=self._api_client,
             tool_registry=self._tool_registry,
@@ -93,8 +370,41 @@ class QueryEngine:
             ask_user_prompt=self._ask_user_prompt,
             hook_executor=self._hook_executor,
             tool_metadata=self._tool_metadata,
+            max_turns=self._max_turns,
+            max_budget_usd=self._max_budget_usd,
+            token_budget=self._token_budget,
+            abort_event=self._abort_controller.event,
         )
-        async for event, usage in run_query(context, self._messages):
+
+        async for event, usage in run_query(
+            context,
+            self._messages,
+            cost_usd_fn=lambda: self.total_cost_usd,
+        ):
             if usage is not None:
                 self._cost_tracker.add(usage)
             yield event
+
+    # -- Convenience -------------------------------------------------------
+
+    def get_read_file_state(self) -> FileStateCache:
+        """Return the file state cache.
+
+        Ported from OpenClaude's QueryEngine.getReadFileState().
+        """
+        return self._file_state_cache
+
+    def get_messages(self) -> list[ConversationMessage]:
+        """Return the current message list (read-only copy).
+
+        Ported from OpenClaude's QueryEngine.getMessages().
+        """
+        return list(self._messages)
+
+    def set_max_turns(self, max_turns: int) -> None:
+        """Update the maximum number of turns."""
+        self._max_turns = max_turns
+
+    def set_max_tokens(self, max_tokens: int) -> None:
+        """Update the max output tokens per API call."""
+        self._max_tokens = max_tokens

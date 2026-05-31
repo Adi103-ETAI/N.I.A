@@ -109,3 +109,4 @@ gen_manifests.py
 .gemini/
 .agent/
 .testsprite/
+openclaude/

@@ -1,10 +1,20 @@
-"""OpenAI-compatible API client for providers like Alibaba DashScope, GitHub Models, etc."""
+"""OpenAI-compatible API client with comprehensive provider support.
+
+Enhanced port from OpenClaude with support for:
+- All OpenAI-compatible providers (Ollama, OpenRouter, Groq, Together, etc.)
+- Comprehensive retry logic with exponential backoff
+- Error classification and provider-specific handling
+- Streaming with tool call accumulation
+- Thinking/reasoning content preservation
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import random
+from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 from openai import AsyncOpenAI
@@ -12,14 +22,29 @@ from openai import AsyncOpenAI
 from niaharness.api.client import (
     ApiMessageCompleteEvent,
     ApiMessageRequest,
+    ApiRetryEvent,
     ApiStreamEvent,
     ApiTextDeltaEvent,
+    get_retry_delay,
 )
 from niaharness.api.errors import (
     AuthenticationFailure,
+    ConnectionFailure,
+    ContextOverflowFailure,
+    ModelNotFoundFailure,
     NiaHarnessApiError,
     RateLimitFailure,
     RequestFailure,
+    translate_api_error,
+)
+from niaharness.api.provider_config import (
+    ProviderConfig,
+    detect_provider_from_url,
+    get_local_provider_retry_base_urls,
+    is_azure_endpoint,
+    is_local_provider_url,
+    is_likely_ollama_endpoint,
+    should_attempt_local_toolless_retry,
 )
 from niaharness.api.usage import UsageSnapshot
 from niaharness.engine.messages import (
@@ -32,10 +57,16 @@ from niaharness.engine.messages import (
 
 log = logging.getLogger(__name__)
 
+# Retry configuration
 MAX_RETRIES = 3
 BASE_DELAY = 1.0
 MAX_DELAY = 30.0
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
 
+
+# ---------------------------------------------------------------------------
+# Message conversion helpers
+# ---------------------------------------------------------------------------
 
 def _convert_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert Anthropic tool schemas to OpenAI function-calling format.
@@ -106,10 +137,9 @@ def _convert_messages_to_openai(
 def _convert_assistant_message(msg: ConversationMessage) -> dict[str, Any]:
     """Convert an assistant ConversationMessage to OpenAI format.
 
-    Providers with thinking models (e.g. Kimi k2.5) require a
+    Providers with thinking models (e.g. Kimi k2.5, DeepSeek) require a
     ``reasoning_content`` field on every assistant message that contains
-    tool calls.  We stash the raw reasoning text on ``msg._reasoning``
-    during parsing and replay it here.
+    tool calls.
     """
     text_parts = [b.text for b in msg.content if isinstance(b, TextBlock)]
     tool_uses = [b for b in msg.content if isinstance(b, ToolUseBlock)]
@@ -167,40 +197,154 @@ def _parse_assistant_response(response: Any) -> ConversationMessage:
     return ConversationMessage(role="assistant", content=content)
 
 
+# ---------------------------------------------------------------------------
+# Error classification
+# ---------------------------------------------------------------------------
+
+def _classify_openai_error(exc: Exception) -> tuple[str, bool]:
+    """Classify OpenAI error into category and retryability."""
+    status = getattr(exc, "status_code", None)
+    msg = str(exc).lower()
+
+    if status == 401 or status == 403:
+        return "auth_invalid", False
+    if status == 404:
+        return "endpoint_not_found", False
+    if status == 429:
+        return "rate_limited", True
+    if status == 402:
+        return "rate_limited", False  # Credits exhausted
+    if status in {500, 502, 503}:
+        return "provider_unavailable", True
+    if status == 400:
+        if "too many tokens" in msg or "context length" in msg or "prompt is too long" in msg:
+            return "context_overflow", False
+        if "model" in msg and ("not found" in msg or "does not exist" in msg):
+            return "model_not_found", False
+        if "tool" in msg:
+            return "tool_call_incompatible", False
+
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return "connection_refused", True
+
+    return "unknown", False
+
+
+# ---------------------------------------------------------------------------
+# Client implementation
+# ---------------------------------------------------------------------------
+
 class OpenAICompatibleClient:
-    """Client for OpenAI-compatible APIs (DashScope, GitHub Models, etc.).
+    """Client for OpenAI-compatible APIs with comprehensive provider support.
 
     Implements the same SupportsStreamingMessages protocol as AnthropicApiClient
     so it can be used as a drop-in replacement in the agent loop.
+
+    Supports:
+    - OpenAI, Azure OpenAI, Ollama, OpenRouter, Groq, Together AI
+    - DeepSeek, Fireworks, NVIDIA NIM, Cerebras
+    - AWS Bedrock, Google Vertex, Mistral
+    - Comprehensive retry with exponential backoff
+    - Error classification and provider-specific handling
+    - Local provider optimizations (Ollama tool-less retry)
     """
 
-    def __init__(self, api_key: str, *, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str | None = None,
+        max_retries: int = MAX_RETRIES,
+        provider_config: ProviderConfig | None = None,
+    ) -> None:
+        self._provider_config = provider_config or detect_provider_from_url(base_url or "")
         kwargs: dict[str, Any] = {"api_key": api_key}
+
         if base_url:
             kwargs["base_url"] = base_url
+
+        # Azure uses different auth header
+        if is_azure_endpoint(base_url or ""):
+            kwargs["default_headers"] = {"api-key": api_key}
+
         self._client = AsyncOpenAI(**kwargs)
+        self._max_retries = max_retries
+        self._base_url = base_url or ""
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Yield text deltas and the final message, matching the Anthropic client interface."""
         last_error: Exception | None = None
+        should_retry_without_tools = False
 
-        for attempt in range(MAX_RETRIES + 1):
+        for attempt in range(self._max_retries + 1):
             try:
-                async for event in self._stream_once(request):
+                # If we're retrying without tools (Ollama compatibility)
+                current_request = request
+                if should_retry_without_tools:
+                    current_request = ApiMessageRequest(
+                        model=request.model,
+                        messages=request.messages,
+                        system_prompt=request.system_prompt,
+                        max_tokens=request.max_tokens,
+                        tools=[],  # Empty tools
+                        temperature=request.temperature,
+                        top_p=request.top_p,
+                        reasoning_effort=request.reasoning_effort,
+                        stream=request.stream,
+                    )
+                    should_retry_without_tools = False
+
+                async for event in self._stream_once(current_request):
                     yield event
                 return
             except NiaHarnessApiError:
                 raise
             except Exception as exc:
                 last_error = exc
-                if attempt >= MAX_RETRIES or not self._is_retryable(exc):
+                category, retryable = _classify_openai_error(exc)
+
+                # Check for local provider tool-less retry
+                if (
+                    not should_retry_without_tools
+                    and is_likely_ollama_endpoint(self._base_url)
+                    and should_attempt_local_toolless_retry(self._base_url, bool(request.tools))
+                    and category == "tool_call_incompatible"
+                ):
+                    log.warning(
+                        "Ollama rejected tool-calling, retrying without tools",
+                    )
+                    should_retry_without_tools = True
+                    continue
+
+                if attempt >= self._max_retries or not retryable:
                     raise self._translate_error(exc) from exc
 
+                # Calculate delay
                 delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
+
+                # Check for Retry-After header
+                retry_after = getattr(exc, "headers", {})
+                if hasattr(retry_after, "get"):
+                    val = retry_after.get("retry-after")
+                    if val:
+                        try:
+                            delay = min(float(val), MAX_DELAY)
+                        except (ValueError, TypeError):
+                            pass
+
                 log.warning(
-                    "OpenAI API request failed (attempt %d/%d), retrying in %.1fs: %s",
-                    attempt + 1, MAX_RETRIES + 1, delay, exc,
+                    "OpenAI API request failed (attempt %d/%d, category=%s), retrying in %.1fs: %s",
+                    attempt + 1, self._max_retries + 1, category, delay, exc,
                 )
+
+                yield ApiRetryEvent(
+                    attempt=attempt + 1,
+                    max_retries=self._max_retries,
+                    delay_seconds=delay,
+                    error=str(exc),
+                    status_code=getattr(exc, "status_code", None),
+                )
+
                 await asyncio.sleep(delay)
 
         if last_error is not None:
@@ -221,10 +365,13 @@ class OpenAICompatibleClient:
         if openai_tools:
             params["tools"] = openai_tools
             # Some providers (Kimi) error on empty reasoning_content in
-            # tool-call follow-ups.  Omit the entire stream_options key if
-            # tools are present – avoids triggering model-side thinking mode
-            # that requires reasoning_content on every assistant message.
+            # tool-call follow-ups. Omit stream_options if tools are present.
             params.pop("stream_options", None)
+
+        if request.temperature is not None:
+            params["temperature"] = request.temperature
+        if request.top_p is not None:
+            params["top_p"] = request.top_p
 
         # Collect full response while streaming text deltas
         collected_content = ""
@@ -323,20 +470,22 @@ class OpenAICompatibleClient:
         )
 
     @staticmethod
-    def _is_retryable(exc: Exception) -> bool:
-        status = getattr(exc, "status_code", None)
-        if status and status in {429, 500, 502, 503}:
-            return True
-        if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
-            return True
-        return False
-
-    @staticmethod
     def _translate_error(exc: Exception) -> NiaHarnessApiError:
+        """Translate an exception to a NiaHarnessApiError."""
         status = getattr(exc, "status_code", None)
         msg = str(exc)
+
         if status == 401 or status == 403:
             return AuthenticationFailure(msg)
         if status == 429:
             return RateLimitFailure(msg)
+        if status == 400:
+            msg_lower = msg.lower()
+            if "too many tokens" in msg_lower or "context length" in msg_lower:
+                return ContextOverflowFailure(msg)
+            if "model" in msg_lower and "not found" in msg_lower:
+                return ModelNotFoundFailure(msg)
+        if status in {502, 503}:
+            return ConnectionFailure(msg)
+
         return RequestFailure(msg)
