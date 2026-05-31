@@ -1,9 +1,7 @@
-"""Provider Registry - Discovers and manages LLM providers.
+"""N.I.A Provider Registry - Uses niaharness unified registry.
 
-Central registry that:
-- Registers available providers
-- Discovers providers from config
-- Routes requests to the active provider
+This is a thin wrapper around niaharness.providers.registry
+that adds NIA-specific features like config persistence.
 """
 
 from __future__ import annotations
@@ -11,187 +9,69 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from agents.nia.providers.base import LLMProvider
-from agents.nia.providers.types import ModelInfo, ProviderInfo
-from agents.nia.config import ConfigManager, NIAConfig
+from niaharness.providers.registry import ProviderRegistry as NiaHarnessRegistry
+from niaharness.providers.base import LLMProvider, ProviderModel
 
 logger = logging.getLogger(__name__)
 
 
 class ProviderRegistry:
-    """Registry of all available LLM providers.
+    """N.I.A's provider registry.
 
-    Usage:
-        registry = ProviderRegistry(config_manager)
-        await registry.initialize()
-
-        # List providers
-        providers = registry.list_providers()
-
-        # Switch provider/model
-        registry.set_active("openai", "gpt-4o")
-
-        # Get the active LLM
-        llm = registry.get_active_provider()
-        response = await llm.complete(request)
+    Wraps niaharness.providers.registry.ProviderRegistry
+    and adds NIA-specific features.
     """
 
-    def __init__(self, config_manager: ConfigManager) -> None:
+    def __init__(self, config_manager: Any = None) -> None:
         self._config_manager = config_manager
-        self._providers: dict[str, LLMProvider] = {}
-        self._active_provider_id: str = ""
-        self._active_model: str = ""
+        self._registry = NiaHarnessRegistry()
 
     async def initialize(self) -> None:
-        """Initialize all configured providers."""
-        config = self._config_manager.config
+        """Initialize all providers."""
+        await self._registry.initialize()
+        logger.info(f"NIA registry initialized: {self._registry.get_status()}")
 
-        # Import and register all built-in providers
-        await self._register_builtin_providers()
-
-        # Configure providers from config
-        for provider_id, pc in config.providers.items():
-            if provider_id in self._providers:
-                provider = self._providers[provider_id]
-                provider.configure(
-                    api_key=pc.api_key,
-                    base_url=pc.base_url,
-                )
-                logger.info(f"Configured provider: {provider_id}")
-
-        # Fetch models from configured providers
-        for provider_id, provider in self._providers.items():
-            if provider.is_configured():
-                try:
-                    models = await provider.fetch_models()
-                    logger.info(f"Fetched {len(models)} models from {provider_id}")
-                except Exception as e:
-                    logger.debug(f"Failed to fetch models from {provider_id}: {e}")
-
-        # Set active provider
-        self._active_provider_id = config.active_provider
-        self._active_model = config.active_model
-
-        if self._active_provider_id and self._active_provider_id not in self._providers:
-            logger.warning(f"Active provider '{self._active_provider_id}' not found, falling back")
-            self._active_provider_id = self._find_first_configured()
-
-        logger.info(f"Registry initialized. Active: {self._active_provider_id}/{self._active_model}")
-
-    def _find_first_configured(self) -> str:
-        """Find the first configured provider."""
-        for pid, provider in self._providers.items():
-            if provider.is_configured():
-                return pid
-        return ""
-
-    async def _register_builtin_providers(self) -> None:
-        """Register all built-in providers."""
-        # Anthropic
-        from agents.nia.providers.anthropic import AnthropicProvider
-        self._providers["anthropic"] = AnthropicProvider()
-
-        # OpenAI
-        from agents.nia.providers.openai import OpenAIProvider
-        self._providers["openai"] = OpenAIProvider()
-
-        # Ollama
-        from agents.nia.providers.ollama import OllamaProvider
-        self._providers["ollama"] = OllamaProvider()
-
-        # Groq
-        from agents.nia.providers.groq import GroqProvider
-        self._providers["groq"] = GroqProvider()
-
-        # Together
-        from agents.nia.providers.together import TogetherProvider
-        self._providers["together"] = TogetherProvider()
-
-        # DeepSeek
-        from agents.nia.providers.deepseek import DeepSeekProvider
-        self._providers["deepseek"] = DeepSeekProvider()
-
-        # Google
-        from agents.nia.providers.google import GoogleProvider
-        self._providers["google"] = GoogleProvider()
-
-        # NVIDIA
-        from agents.nia.providers.nvidia import NVIDIAProvider
-        self._providers["nvidia"] = NVIDIAProvider()
-
-        # Cerebras
-        from agents.nia.providers.cerebras import CerebrasProvider
-        self._providers["cerebras"] = CerebrasProvider()
-
-        # Fireworks
-        from agents.nia.providers.fireworks import FireworksProvider
-        self._providers["fireworks"] = FireworksProvider()
-
-        # OpenRouter
-        from agents.nia.providers.openrouter import OpenRouterProvider
-        self._providers["openrouter"] = OpenRouterProvider()
-
-        logger.info(f"Registered {len(self._providers)} providers")
-
-    def list_providers(self) -> list[ProviderInfo]:
-        """List all registered providers."""
-        return [p.get_info() for p in self._providers.values()]
+    def list_providers(self) -> list[dict[str, Any]]:
+        """List all providers with status."""
+        return self._registry.list_providers()
 
     def get_provider(self, provider_id: str) -> LLMProvider | None:
-        """Get a specific provider."""
-        return self._providers.get(provider_id)
+        """Get a provider by ID."""
+        return self._registry.get_provider(provider_id)
 
     def get_active_provider(self) -> LLMProvider | None:
         """Get the currently active provider."""
-        if self._active_provider_id:
-            return self._providers.get(self._active_provider_id)
-        return None
+        return self._registry.get_active_provider()
+
+    def get_active_provider_id(self) -> str:
+        """Get the active provider ID."""
+        return self._registry.get_active_provider_id()
 
     def get_active_model(self) -> str:
-        """Get the currently active model ID."""
-        return self._active_model
+        """Get the active model."""
+        return self._registry.get_active_model()
 
     def set_active(self, provider_id: str, model: str | None = None) -> bool:
         """Set the active provider and model."""
-        if provider_id not in self._providers:
-            logger.error(f"Provider not found: {provider_id}")
-            return False
+        return self._registry.set_active(provider_id, model)
 
-        self._active_provider_id = provider_id
-        if model:
-            self._active_model = model
+    def set_provider_config(
+        self,
+        provider_id: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> bool:
+        """Configure a provider."""
+        return self._registry.set_provider_config(provider_id, api_key, base_url)
 
-        # Persist to config
-        self._config_manager.set_active_provider(provider_id, model)
-        logger.info(f"Active provider set to: {provider_id}/{self._active_model}")
-        return True
-
-    def get_all_models(self) -> list[ModelInfo]:
+    def get_all_models(self) -> list[dict[str, Any]]:
         """Get all models from all providers."""
-        models = []
-        for provider in self._providers.values():
-            if provider.is_configured():
-                models.extend(provider.list_models())
-        return models
+        return self._registry.get_all_models()
 
-    def search_providers(self, query: str) -> list[ProviderInfo]:
-        """Search providers by name or ID."""
-        query_lower = query.lower()
-        return [
-            p.get_info() for p in self._providers.values()
-            if query_lower in p.id.lower() or query_lower in p.name.lower()
-        ]
-
-    def is_configured(self, provider_id: str) -> bool:
-        """Check if a provider is configured."""
-        provider = self._providers.get(provider_id)
-        return provider is not None and provider.is_configured()
+    def search_providers(self, query: str) -> list[dict[str, Any]]:
+        """Search providers."""
+        return self._registry.search_providers(query)
 
     def get_status(self) -> dict[str, Any]:
         """Get registry status."""
-        return {
-            "total_providers": len(self._providers),
-            "configured": sum(1 for p in self._providers.values() if p.is_configured()),
-            "active_provider": self._active_provider_id,
-            "active_model": self._active_model,
-        }
+        return self._registry.get_status()

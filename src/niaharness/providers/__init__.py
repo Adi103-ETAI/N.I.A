@@ -1,14 +1,23 @@
-"""LLM provider implementations for NiaHarness.
+"""Unified LLM Provider Registry for NiaHarness.
 
-Provides provider classes for:
-- Anthropic (native + OAuth)
-- AWS Bedrock
-- Google Vertex AI
-- Azure OpenAI
-- Mistral AI
+Single source of truth for all LLM providers with dynamic switching.
+
+Usage:
+    from niaharness.providers import ProviderRegistry
+
+    registry = ProviderRegistry()
+    await registry.initialize()
+
+    # List providers
+    providers = registry.list_providers()
+
+    # Switch provider and model
+    registry.set_active("openai", "gpt-4o")
+
+    # Get active provider
+    provider = registry.get_active_provider()
+    client = provider.get_client()
 """
-
-from typing import Any
 
 from niaharness.providers.base import (
     LLMProvider,
@@ -19,11 +28,7 @@ from niaharness.providers.base import (
     AuthMode,
     ProviderAuthConfig,
 )
-from niaharness.providers.anthropic import AnthropicProvider
-from niaharness.providers.bedrock import BedrockProvider
-from niaharness.providers.vertex import VertexProvider
-from niaharness.providers.azure import AzureOpenAIProvider
-from niaharness.providers.mistral import MistralProvider
+from niaharness.providers.registry import ProviderRegistry
 
 __all__ = [
     # Base classes
@@ -34,52 +39,41 @@ __all__ = [
     "ProviderCategory",
     "AuthMode",
     "ProviderAuthConfig",
-    # Provider implementations
-    "AnthropicProvider",
-    "BedrockProvider",
-    "VertexProvider",
-    "AzureOpenAIProvider",
-    "MistralProvider",
+    # Registry
+    "ProviderRegistry",
 ]
-
-PROVIDER_REGISTRY: dict[str, type[LLMProvider]] = {
-    "anthropic": AnthropicProvider,
-    "bedrock": BedrockProvider,
-    "vertex": VertexProvider,
-    "azure": AzureOpenAIProvider,
-    "mistral": MistralProvider,
-}
 
 
 def get_provider_class(name: str) -> type[LLMProvider] | None:
     """Get a provider class by name."""
-    return PROVIDER_REGISTRY.get(name)
+    from niaharness.providers import registry as _reg
+    # Import all provider classes
+    from niaharness.providers.anthropic import AnthropicProvider
+    from niaharness.providers.openai import (
+        OpenAIProvider, OllamaProvider, OpenRouterProvider,
+        GroqProvider, TogetherProvider, DeepSeekProvider,
+        GoogleProvider, NVIDIAProvider, CerebrasProvider, FireworksProvider,
+    )
+    from niaharness.providers.bedrock import BedrockProvider
+    from niaharness.providers.vertex import VertexProvider
+    from niaharness.providers.azure import AzureOpenAIProvider
+    from niaharness.providers.mistral import MistralProvider
 
-
-def list_providers() -> list[str]:
-    """List all registered provider names."""
-    return list(PROVIDER_REGISTRY.keys())
-
-
-def create_provider(name: str, **kwargs: Any) -> LLMProvider:
-    """Create a provider instance by name.
-
-    Args:
-        name: Provider name (e.g., "anthropic", "bedrock", "vertex").
-        **kwargs: Additional keyword arguments passed to provider constructor.
-
-    Returns:
-        Provider instance.
-
-    Raises:
-        ValueError: If provider name is not registered.
-    """
-    from typing import Any as _Any
-
-    cls = PROVIDER_REGISTRY.get(name)
-    if cls is None:
-        raise ValueError(
-            f"Unknown provider: {name!r}. "
-            f"Available providers: {', '.join(PROVIDER_REGISTRY.keys())}"
-        )
-    return cls(**kwargs)
+    classes = {
+        "anthropic": AnthropicProvider,
+        "openai": OpenAIProvider,
+        "ollama": OllamaProvider,
+        "openrouter": OpenRouterProvider,
+        "groq": GroqProvider,
+        "together": TogetherProvider,
+        "deepseek": DeepSeekProvider,
+        "google": GoogleProvider,
+        "nvidia": NVIDIAProvider,
+        "cerebras": CerebrasProvider,
+        "fireworks": FireworksProvider,
+        "bedrock": BedrockProvider,
+        "vertex": VertexProvider,
+        "azure": AzureOpenAIProvider,
+        "mistral": MistralProvider,
+    }
+    return classes.get(name)

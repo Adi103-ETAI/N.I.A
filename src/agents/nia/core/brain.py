@@ -98,7 +98,9 @@ class NIABrain:
         self._provider = provider
         if model:
             self._model = model
-        logger.info(f"Brain provider set to: {provider.id}/{model or 'default'}")
+        provider_name = getattr(provider, 'config', None)
+        name = provider_name.name if provider_name else getattr(provider, 'id', 'unknown')
+        logger.info(f"Brain provider set to: {name}/{model or 'default'}")
 
     def _load_prompts(self) -> None:
         """Load prompt files from prompts/ directory."""
@@ -269,10 +271,15 @@ class NIABrain:
 
     def get_stats(self) -> dict[str, Any]:
         """Return brain statistics."""
+        provider_name = "none"
+        if self._provider:
+            config = getattr(self._provider, 'config', None)
+            provider_name = config.name if config else getattr(self._provider, 'id', 'unknown')
+
         return {
             "total_decisions": self._decision_count,
             "history_length": len(self._conversation_history),
-            "provider": self._provider.id if self._provider else "none",
+            "provider": provider_name,
             "model": self._model or "default",
             "prompts_loaded": bool(self._system_prompt),
         }

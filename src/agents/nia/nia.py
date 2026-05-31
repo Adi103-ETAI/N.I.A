@@ -131,14 +131,15 @@ class NIA:
 
         # Add provider info to greeting
         if active_provider:
-            greeting += f"\nConnected to {active_provider.name}/{active_model or 'default model'}"
+            provider_name = active_provider.config.label if hasattr(active_provider, 'config') else 'Unknown'
+            greeting += f"\nConnected to {provider_name}/{active_model or 'default model'}"
         else:
             greeting += self._get_setup_prompt()
 
         self._state.system_state = SystemState.READY
         self._initialized = True
 
-        logger.info(f"N.I.A ready. Provider: {active_provider.id if active_provider else 'none'}")
+        logger.info(f"N.I.A ready. Provider: {active_provider.config.name if active_provider and hasattr(active_provider, 'config') else 'none'}")
         return greeting
 
     def _get_setup_prompt(self) -> str:
@@ -309,13 +310,14 @@ class NIA:
         provider_info = {}
         active = self._provider_registry.get_active_provider()
         if active:
-            info = active.get_info()
-            provider_info = {
-                "id": info.id,
-                "name": info.name,
-                "model": self._provider_registry.get_active_model(),
-                "configured": info.api_key_configured,
-            }
+            config = getattr(active, 'config', None)
+            if config:
+                provider_info = {
+                    "id": config.name,
+                    "name": config.label,
+                    "model": self._provider_registry.get_active_model(),
+                    "configured": True,
+                }
 
         return {
             "state": self._state.system_state.value,
