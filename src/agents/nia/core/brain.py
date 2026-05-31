@@ -39,6 +39,9 @@ class BrainResponse:
     confidence: float = 0.9
     needs_clarification: bool = False
     clarification_question: str | None = None
+    # For ReAct mode
+    plan: Any | None = None  # ReActPlan if using multi-step reasoning
+    use_react: bool = False  # Whether to use ReAct loop
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> BrainResponse:
@@ -59,6 +62,7 @@ class BrainResponse:
             confidence=float(data.get("confidence", 0.9)),
             needs_clarification=data.get("needs_clarification", False),
             clarification_question=data.get("clarification_question"),
+            use_react=data.get("use_react", False),
         )
 
 
@@ -272,3 +276,34 @@ class NIABrain:
             "model": self._model or "default",
             "prompts_loaded": bool(self._system_prompt),
         }
+
+    async def think_for_react(self, prompt: str) -> str:
+        """Think about a prompt and return the response as a string.
+
+        Used by the ReAct loop for planning, reflecting, and adjusting.
+        """
+        if self._provider is None:
+            return "LLM unavailable"
+
+        model = self._model
+        if not model and self._provider:
+            models = self._provider.list_models()
+            if models:
+                model = models[0].id
+
+        messages = [{"role": "user", "content": prompt}]
+
+        request = LLMRequest(
+            model=model or self._provider.id if self._provider else "unknown",
+            messages=messages,
+            system="You are N.I.A's reasoning engine. Think step by step and provide clear, actionable responses.",
+            max_tokens=1024,
+            temperature=0.3,
+        )
+
+        try:
+            response = await self._provider.complete(request)
+            return response.content
+        except Exception as e:
+            logger.error(f"Brain think_for_react failed: {e}")
+            return f"Error: {e}"

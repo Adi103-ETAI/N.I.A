@@ -15,6 +15,7 @@ from agents.nia.core.brain import NIABrain, BrainResponse
 from agents.nia.core.personality import Personality, PersonalityConfig
 from agents.nia.core.memory import Memory
 from agents.nia.core.context import Context
+from agents.nia.core.react import ReActLoop
 from agents.nia.communication.listener import Listener
 from agents.nia.communication.speaker import Speaker
 from agents.nia.orchestration.dispatcher import Dispatcher
@@ -166,7 +167,7 @@ class NIA:
         This is the main loop:
         1. Listen (parse input)
         2. Think (LLM brain processes)
-        3. Decide (what to do)
+        3. Decide (what to do - simple or ReAct)
         4. Act (delegate to OpenHarness)
         5. Speak (respond to user)
         """
@@ -203,28 +204,16 @@ class NIA:
         if brain_response.needs_clarification:
             return brain_response.clarification_question or brain_response.response
 
-        # 4. Act - Delegate to OpenHarness if needed
-        response = brain_response.response
-        if brain_response.tasks:
-            self._state.start_operation(f"Executing {len(brain_response.tasks)} tasks")
-
-            # Dispatch tasks to OpenHarness
-            tool_calls = []
-            for task in brain_response.tasks:
-                tool_calls.append((task.description, task.tool, task.args))
-
-            if tool_calls:
-                tasks = self._dispatcher.dispatch_batch(tool_calls)
-                # Execute the tasks
-                result = await self._dispatcher.execute_pending()
-                if result.tasks_succeeded > 0:
-                    response += f"\n\nExecuted {result.tasks_succeeded} task(s) successfully."
-                if result.tasks_failed > 0:
-                    response += f"\n\n{result.tasks_failed} task(s) failed."
-                    for error in result.errors[:3]:  # Show first 3 errors
-                        response += f"\n  - {error}"
-
-            self._state.complete_operation("task_execution")
+        # 4. Decide: Simple (one-shot) or ReAct (multi-step)
+        if brain_response.use_react and brain_response.tasks:
+            # Use ReAct loop for complex multi-step tasks
+            response = await self._execute_with_react(user_input, brain_response, context_data)
+        elif brain_response.tasks:
+            # Simple one-shot execution
+            response = await self._execute_simple(brain_response)
+        else:
+            # No tasks, just conversation
+            response = brain_response.response
 
         # 5. Speak - Format response
         spoken = self._speaker.speak(response)
@@ -233,6 +222,78 @@ class NIA:
         self._memory.add_conversation("assistant", spoken.text)
 
         return spoken.text
+
+    async def _execute_simple(self, brain_response: BrainResponse) -> str:
+        """Execute tasks in simple one-shot mode."""
+        response = brain_response.response
+        self._state.start_operation(f"Executing {len(brain_response.tasks)} tasks")
+
+        # Dispatch tasks to OpenHarness
+        tool_calls = []
+        for task in brain_response.tasks:
+            tool_calls.append((task.description, task.tool, task.args))
+
+        if tool_calls:
+            tasks = self._dispatcher.dispatch_batch(tool_calls)
+            # Execute the tasks
+            result = await self._dispatcher.execute_pending()
+            if result.tasks_succeeded > 0:
+                response += f"\n\nExecuted {result.tasks_succeeded} task(s) successfully."
+            if result.tasks_failed > 0:
+                response += f"\n\n{result.tasks_failed} task(s) failed."
+                for error in result.errors[:3]:  # Show first 3 errors
+                    response += f"\n  - {error}"
+
+        self._state.complete_operation("task_execution")
+        return response
+
+    async def _execute_with_react(
+        self,
+        user_input: str,
+        brain_response: BrainResponse,
+        context_data: dict[str, Any],
+    ) -> str:
+        """Execute using the ReAct loop for complex multi-step tasks."""
+        self._state.start_operation("ReAct loop")
+
+        # Create the ReAct loop
+        react = ReActLoop(
+            think_fn=self._brain.think_for_react,
+            execute_fn=self._bridge.execute_tool,
+            max_steps=10,
+        )
+
+        # Run the ReAct loop
+        final_result = ""
+        async for event in react.run(user_input, context_data):
+            event_type = event.get("type")
+
+            if event_type == "plan":
+                plan = event["plan"]
+                final_result = f"Plan: {plan.goal}\n\n"
+                for step in plan.steps:
+                    final_result += f"  Step {step.step_number}: {step.thought}\n"
+
+            elif event_type == "step_complete":
+                step = event["step"]
+                status = "✓" if step.status.value == "completed" else "✗"
+                final_result += f"\n{status} Step {step.step_number}: {step.action[:50]}"
+                if step.result:
+                    # Truncate long results
+                    result_preview = step.result[:100] + "..." if len(step.result) > 100 else step.result
+                    final_result += f"\n  Result: {result_preview}"
+
+            elif event_type == "reflect":
+                reflection = event["reflection"]
+                if reflection:
+                    final_result += f"\n  Reflection: {reflection[:100]}"
+
+            elif event_type == "complete":
+                result = event["result"]
+                final_result = result
+
+        self._state.complete_operation("react_loop")
+        return final_result
 
     def switch_provider(self, provider_id: str, model: str | None = None) -> bool:
         """Switch the active LLM provider."""
