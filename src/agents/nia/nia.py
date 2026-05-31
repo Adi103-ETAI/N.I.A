@@ -20,6 +20,7 @@ from agents.nia.communication.speaker import Speaker
 from agents.nia.orchestration.dispatcher import Dispatcher
 from agents.nia.orchestration.coordinator import Coordinator
 from agents.nia.orchestration.state import StateManager, SystemState
+from agents.nia.orchestration.bridge import HarnessExecutorBridge
 from agents.nia.config import ConfigManager
 from agents.nia.providers.registry import ProviderRegistry
 
@@ -94,6 +95,10 @@ class NIA:
         self._dispatcher = Dispatcher()
         self._coordinator = Coordinator()
         self._state = StateManager()
+
+        # Execution bridge (connects Head to Hands)
+        self._bridge = HarnessExecutorBridge(self._working_directory)
+        self._dispatcher.set_tool_executor(self._bridge.execute_tool_call)
 
         # State
         self._initialized = False
@@ -210,9 +215,16 @@ class NIA:
 
             if tool_calls:
                 tasks = self._dispatcher.dispatch_batch(tool_calls)
-                response += f"\n\nQueued {len(tasks)} task(s) for execution."
+                # Execute the tasks
+                result = await self._dispatcher.execute_pending()
+                if result.tasks_succeeded > 0:
+                    response += f"\n\nExecuted {result.tasks_succeeded} task(s) successfully."
+                if result.tasks_failed > 0:
+                    response += f"\n\n{result.tasks_failed} task(s) failed."
+                    for error in result.errors[:3]:  # Show first 3 errors
+                        response += f"\n  - {error}"
 
-            self._state.complete_operation("task_dispatch")
+            self._state.complete_operation("task_execution")
 
         # 5. Speak - Format response
         spoken = self._speaker.speak(response)
