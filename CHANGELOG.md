@@ -4,6 +4,14 @@ All notable changes to N.I.A will be documented in this file.
 
 ## [Unreleased]
 
+### Phase 3 - Swarm Delegation (2026-06-03)
+
+NIA's custom Coordinator and Dispatcher are now dead code — the QueryEngine handles all orchestration. Multi-agent execution is delegated to niaharness's swarm system via the `agent`, `team_create`, `team_delete`, and `send_message` tools already in the registry.
+
+#### Changed
+- `src/agents/nia/orchestration/__init__.py` - Updated docstring to document swarm delegation
+- Removed dead imports of Coordinator and Dispatcher from NIA (already removed in Phase 1)
+
 ### Phase 2 - NIA Tools Exposed (2026-06-03)
 
 NIA's unique features (memory and context awareness) are now available as tools that the brain can use during conversations.
