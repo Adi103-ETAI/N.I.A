@@ -167,7 +167,7 @@ _WORKER_TOOLS = [
     "bash",
     "file_read",
     "file_edit",
-    "file_write",
+    "write_file",
     "glob",
     "grep",
     "web_fetch",

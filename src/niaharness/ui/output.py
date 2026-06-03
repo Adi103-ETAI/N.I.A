@@ -195,7 +195,7 @@ def _summarize_tool_input(tool_name: str, tool_input: dict | None) -> str:
         return str(tool_input["command"])[:120]
     if lower in ("read", "fileread", "file_read") and "file_path" in tool_input:
         return str(tool_input["file_path"])
-    if lower in ("write", "filewrite", "file_write") and "file_path" in tool_input:
+    if lower in ("write", "write_file", "filewrite", "file_write") and "file_path" in tool_input:
         return str(tool_input["file_path"])
     if lower in ("edit", "fileedit", "file_edit") and "file_path" in tool_input:
         return str(tool_input["file_path"])

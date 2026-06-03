@@ -26,7 +26,7 @@ class HarnessExecutorBridge:
 
     Usage:
         bridge = HarnessExecutorBridge(workspace_dir="/path/to/project")
-        result = await bridge.execute_tool("file_write", {"file_path": "test.py", "content": "print('hello')"})
+        result = await bridge.execute_tool("write_file", {"file_path": "test.py", "content": "print('hello')"})
     """
 
     def __init__(self, workspace_dir: str | None = None) -> None:
@@ -53,7 +53,7 @@ class HarnessExecutorBridge:
         """Execute a single tool call.
 
         Args:
-            tool_name: Name of the tool to execute (e.g., "file_write", "bash")
+            tool_name: Name of the tool to execute (e.g., "write_file", "bash")
             arguments: Tool arguments (dict or Pydantic model)
 
         Returns:

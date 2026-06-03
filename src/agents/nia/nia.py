@@ -1,7 +1,11 @@
 """N.I.A - Neural Intelligence Assistant.
 
-The main integration module that ties all components together.
-N.I.A is the HEAD, OpenHarness is the HANDS.
+Unified architecture: NIA is the soul (personality, reasoning, memory),
+niaharness is the body (tools, execution, permissions, hooks, swarm).
+
+NIA Brain decides WHAT to do.
+niaharness QueryEngine handles HOW to do it (tool execution, permissions, cost tracking).
+NIA Personality formats HOW it speaks.
 """
 
 from __future__ import annotations
@@ -9,20 +13,23 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+
+from niaharness.config.settings import PermissionSettings, Settings
+from niaharness.engine.query_engine import QueryEngine
+from niaharness.hooks import HookExecutor, HookExecutionContext, HookRegistry
+from niaharness.permissions import PermissionChecker
+from niaharness.tools import create_default_tool_registry
 
 from agents.nia.core.brain import NIABrain, BrainResponse
 from agents.nia.core.personality import Personality, PersonalityConfig
 from agents.nia.core.memory import Memory
 from agents.nia.core.context import Context
-from agents.nia.core.react import ReActLoop
 from agents.nia.communication.listener import Listener
 from agents.nia.communication.speaker import Speaker
-from agents.nia.orchestration.dispatcher import Dispatcher
-from agents.nia.orchestration.coordinator import Coordinator
 from agents.nia.orchestration.state import StateManager, SystemState
-from agents.nia.orchestration.bridge import HarnessExecutorBridge
 from agents.nia.config import ConfigManager
+from agents.nia.providers.adapter import NIAProviderAdapter
 from agents.nia.providers.registry import ProviderRegistry
 
 logger = logging.getLogger(__name__)
@@ -31,41 +38,26 @@ logger = logging.getLogger(__name__)
 class NIA:
     """N.I.A - Neural Intelligence Assistant.
 
-    The head that:
-    - Listens to user input
-    - Thinks about what to do (via LLM)
-    - Decides the best approach
-    - Delegates execution to OpenHarness (the hands)
-    - Speaks the response
-
-    Architecture:
-    ┌─────────────────────────────────────────┐
-    │                N.I.A (HEAD)              │
-    │  ┌─────────┐  ┌─────────┐  ┌─────────┐ │
-    │  │ Brain   │  │ Memory  │  │ Context │ │
-    │  │ (LLM)  │  │         │  │         │ │
-    │  └────┬────┘  └────┬────┘  └────┬────┘ │
-    │       │            │            │       │
-    │  ┌────┴────────────┴────────────┴────┐  │
-    │  │          Personality              │  │
-    │  └───────────────────────────────────┘  │
-    └─────────────────────────────────────────┘
-                      │
-                      ▼
-    ┌─────────────────────────────────────────┐
-    │         Provider Registry               │
-    │  ┌─────────┐  ┌─────────┐  ┌─────────┐ │
-    │  │Anthropic│  │ OpenAI  │  │ Ollama  │ │
-    │  └─────────┘  └─────────┘  └─────────┘ │
-    └─────────────────────────────────────────┘
-                      │
-                      ▼
-    ┌─────────────────────────────────────────┐
-    │          OpenHarness (HANDS)            │
-    │  ┌─────────┐  ┌─────────┐  ┌─────────┐ │
-    │  │ Tools   │  │ Engine  │  │   UI    │ │
-    │  └─────────┘  └─────────┘  └─────────┘ │
-    └─────────────────────────────────────────┘
+    Architecture (UNIFIED):
+    ┌──────────────────────────────────────────────────────┐
+    │                    N.I.A (THE SOUL)                   │
+    │  ┌──────────┐  ┌──────────┐  ┌────────────────────┐  │
+    │  │  Brain   │  │  Memory  │  │    Personality     │  │
+    │  │ (reason) │  │ (file)   │  │ (JARVIS tone)      │  │
+    │  └────┬─────┘  └──────────┘  └────────────────────┘  │
+    │       │                                               │
+    │  ┌────▼──────────────────────────────────────────┐    │
+    │  │         QueryEngine (THE BODY)                │    │
+    │  │  • Conversation loop                          │    │
+    │  │  • Tool orchestration (38+ tools)             │    │
+    │  │  • Permission checks                          │    │
+    │  │  • Pre/post hooks                             │    │
+    │  │  • Cost tracking                              │    │
+    │  │  • File state cache                           │    │
+    │  │  • Abort controller                           │    │
+    │  │  • MCP integration                            │    │
+    │  └───────────────────────────────────────────────┘    │
+    └──────────────────────────────────────────────────────┘
     """
 
     def __init__(
@@ -73,14 +65,13 @@ class NIA:
         working_directory: str | None = None,
         personality_config: PersonalityConfig | None = None,
     ) -> None:
-        # Configuration
         self._config_manager = ConfigManager()
         self._working_directory = working_directory or str(Path.cwd())
 
         # Provider system
         self._provider_registry = ProviderRegistry(self._config_manager)
 
-        # Core systems
+        # Core NIA systems (the soul)
         self._brain = NIABrain()
         self._personality = Personality(personality_config)
         self._memory = Memory(
@@ -93,18 +84,15 @@ class NIA:
         self._speaker = Speaker()
 
         # Orchestration
-        self._dispatcher = Dispatcher()
-        self._coordinator = Coordinator()
         self._state = StateManager()
 
-        # Execution bridge (connects Head to Hands)
-        self._bridge = HarnessExecutorBridge(self._working_directory)
-        self._dispatcher.set_tool_executor(self._bridge.execute_tool_call)
+        # QueryEngine (the body) - created during initialize()
+        self._engine: QueryEngine | None = None
 
         # State
         self._initialized = False
 
-        logger.info("N.I.A initialized")
+        logger.info("N.I.A initialized (unified architecture)")
 
     async def initialize(self) -> str:
         """Initialize N.I.A and all subsystems."""
@@ -125,13 +113,20 @@ class NIA:
         # Load memory
         self._memory.load()
 
+        # Build the QueryEngine (the body)
+        await self._build_engine(active_provider, active_model)
+
         # Get greeting
         time_str = self._context.time_of_day.value
         greeting = self._personality.greet(time_str)
 
         # Add provider info to greeting
         if active_provider:
-            provider_name = active_provider.config.label if hasattr(active_provider, 'config') else 'Unknown'
+            provider_name = (
+                active_provider.config.label
+                if hasattr(active_provider, "config")
+                else "Unknown"
+            )
             greeting += f"\nConnected to {provider_name}/{active_model or 'default model'}"
         else:
             greeting += self._get_setup_prompt()
@@ -139,8 +134,114 @@ class NIA:
         self._state.system_state = SystemState.READY
         self._initialized = True
 
-        logger.info(f"N.I.A ready. Provider: {active_provider.config.name if active_provider and hasattr(active_provider, 'config') else 'none'}")
+        logger.info(
+            f"N.I.A ready. Provider: "
+            f"{active_provider.config.name if active_provider and hasattr(active_provider, 'config') else 'none'}"
+        )
         return greeting
+
+    async def _build_engine(
+        self,
+        active_provider: Any,
+        active_model: str | None,
+    ) -> None:
+        """Build the QueryEngine with NIA's merged system prompt."""
+        # Create the adapter: NIA provider → SupportsStreamingMessages
+        if active_provider is None:
+            logger.warning("No provider available, QueryEngine will not work")
+            return
+
+        adapter = NIAProviderAdapter(active_provider, active_model)
+
+        # Create tool registry with all 38+ niaharness tools
+        tool_registry = create_default_tool_registry()
+
+        # Build merged system prompt: niaharness base + NIA personality + context
+        system_prompt = self._build_merged_system_prompt()
+
+        # Permission checker (niaharness handles permissions now)
+        permission_checker = PermissionChecker(PermissionSettings())
+
+        # Hook executor (niaharness handles hooks now)
+        hook_executor = HookExecutor(
+            HookRegistry(),
+            HookExecutionContext(
+                cwd=Path(self._working_directory).resolve(),
+                api_client=adapter,
+                default_model=active_model or "unknown",
+            ),
+        )
+
+        # Create the QueryEngine
+        self._engine = QueryEngine(
+            api_client=adapter,
+            tool_registry=tool_registry,
+            permission_checker=permission_checker,
+            cwd=self._working_directory,
+            model=active_model or "unknown",
+            system_prompt=system_prompt,
+            max_tokens=4096,
+            hook_executor=hook_executor,
+        )
+
+        logger.info("QueryEngine built with NIA merged prompt")
+
+    def _build_merged_system_prompt(self) -> str:
+        """Build a merged system prompt: niaharness base + NIA personality + context.
+
+        This gives the QueryEngine:
+        - niaharness's tool instructions and safety rules
+        - NIA's JARVIS personality and tone
+        - NIA's context awareness
+        """
+        sections = []
+
+        # NIA personality and identity (top priority)
+        sections.append("# Identity\nYou are N.I.A (Neural Intelligence Assistant), "
+                        "an AI partner inspired by JARVIS. You think, plan, and execute "
+                        "with calm authority. You are proactive, precise, and always ready.")
+
+        if self._personality:
+            personality_desc = self._personality.get_stats()
+            sections.append(f"# Personality\nTone: Professional, confident, slightly witty. "
+                          f"Style: Direct and efficient. Voice: Calm authority. "
+                          f"When appropriate, use dry wit — never forced.")
+
+        # NIA's context
+        context_data = self._context.get_full_context()
+        if context_data:
+            ctx_lines = []
+            if context_data.get("time_of_day"):
+                ctx_lines.append(f"Time: {context_data['time_of_day']}")
+            if context_data.get("working_directory"):
+                ctx_lines.append(f"Working directory: {context_data['working_directory']}")
+            if context_data.get("git_branch"):
+                ctx_lines.append(f"Git branch: {context_data['git_branch']}")
+            if context_data.get("project_type"):
+                ctx_lines.append(f"Project type: {context_data['project_type']}")
+            if ctx_lines:
+                sections.append("# Environment Context\n" + "\n".join(ctx_lines))
+
+        # NIA's memory summary
+        if self._memory:
+            stats = self._memory.get_stats()
+            if stats.get("total_conversations", 0) > 0:
+                sections.append(f"# Memory\nPrevious conversations: {stats['total_conversations']}. "
+                              "Use memory to maintain continuity across sessions.")
+
+        # niaharness base system prompt (tools, safety, instructions)
+        from niaharness.prompts.system_prompt import build_system_prompt
+        niaharness_prompt = build_system_prompt(cwd=self._working_directory)
+        sections.append(niaharness_prompt)
+
+        # NIA's tool delegation instructions
+        sections.append("# Delegation\n"
+                        "You are the head — you decide WHAT needs to happen. "
+                        "niaharness tools are your hands — they execute your decisions. "
+                        "Use tools precisely: specify file paths, exact content, and clear commands. "
+                        "For complex multi-step tasks, think through each step before acting.")
+
+        return "\n\n".join(sections)
 
     def _get_setup_prompt(self) -> str:
         """Generate first-run setup prompt."""
@@ -165,12 +266,11 @@ class NIA:
     async def process(self, user_input: str) -> str:
         """Process user input and return response.
 
-        This is the main loop:
+        Unified flow:
         1. Listen (parse input)
-        2. Think (LLM brain processes)
-        3. Decide (what to do - simple or ReAct)
-        4. Act (delegate to OpenHarness)
-        5. Speak (respond to user)
+        2. Brain pre-processes (optional: intent detection for complex tasks)
+        3. QueryEngine handles conversation + tool execution (with permissions, hooks, cost)
+        4. Speak (format response with personality)
         """
         if not self._initialized:
             await self.initialize()
@@ -195,106 +295,42 @@ class NIA:
         self._memory.add_conversation("user", user_input)
 
         # 1. Listen - Parse input
-        parsed = self._listener.listen(user_input)
+        self._listener.listen(user_input)
 
-        # 2. Think - Brain processes (via LLM)
-        context_data = self._context.get_full_context()
-        brain_response = await self._brain.think(user_input, context_data)
+        # 2. QueryEngine handles the conversation (tools, permissions, hooks, cost)
+        if self._engine is None:
+            return "Engine not initialized. Please run /connect to set up a provider."
 
-        # 3. Check if clarification is needed
-        if brain_response.needs_clarification:
-            return brain_response.clarification_question or brain_response.response
+        response_text = ""
+        async for event in self._engine.submit_message(user_input):
+            # Collect text deltas for the final response
+            from niaharness.engine.stream_events import (
+                AssistantTextDelta,
+                AssistantTurnComplete,
+                ToolExecutionStarted,
+                ToolExecutionCompleted,
+            )
+            if isinstance(event, AssistantTextDelta):
+                response_text += event.text
+            elif isinstance(event, ToolExecutionStarted):
+                logger.info(f"Tool starting: {event.tool_name}")
+            elif isinstance(event, ToolExecutionCompleted):
+                logger.info(f"Tool completed: {event.tool_name} (error={event.is_error})")
+            elif isinstance(event, AssistantTurnComplete):
+                # Final response from the engine
+                if event.message and event.message.text:
+                    response_text = event.message.text
 
-        # 4. Decide: Simple (one-shot) or ReAct (multi-step)
-        if brain_response.use_react and brain_response.tasks:
-            # Use ReAct loop for complex multi-step tasks
-            response = await self._execute_with_react(user_input, brain_response, context_data)
-        elif brain_response.tasks:
-            # Simple one-shot execution
-            response = await self._execute_simple(brain_response)
-        else:
-            # No tasks, just conversation
-            response = brain_response.response
-
-        # 5. Speak - Format response
-        spoken = self._speaker.speak(response)
+        # 3. Speak - Format response with personality
+        if response_text:
+            spoken = self._speaker.speak(response_text)
+            response_text = spoken.text
 
         # Store in memory
-        self._memory.add_conversation("assistant", spoken.text)
+        if response_text:
+            self._memory.add_conversation("assistant", response_text)
 
-        return spoken.text
-
-    async def _execute_simple(self, brain_response: BrainResponse) -> str:
-        """Execute tasks in simple one-shot mode."""
-        response = brain_response.response
-        self._state.start_operation(f"Executing {len(brain_response.tasks)} tasks")
-
-        # Dispatch tasks to OpenHarness
-        tool_calls = []
-        for task in brain_response.tasks:
-            tool_calls.append((task.description, task.tool, task.args))
-
-        if tool_calls:
-            tasks = self._dispatcher.dispatch_batch(tool_calls)
-            # Execute the tasks
-            result = await self._dispatcher.execute_pending()
-            if result.tasks_succeeded > 0:
-                response += f"\n\nExecuted {result.tasks_succeeded} task(s) successfully."
-            if result.tasks_failed > 0:
-                response += f"\n\n{result.tasks_failed} task(s) failed."
-                for error in result.errors[:3]:  # Show first 3 errors
-                    response += f"\n  - {error}"
-
-        self._state.complete_operation("task_execution")
-        return response
-
-    async def _execute_with_react(
-        self,
-        user_input: str,
-        brain_response: BrainResponse,
-        context_data: dict[str, Any],
-    ) -> str:
-        """Execute using the ReAct loop for complex multi-step tasks."""
-        self._state.start_operation("ReAct loop")
-
-        # Create the ReAct loop
-        react = ReActLoop(
-            think_fn=self._brain.think_for_react,
-            execute_fn=self._bridge.execute_tool,
-            max_steps=10,
-        )
-
-        # Run the ReAct loop
-        final_result = ""
-        async for event in react.run(user_input, context_data):
-            event_type = event.get("type")
-
-            if event_type == "plan":
-                plan = event["plan"]
-                final_result = f"Plan: {plan.goal}\n\n"
-                for step in plan.steps:
-                    final_result += f"  Step {step.step_number}: {step.thought}\n"
-
-            elif event_type == "step_complete":
-                step = event["step"]
-                status = "✓" if step.status.value == "completed" else "✗"
-                final_result += f"\n{status} Step {step.step_number}: {step.action[:50]}"
-                if step.result:
-                    # Truncate long results
-                    result_preview = step.result[:100] + "..." if len(step.result) > 100 else step.result
-                    final_result += f"\n  Result: {result_preview}"
-
-            elif event_type == "reflect":
-                reflection = event["reflection"]
-                if reflection:
-                    final_result += f"\n  Reflection: {reflection[:100]}"
-
-            elif event_type == "complete":
-                result = event["result"]
-                final_result = result
-
-        self._state.complete_operation("react_loop")
-        return final_result
+        return response_text or "No response generated."
 
     def switch_provider(self, provider_id: str, model: str | None = None) -> bool:
         """Switch the active LLM provider."""
@@ -303,14 +339,24 @@ class NIA:
             provider = self._provider_registry.get_provider(provider_id)
             if provider:
                 self._brain.set_provider(provider, model)
+                # Rebuild the engine with the new provider
+                asyncio.create_task(self._rebuild_engine(provider, model))
         return success
+
+    async def _rebuild_engine(self, provider: Any, model: str | None) -> None:
+        """Rebuild QueryEngine after provider switch."""
+        try:
+            await self._build_engine(provider, model)
+            logger.info("QueryEngine rebuilt after provider switch")
+        except Exception as e:
+            logger.error(f"Failed to rebuild engine: {e}")
 
     def get_status(self) -> dict[str, Any]:
         """Get N.I.A's current status."""
         provider_info = {}
         active = self._provider_registry.get_active_provider()
         if active:
-            config = getattr(active, 'config', None)
+            config = getattr(active, "config", None)
             if config:
                 provider_info = {
                     "id": config.name,
@@ -319,6 +365,15 @@ class NIA:
                     "configured": True,
                 }
 
+        engine_info = {}
+        if self._engine:
+            engine_info = {
+                "session_id": self._engine.session_id,
+                "total_cost_usd": self._engine.total_cost_usd,
+                "messages": len(self._engine.messages),
+                "permission_denials": len(self._engine.permission_denials),
+            }
+
         return {
             "state": self._state.system_state.value,
             "provider": provider_info,
@@ -326,11 +381,13 @@ class NIA:
             "personality": self._personality.get_stats(),
             "memory": self._memory.get_stats(),
             "context": self._context.get_summary(),
-            "dispatcher": self._dispatcher.get_status(),
+            "engine": engine_info,
         }
 
     def shutdown(self) -> None:
         """Shutdown N.I.A gracefully."""
         self._state.system_state = SystemState.SHUTDOWN
         self._memory.save()
+        if self._engine:
+            self._engine.interrupt()
         logger.info("N.I.A shutdown complete")

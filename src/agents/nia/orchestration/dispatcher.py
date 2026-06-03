@@ -164,7 +164,7 @@ class Dispatcher:
 
 # Tool name mappings from N.I.A intents to OpenHarness tools
 INTENT_TO_TOOL: dict[str, str] = {
-    "create": "file_write",
+    "create": "write_file",
     "modify": "file_edit",
     "delete": "file_edit",  # With empty new_string
     "debug": "bash",

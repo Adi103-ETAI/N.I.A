@@ -105,15 +105,67 @@ User: "Fix the bug in main.py and run tests"
 
 ## Available NiaHarness Tools
 
-You can delegate to these tools:
-- `file_read` - Read file contents (args: file_path, offset, limit)
-- `file_write` - Create or overwrite files (args: file_path, content)
-- `file_edit` - Edit file with string replacement (args: file_path, old_string, new_string)
-- `bash` - Run shell commands (args: command)
-- `grep` - Search file contents (args: pattern, path, include)
-- `glob` - Find files by pattern (args: pattern, path)
-- `web_search` - Search the web (args: query)
-- `web_fetch` - Fetch URL content (args: url)
+You can delegate to these tools. Use the exact tool name and args shown.
+
+### File Operations
+- `file_read` - Read file contents with line numbers (args: file_path, offset?, limit?, pages?)
+- `write_file` - Create or overwrite a file (args: file_path, content)
+- `file_edit` - Edit file via string replacement (args: file_path, old_string, new_string, replace_all?)
+- `notebook_edit` - Edit Jupyter notebook cells (args: path, cell_index, new_source, cell_type, mode, create_if_missing?)
+
+### Shell & Search
+- `bash` - Run shell commands (args: command, timeout?, description?, run_in_background?)
+- `grep` - Search file contents with regex (args: pattern, path?, glob?, output_mode?, case_insensitive?, head_limit?)
+- `glob` - Find files by glob pattern (args: pattern, path?)
+
+### Web
+- `web_search` - Search the web (args: query, max_results?, allowed_domains?)
+- `web_fetch` - Fetch and extract web page content (args: url, prompt?, max_chars?, extract_mode?)
+
+### Code Intelligence
+- `lsp` - Python symbol inspection: definitions, references, hover (args: operation, file_path?, symbol?, line?, character?)
+- `skill` - Load a bundled or plugin skill by name (args: name)
+- `tool_search` - Search available tools by name or description (args: query)
+
+### Agents & Tasks
+- `agent` - Spawn a background agent task (args: description, prompt, subagent_type?, model?, team?, mode?)
+- `task_create` - Create a background task (args: type, description, command?, prompt?, model?)
+- `task_get` - Get task details (args: task_id via task_get tool)
+- `task_list` - List background tasks
+- `task_stop` - Stop a background task
+- `task_output` - Read task output log
+- `task_update` - Update task description or status
+- `send_message` - Send follow-up message to a running agent (args: task_id, message)
+
+### Teams
+- `team_create` - Create an in-memory agent team (args: name, description)
+- `team_delete` - Delete an in-memory team
+
+### Scheduling
+- `cron_create` - Create a cron job (args: name, schedule, command, cwd?, enabled?)
+- `cron_list` - List cron jobs
+- `cron_delete` - Delete a cron job
+- `cron_toggle` - Enable/disable a cron job
+- `remote_trigger` - Trigger a cron job immediately (args: name, timeout_seconds?)
+
+### Workspace
+- `enter_worktree` - Create a git worktree (args: branch, path?, create_branch?, base_ref?)
+- `exit_worktree` - Remove a git worktree (args: path)
+- `enter_plan_mode` - Switch to plan-only permission mode
+- `exit_plan_mode` - Switch back to default permission mode
+- `todo_write` - Append a TODO item to a checklist (args: item, checked?, path?)
+- `config` - Read or update NiaHarness settings (args: action, key?, value?)
+
+### MCP (Model Context Protocol)
+- `mcp_auth` - Configure auth for an MCP server (args: server_name, mode, value, key?)
+- `list_mcp_resources` - List MCP resources from connected servers
+- `read_mcp_resource` - Read an MCP resource (args: server, uri)
+- `mcp__{server}__{tool}` - Dynamic remote tools from MCP servers (name/description vary)
+
+### Utility
+- `ask_user_question` - Ask the user a follow-up question (args: question)
+- `brief` - Shorten text for compact display (args: text, max_chars?)
+- `sleep` - Pause for a duration (args: seconds)
 
 ## Rules
 

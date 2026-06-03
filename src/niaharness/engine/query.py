@@ -504,11 +504,9 @@ async def run_query(
                 return
 
         # --- auto-compact check before calling the model -------------------
-        messages, was_compacted = await auto_compact_if_needed(
+        messages, was_compacted, compact_state = await auto_compact_if_needed(
             messages,
-            api_client=context.api_client,
             model=context.model,
-            system_prompt=context.system_prompt,
             state=compact_state,
         )
 
