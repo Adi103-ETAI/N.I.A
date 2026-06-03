@@ -19,7 +19,7 @@ from niaharness.config.settings import PermissionSettings, Settings
 from niaharness.engine.query_engine import QueryEngine
 from niaharness.hooks import HookExecutor, HookExecutionContext, HookRegistry
 from niaharness.permissions import PermissionChecker
-from niaharness.tools import create_default_tool_registry
+from niaharness.tools import create_default_tool_registry, register_nia_tools
 
 from agents.nia.core.brain import NIABrain, BrainResponse
 from agents.nia.core.personality import Personality, PersonalityConfig
@@ -155,6 +155,9 @@ class NIA:
 
         # Create tool registry with all 38+ niaharness tools
         tool_registry = create_default_tool_registry()
+
+        # Wire NIA's memory and context into the NIA-specific tools
+        register_nia_tools(tool_registry, self._memory, self._context)
 
         # Build merged system prompt: niaharness base + NIA personality + context
         system_prompt = self._build_merged_system_prompt()

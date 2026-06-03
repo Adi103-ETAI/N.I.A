@@ -41,6 +41,8 @@ from niaharness.tools.todo_write_tool import TodoWriteTool
 from niaharness.tools.tool_search_tool import ToolSearchTool
 from niaharness.tools.web_fetch_tool import WebFetchTool
 from niaharness.tools.web_search_tool import WebSearchTool
+from niaharness.tools.nia_memory_tool import NiaMemoryTool
+from niaharness.tools.nia_context_tool import NiaContextTool
 
 
 def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
@@ -84,6 +86,8 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         SendMessageTool(),
         TeamCreateTool(),
         TeamDeleteTool(),
+        NiaMemoryTool(),
+        NiaContextTool(),
     ):
         registry.register(tool)
     if mcp_manager is not None:
@@ -92,6 +96,19 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         for tool_info in mcp_manager.list_tools():
             registry.register(McpToolAdapter(mcp_manager, tool_info))
     return registry
+
+
+def register_nia_tools(registry: ToolRegistry, memory: object, context: object) -> None:
+    """Wire NIA's memory and context instances into the registered NIA tools.
+
+    Call this after creating the registry and initializing NIA's subsystems.
+    """
+    mem_tool = registry.get("nia_memory")
+    if mem_tool is not None:
+        mem_tool.set_memory(memory)
+    ctx_tool = registry.get("nia_context")
+    if ctx_tool is not None:
+        ctx_tool.set_context(context)
 
 
 __all__ = [

@@ -4,6 +4,21 @@ All notable changes to N.I.A will be documented in this file.
 
 ## [Unreleased]
 
+### Phase 2 - NIA Tools Exposed (2026-06-03)
+
+NIA's unique features (memory and context awareness) are now available as tools that the brain can use during conversations.
+
+#### Added
+- `src/niaharness/tools/nia_memory_tool.py` - `nia_memory` tool: search, add_fact, add_preference, list_preferences, recent, stats
+- `src/niaharness/tools/nia_context_tool.py` - `nia_context` tool: full, environment, time, session, set_user_name
+- `register_nia_tools()` function in `tools/__init__.py` to wire memory/context instances into tools
+- `tests/test_nia/test_tools.py` - 9 tests for both NIA tools
+
+#### Changed
+- `src/niaharness/tools/__init__.py` - NiaMemoryTool and NiaContextTool registered in default tool registry
+- `src/agents/nia/nia.py` - Calls `register_nia_tools()` after engine build to wire instances
+- `prompts/system.md` - Added nia_memory and nia_context to tool list
+
 ### Phase 1 - Unified Architecture (2026-06-03)
 
 **Core Change**: NIA now delegates to niaharness's QueryEngine for the conversation loop, tool execution, permissions, hooks, cost tracking, and file state management. Previously, NIA reimplemented all of this from scratch, missing ~80% of niaharness's production features.

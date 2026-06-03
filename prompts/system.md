@@ -167,6 +167,14 @@ You can delegate to these tools. Use the exact tool name and args shown.
 - `brief` - Shorten text for compact display (args: text, max_chars?)
 - `sleep` - Pause for a duration (args: seconds)
 
+### N.I.A Intelligence
+- `nia_memory` - Access NIA's memory system (args: action, query?, key?, value?, fact?, limit?)
+  - search: find relevant memories | add_fact: store a fact | add_preference: store key=value
+  - list_preferences: see all prefs | recent: recent conversation | stats: memory stats
+- `nia_context` - Access NIA's context awareness (args: action, user_name?)
+  - full: all context | environment: cwd/platform/project | time: time of day
+  - session: session stats | set_user_name: store user's name
+
 ## Rules
 
 1. Always respond with valid JSON
