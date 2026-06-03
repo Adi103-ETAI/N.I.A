@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from openharness.config.settings import Settings
-from openharness.hooks.loader import load_hook_registry
-from openharness.plugins import load_plugins
-from openharness.skills import load_skill_registry
+from niaharness.config.settings import Settings
+from niaharness.hooks.loader import load_hook_registry
+from niaharness.plugins import load_plugins
+from niaharness.skills import load_skill_registry
 
 
 def _write_plugin(root: Path) -> None:
@@ -53,7 +53,7 @@ def _write_plugin(root: Path) -> None:
 def test_load_plugins_from_project_dir(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
-    plugins_root = project / ".openharness" / "plugins"
+    plugins_root = project / ".niaharness" / "plugins"
     plugins_root.mkdir(parents=True)
     _write_plugin(plugins_root)
 
@@ -70,7 +70,7 @@ def test_load_plugins_from_project_dir(tmp_path: Path, monkeypatch):
 def test_plugin_skills_and_hooks_are_merged(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
-    plugins_root = project / ".openharness" / "plugins"
+    plugins_root = project / ".niaharness" / "plugins"
     plugins_root.mkdir(parents=True)
     _write_plugin(plugins_root)
 

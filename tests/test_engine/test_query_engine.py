@@ -7,22 +7,22 @@ from pathlib import Path
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent, ApiTextDeltaEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.config.settings import PermissionSettings
-from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
-from openharness.engine.query_engine import QueryEngine
-from openharness.engine.stream_events import (
+from niaharness.api.client import ApiMessageCompleteEvent, ApiTextDeltaEvent
+from niaharness.api.usage import UsageSnapshot
+from niaharness.config.settings import PermissionSettings
+from niaharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+from niaharness.engine.query_engine import QueryEngine
+from niaharness.engine.stream_events import (
     AssistantTextDelta,
     AssistantTurnComplete,
     ToolExecutionCompleted,
     ToolExecutionStarted,
 )
-from openharness.permissions import PermissionChecker
-from openharness.tools import create_default_tool_registry
-from openharness.hooks import HookExecutionContext, HookExecutor, HookEvent
-from openharness.hooks.loader import HookRegistry
-from openharness.hooks.schemas import PromptHookDefinition
+from niaharness.permissions import PermissionChecker
+from niaharness.tools import create_default_tool_registry
+from niaharness.hooks import HookExecutionContext, HookExecutor, HookEvent
+from niaharness.hooks.loader import HookRegistry
+from niaharness.hooks.schemas import PromptHookDefinition
 
 
 @dataclass

@@ -1,11 +1,11 @@
-"""Tests for openharness.prompts.environment."""
+"""Tests for niaharness.prompts.environment."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-from openharness.prompts.environment import (
+from niaharness.prompts.environment import (
     EnvironmentInfo,
     detect_git_info,
     detect_os,

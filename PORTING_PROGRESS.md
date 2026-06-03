@@ -4,7 +4,7 @@
 
 ### Files Created
 
-All files in the new folder structure: `src/openharness/tools/FileEditTool/`
+All files in the new folder structure: `src/niaharness/tools/FileEditTool/`
 
 1. **__init__.py** - Module exports
 2. **constants.py** - Tool constants and error messages
@@ -94,7 +94,7 @@ The ported FileEditTool:
 ### Folder Structure Template Applied
 
 ```
-src/openharness/tools/FileEditTool/
+src/niaharness/tools/FileEditTool/
 ├── __init__.py          ✅ Created
 ├── FileEditTool.py      ✅ Created (main class)
 ├── types.py             ✅ Created (Pydantic models)
@@ -118,7 +118,7 @@ src/openharness/tools/FileEditTool/
 - ✅ Create constants.py (constants)
 - ✅ Create utils.py (helpers)
 - ✅ Create ui.py (messages)
-- ✅ Update src/openharness/tools/__init__.py
+- ✅ Update src/niaharness/tools/__init__.py
 - ✅ Validate syntax
 - ⏸️ Run integration tests (pending dependencies)
 - 🔄 Ready to move to next tool

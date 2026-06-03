@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from openharness.tasks.manager import BackgroundTaskManager
+from niaharness.tasks.manager import BackgroundTaskManager
 
 
 @pytest.mark.asyncio

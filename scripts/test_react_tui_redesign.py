@@ -40,7 +40,7 @@ def test_welcome_banner() -> tuple[bool, str]:
     # Use scripted steps to send a quick exit
     env["OPENHARNESS_FRONTEND_SCRIPT"] = json.dumps(["/exit"])
 
-    backend_cmd = [sys.executable, "-m", "openharness", "--backend-only"]
+    backend_cmd = [sys.executable, "-m", "niaharness", "--backend-only"]
     frontend_config = json.dumps({
         "backend_command": backend_cmd,
         "initial_prompt": None,
@@ -82,7 +82,7 @@ def test_conversation_flow() -> tuple[bool, str]:
     env["OPENHARNESS_FRONTEND_RAW_RETURN"] = "1"
     env["OPENHARNESS_FRONTEND_SCRIPT"] = json.dumps(["Say exactly: hello world", "/exit"])
 
-    backend_cmd = [sys.executable, "-m", "openharness", "--backend-only",
+    backend_cmd = [sys.executable, "-m", "niaharness", "--backend-only",
                    "--model", env.get("ANTHROPIC_MODEL", "kimi-k2.5")]
     frontend_config = json.dumps({
         "backend_command": backend_cmd,
@@ -129,7 +129,7 @@ def test_status_bar() -> tuple[bool, str]:
     env["OPENHARNESS_FRONTEND_SCRIPT"] = json.dumps(["Say hi", "/exit"])
 
     model_name = env.get("ANTHROPIC_MODEL", "kimi-k2.5")
-    backend_cmd = [sys.executable, "-m", "openharness", "--backend-only",
+    backend_cmd = [sys.executable, "-m", "niaharness", "--backend-only",
                    "--model", model_name]
     frontend_config = json.dumps({
         "backend_command": backend_cmd,

@@ -14,23 +14,23 @@ from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from openharness.api.client import AnthropicApiClient
-from openharness.config.paths import get_project_issue_file, get_project_pr_comments_file
-from openharness.config.settings import load_settings
-from openharness.engine import QueryEngine
-from openharness.engine.stream_events import (
+from niaharness.api.client import AnthropicApiClient
+from niaharness.config.paths import get_project_issue_file, get_project_pr_comments_file
+from niaharness.config.settings import load_settings
+from niaharness.engine import QueryEngine
+from niaharness.engine.stream_events import (
     AssistantTurnComplete,
     ToolExecutionCompleted,
     ToolExecutionStarted,
 )
-from openharness.mcp.client import McpClientManager
-from openharness.mcp.config import load_mcp_server_configs
-from openharness.mcp.types import McpStdioServerConfig
-from openharness.memory import add_memory_entry
-from openharness.permissions import PermissionChecker, PermissionMode
-from openharness.plugins import load_plugins
-from openharness.prompts import build_runtime_system_prompt
-from openharness.tools import create_default_tool_registry
+from niaharness.mcp.client import McpClientManager
+from niaharness.mcp.config import load_mcp_server_configs
+from niaharness.mcp.types import McpStdioServerConfig
+from niaharness.memory import add_memory_entry
+from niaharness.permissions import PermissionChecker, PermissionMode
+from niaharness.plugins import load_plugins
+from niaharness.prompts import build_runtime_system_prompt
+from niaharness.tools import create_default_tool_registry
 
 
 ScenarioSetup = Callable[[Path, Path], dict[str, object] | None]
@@ -168,7 +168,7 @@ def _setup_context_flow(cwd: Path, _: Path) -> None:
 
 
 def _setup_plugin_combo_flow(cwd: Path, _: Path) -> None:
-    plugin_dir = cwd / ".openharness" / "plugins" / "fixture-plugin"
+    plugin_dir = cwd / ".niaharness" / "plugins" / "fixture-plugin"
     (plugin_dir / "skills").mkdir(parents=True, exist_ok=True)
     (plugin_dir / "plugin.json").write_text(
         '{"name":"fixture-plugin","version":"1.0.0","description":"Fixture project plugin"}\n',
@@ -193,7 +193,7 @@ def _setup_worktree_flow(cwd: Path, _: Path) -> None:
 
     subprocess.run(["git", "init"], cwd=cwd, check=True, capture_output=True, text=True)
     subprocess.run(
-        ["git", "config", "user.email", "openharness@example.com"],
+        ["git", "config", "user.email", "niaharness@example.com"],
         cwd=cwd,
         check=True,
         capture_output=True,
@@ -376,7 +376,7 @@ def _validate_cron_flow(cwd: Path, final_text: str, tool_names: list[str], start
 
 
 def _validate_worktree_flow(cwd: Path, final_text: str, tool_names: list[str], started: int, completed: int) -> tuple[bool, str]:
-    worktree_path = cwd / ".openharness" / "worktrees" / "smoke-worktree"
+    worktree_path = cwd / ".niaharness" / "worktrees" / "smoke-worktree"
     required = {"enter_worktree", "read_file", "exit_worktree"}
     if not required.issubset(set(tool_names)):
         return False, f"missing required tools: {sorted(required - set(tool_names))}"
@@ -763,7 +763,7 @@ async def _run() -> int:
         raise SystemExit("Missing API key.")
 
     selected = list(SCENARIOS) if args.scenario == "all" else [args.scenario]
-    with tempfile.TemporaryDirectory(prefix="openharness-e2e-suite-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="niaharness-e2e-suite-") as temp_dir:
         suite_root = Path(temp_dir)
         previous_env = {
             "OPENHARNESS_CONFIG_DIR": os.environ.get("OPENHARNESS_CONFIG_DIR"),

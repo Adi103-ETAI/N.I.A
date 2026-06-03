@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from openharness.config.settings import Settings
-from openharness.mcp.config import load_mcp_server_configs
-from openharness.mcp.types import McpResourceInfo, McpStdioServerConfig, McpToolInfo
-from openharness.plugins.types import LoadedPlugin
-from openharness.plugins.schemas import PluginManifest
-from openharness.tools import create_default_tool_registry
-from openharness.tools.base import ToolExecutionContext
+from niaharness.config.settings import Settings
+from niaharness.mcp.config import load_mcp_server_configs
+from niaharness.mcp.types import McpResourceInfo, McpStdioServerConfig, McpToolInfo
+from niaharness.plugins.types import LoadedPlugin
+from niaharness.plugins.schemas import PluginManifest
+from niaharness.tools import create_default_tool_registry
+from niaharness.tools.base import ToolExecutionContext
 
 
 @dataclass

@@ -7,17 +7,17 @@ from pathlib import Path
 
 import pytest
 
-import openharness.commands.registry as registry_module
-from openharness.commands.registry import CommandContext, create_default_command_registry
-from openharness.config.paths import get_feedback_log_path, get_project_issue_file, get_project_pr_comments_file
-from openharness.config.settings import load_settings, save_settings, Settings
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.engine.query_engine import QueryEngine
-from openharness.mcp.types import McpHttpServerConfig, McpStdioServerConfig
-from openharness.permissions import PermissionChecker
-from openharness.state import AppState, AppStateStore
-from openharness.tasks import get_task_manager
-from openharness.tools import create_default_tool_registry
+import niaharness.commands.registry as registry_module
+from niaharness.commands.registry import CommandContext, create_default_command_registry
+from niaharness.config.paths import get_feedback_log_path, get_project_issue_file, get_project_pr_comments_file
+from niaharness.config.settings import load_settings, save_settings, Settings
+from niaharness.engine.messages import ConversationMessage, TextBlock
+from niaharness.engine.query_engine import QueryEngine
+from niaharness.mcp.types import McpHttpServerConfig, McpStdioServerConfig
+from niaharness.permissions import PermissionChecker
+from niaharness.state import AppState, AppStateStore
+from niaharness.tasks import get_task_manager
+from niaharness.tools import create_default_tool_registry
 
 
 class FakeApiClient:
@@ -342,7 +342,7 @@ async def test_init_and_bridge_commands(tmp_path: Path, monkeypatch):
     init_result = await init_command.handler(init_args, context)
     assert "Initialized project files" in init_result.message or "already initialized" in init_result.message
     assert (tmp_path / "CLAUDE.md").exists()
-    assert (tmp_path / ".openharness" / "memory" / "MEMORY.md").exists()
+    assert (tmp_path / ".niaharness" / "memory" / "MEMORY.md").exists()
 
     bridge_show_command, bridge_show_args = registry.lookup("/bridge show")
     bridge_show_result = await bridge_show_command.handler(bridge_show_args, context)
@@ -464,7 +464,7 @@ async def test_git_commands_report_repository_state(tmp_path: Path, monkeypatch)
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
     subprocess.run(
-        ["git", "config", "user.email", "openharness@example.com"],
+        ["git", "config", "user.email", "niaharness@example.com"],
         cwd=tmp_path,
         check=True,
         capture_output=True,

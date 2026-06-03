@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.services.session_storage import (
+from niaharness.api.usage import UsageSnapshot
+from niaharness.engine.messages import ConversationMessage, TextBlock
+from niaharness.services.session_storage import (
     export_session_markdown,
     load_session_snapshot,
     save_session_snapshot,

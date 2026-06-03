@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "openharness"
+name = "niaharness"
 version = "0.1.0"
 description = "Open-source Python port of Claude Code - an AI-powered CLI coding assistant"
 license = "MIT"
@@ -40,11 +40,12 @@ dev = [
 ]
 
 [project.scripts]
-openharness = "openharness.cli:app"
-oh = "openharness.cli:app"
+niaharness = "niaharness.cli:app"
+nia = "niaharness.cli:app"
+nh = "niaharness.cli:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/openharness"]
+packages = ["src/niaharness"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

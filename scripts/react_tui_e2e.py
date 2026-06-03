@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pexpect
 
-from openharness.config.settings import load_settings
+from niaharness.config.settings import load_settings
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,7 +47,7 @@ def _submit(child: pexpect.spawn, text: str) -> None:
 
 def _isolated_env(permission_mode: str = "full_auto") -> tuple[tempfile.TemporaryDirectory[str], dict[str, str]]:
     settings = load_settings()
-    temp_dir = tempfile.TemporaryDirectory(prefix="openharness-react-tui-")
+    temp_dir = tempfile.TemporaryDirectory(prefix="niaharness-react-tui-")
     config_dir = Path(temp_dir.name) / "config"
     data_dir = Path(temp_dir.name) / "data"
     config_dir.mkdir(parents=True, exist_ok=True)

@@ -32,19 +32,19 @@ RESULTS: dict[str, tuple[bool, float]] = {}
 # ====================================================================
 
 def make_engine(system_prompt, cwd=None, hook_executor=None, max_tokens=4096):
-    from openharness.api.client import AnthropicApiClient
-    from openharness.config.settings import PermissionSettings
-    from openharness.engine.query_engine import QueryEngine
-    from openharness.permissions.checker import PermissionChecker
-    from openharness.permissions.modes import PermissionMode
-    from openharness.tools.base import ToolRegistry
-    from openharness.tools.bash_tool import BashTool
-    from openharness.tools.file_read_tool import FileReadTool
-    from openharness.tools.file_write_tool import FileWriteTool
-    from openharness.tools.file_edit_tool import FileEditTool
-    from openharness.tools.glob_tool import GlobTool
-    from openharness.tools.grep_tool import GrepTool
-    from openharness.tools.web_fetch_tool import WebFetchTool
+    from niaharness.api.client import AnthropicApiClient
+    from niaharness.config.settings import PermissionSettings
+    from niaharness.engine.query_engine import QueryEngine
+    from niaharness.permissions.checker import PermissionChecker
+    from niaharness.permissions.modes import PermissionMode
+    from niaharness.tools.base import ToolRegistry
+    from niaharness.tools.bash_tool import BashTool
+    from niaharness.tools.file_read_tool import FileReadTool
+    from niaharness.tools.file_write_tool import FileWriteTool
+    from niaharness.tools.file_edit_tool import FileEditTool
+    from niaharness.tools.glob_tool import GlobTool
+    from niaharness.tools.grep_tool import GrepTool
+    from niaharness.tools.web_fetch_tool import WebFetchTool
 
     api = AnthropicApiClient(api_key=API_KEY, base_url=BASE_URL)
     reg = ToolRegistry()
@@ -60,7 +60,7 @@ def make_engine(system_prompt, cwd=None, hook_executor=None, max_tokens=4096):
 
 
 def collect(events):
-    from openharness.engine.stream_events import (
+    from niaharness.engine.stream_events import (
         AssistantTextDelta, AssistantTurnComplete,
         ToolExecutionStarted, ToolExecutionCompleted,
     )
@@ -91,11 +91,11 @@ async def task_security_audit_with_hooks():
     """Full security audit: agent reads code, fetches OWASP checklist, reports issues.
     Hooks log every tool use. Permission denies dangerous commands."""
 
-    from openharness.hooks.events import HookEvent
-    from openharness.hooks.loader import HookRegistry
-    from openharness.hooks.schemas import CommandHookDefinition
-    from openharness.hooks.executor import HookExecutor, HookExecutionContext
-    from openharness.api.client import AnthropicApiClient
+    from niaharness.hooks.events import HookEvent
+    from niaharness.hooks.loader import HookRegistry
+    from niaharness.hooks.schemas import CommandHookDefinition
+    from niaharness.hooks.executor import HookExecutor, HookExecutionContext
+    from niaharness.api.client import AnthropicApiClient
 
     api = AnthropicApiClient(api_key=API_KEY, base_url=BASE_URL)
 
@@ -166,25 +166,25 @@ async def task_security_audit_with_hooks():
 async def task_coordinator_code_review():
     """Coordinator delegates code review to 2 worker agents, synthesizes results."""
 
-    from openharness.coordinator.coordinator_mode import (
+    from niaharness.coordinator.coordinator_mode import (
         get_coordinator_system_prompt, format_task_notification, TaskNotification,
     )
-    from openharness.coordinator.agent_definitions import get_agent_definition
-    from openharness.swarm.in_process import start_in_process_teammate, TeammateAbortController
-    from openharness.swarm.types import TeammateSpawnConfig
-    from openharness.swarm.team_lifecycle import TeamLifecycleManager, TeamMember
-    from openharness.engine.query import QueryContext
-    from openharness.api.client import AnthropicApiClient
-    from openharness.config.settings import PermissionSettings
-    from openharness.permissions.checker import PermissionChecker
-    from openharness.permissions.modes import PermissionMode
-    from openharness.tools.base import ToolRegistry
-    from openharness.tools.bash_tool import BashTool
-    from openharness.tools.file_read_tool import FileReadTool
-    from openharness.tools.glob_tool import GlobTool
-    from openharness.tools.grep_tool import GrepTool
-    import openharness.swarm.mailbox as mb
-    import openharness.swarm.team_lifecycle as tl
+    from niaharness.coordinator.agent_definitions import get_agent_definition
+    from niaharness.swarm.in_process import start_in_process_teammate, TeammateAbortController
+    from niaharness.swarm.types import TeammateSpawnConfig
+    from niaharness.swarm.team_lifecycle import TeamLifecycleManager, TeamMember
+    from niaharness.engine.query import QueryContext
+    from niaharness.api.client import AnthropicApiClient
+    from niaharness.config.settings import PermissionSettings
+    from niaharness.permissions.checker import PermissionChecker
+    from niaharness.permissions.modes import PermissionMode
+    from niaharness.tools.base import ToolRegistry
+    from niaharness.tools.bash_tool import BashTool
+    from niaharness.tools.file_read_tool import FileReadTool
+    from niaharness.tools.glob_tool import GlobTool
+    from niaharness.tools.grep_tool import GrepTool
+    import niaharness.swarm.mailbox as mb
+    import niaharness.swarm.team_lifecycle as tl
 
     api = AnthropicApiClient(api_key=API_KEY, base_url=BASE_URL)
 
@@ -295,13 +295,13 @@ async def task_migration_plan_with_memory():
     """Agent analyzes AutoAgent, saves findings to memory, creates migration plan,
     saves session for later resume."""
 
-    from openharness.coordinator.agent_definitions import get_agent_definition
-    from openharness.skills.registry import SkillRegistry
-    from openharness.skills.types import SkillDefinition
-    from openharness.memory.manager import add_memory_entry, list_memory_files, remove_memory_entry
-    from openharness.services.session_storage import save_session_snapshot, export_session_markdown
-    import openharness.memory.paths as mp
-    import openharness.memory.manager as mm
+    from niaharness.coordinator.agent_definitions import get_agent_definition
+    from niaharness.skills.registry import SkillRegistry
+    from niaharness.skills.types import SkillDefinition
+    from niaharness.memory.manager import add_memory_entry, list_memory_files, remove_memory_entry
+    from niaharness.services.session_storage import save_session_snapshot, export_session_markdown
+    import niaharness.memory.paths as mp
+    import niaharness.memory.manager as mm
 
     with tempfile.TemporaryDirectory() as tmpdir:
         mem_dir = Path(tmpdir) / "memory"
@@ -415,7 +415,7 @@ async def task_migration_plan_with_memory():
 async def task_bugfix_in_worktree():
     """Agent creates a worktree, makes a fix in isolation, verifies it, cleans up."""
 
-    from openharness.swarm.worktree import WorktreeManager
+    from niaharness.swarm.worktree import WorktreeManager
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Create a test repo with a "buggy" file
@@ -514,28 +514,28 @@ if __name__ == "__main__":
 async def task_full_pipeline():
     """Simulate the full research→plan→implement→verify pipeline with coordinator."""
 
-    from openharness.coordinator.coordinator_mode import (
+    from niaharness.coordinator.coordinator_mode import (
         get_coordinator_system_prompt, format_task_notification, TaskNotification,
     )
-    from openharness.swarm.in_process import start_in_process_teammate, TeammateAbortController
-    from openharness.swarm.types import TeammateSpawnConfig
-    from openharness.swarm.permission_sync import (
+    from niaharness.swarm.in_process import start_in_process_teammate, TeammateAbortController
+    from niaharness.swarm.types import TeammateSpawnConfig
+    from niaharness.swarm.permission_sync import (
         create_permission_request, write_permission_request,
         read_pending_permissions, resolve_permission, PermissionResolution,
     )
-    from openharness.swarm.team_lifecycle import TeamLifecycleManager, TeamMember
-    from openharness.engine.query import QueryContext
-    from openharness.api.client import AnthropicApiClient
-    from openharness.config.settings import PermissionSettings
-    from openharness.permissions.checker import PermissionChecker
-    from openharness.permissions.modes import PermissionMode
-    from openharness.tools.base import ToolRegistry
-    from openharness.tools.bash_tool import BashTool
-    from openharness.tools.file_read_tool import FileReadTool
-    from openharness.tools.glob_tool import GlobTool
-    from openharness.tools.grep_tool import GrepTool
-    import openharness.swarm.mailbox as mb
-    import openharness.swarm.team_lifecycle as tl
+    from niaharness.swarm.team_lifecycle import TeamLifecycleManager, TeamMember
+    from niaharness.engine.query import QueryContext
+    from niaharness.api.client import AnthropicApiClient
+    from niaharness.config.settings import PermissionSettings
+    from niaharness.permissions.checker import PermissionChecker
+    from niaharness.permissions.modes import PermissionMode
+    from niaharness.tools.base import ToolRegistry
+    from niaharness.tools.bash_tool import BashTool
+    from niaharness.tools.file_read_tool import FileReadTool
+    from niaharness.tools.glob_tool import GlobTool
+    from niaharness.tools.grep_tool import GrepTool
+    import niaharness.swarm.mailbox as mb
+    import niaharness.swarm.team_lifecycle as tl
 
     api = AnthropicApiClient(api_key=API_KEY, base_url=BASE_URL)
 
@@ -662,7 +662,7 @@ async def task_full_pipeline():
 async def task_refactor_with_session():
     """Refactor code across 3 turns, save session, verify it can be loaded."""
 
-    from openharness.services.session_storage import (
+    from niaharness.services.session_storage import (
         save_session_snapshot, load_session_snapshot,
     )
 

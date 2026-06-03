@@ -1,7 +1,7 @@
 """Tests for permission decisions."""
 
-from openharness.config.settings import PermissionSettings
-from openharness.permissions import PermissionChecker, PermissionMode
+from niaharness.config.settings import PermissionSettings
+from niaharness.permissions import PermissionChecker, PermissionMode
 
 
 def test_default_mode_allows_read_only():

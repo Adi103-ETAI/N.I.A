@@ -31,8 +31,8 @@ OpenHarness can load Markdown skills and Claude-style plugin layouts, which make
 
 Examples:
 
-- Put a custom skill in `~/.openharness/skills/`.
-- Install a plugin into `~/.openharness/plugins/`.
+- Put a custom skill in `~/.niaharness/skills/`.
+- Install a plugin into `~/.niaharness/plugins/`.
 - Use the same workflow conventions across multiple local projects.
 
 ## 4. Multi-agent and background task experiments

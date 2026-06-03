@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
-from openharness.ui.textual_app import OpenHarnessTerminalApp
+from niaharness.api.client import ApiMessageCompleteEvent
+from niaharness.api.usage import UsageSnapshot
+from niaharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+from niaharness.ui.textual_app import OpenHarnessTerminalApp
 
 
 class StaticApiClient:

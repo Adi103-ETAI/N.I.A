@@ -1,9 +1,9 @@
-"""Tests for openharness.prompts.system_prompt."""
+"""Tests for niaharness.prompts.system_prompt."""
 
 from __future__ import annotations
 
-from openharness.prompts.environment import EnvironmentInfo
-from openharness.prompts.system_prompt import build_system_prompt
+from niaharness.prompts.environment import EnvironmentInfo
+from niaharness.prompts.system_prompt import build_system_prompt
 
 
 def _make_env(**overrides) -> EnvironmentInfo:

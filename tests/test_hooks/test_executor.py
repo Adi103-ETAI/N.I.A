@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.hooks import HookEvent, HookExecutionContext, HookExecutor
-from openharness.hooks.loader import HookRegistry
-from openharness.hooks.schemas import CommandHookDefinition, PromptHookDefinition
+from niaharness.api.client import ApiMessageCompleteEvent
+from niaharness.api.usage import UsageSnapshot
+from niaharness.engine.messages import ConversationMessage, TextBlock
+from niaharness.hooks import HookEvent, HookExecutionContext, HookExecutor
+from niaharness.hooks.loader import HookRegistry
+from niaharness.hooks.schemas import CommandHookDefinition, PromptHookDefinition
 
 
 class FakeApiClient:

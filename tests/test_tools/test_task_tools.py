@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from openharness.tasks import get_task_manager
-from openharness.tools.agent_tool import AgentTool, AgentToolInput
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.task_create_tool import TaskCreateTool, TaskCreateToolInput
-from openharness.tools.task_output_tool import TaskOutputTool, TaskOutputToolInput
-from openharness.tools.task_update_tool import TaskUpdateTool, TaskUpdateToolInput
-from openharness.tools.team_create_tool import TeamCreateTool, TeamCreateToolInput
+from niaharness.tasks import get_task_manager
+from niaharness.tools.agent_tool import AgentTool, AgentToolInput
+from niaharness.tools.base import ToolExecutionContext
+from niaharness.tools.task_create_tool import TaskCreateTool, TaskCreateToolInput
+from niaharness.tools.task_output_tool import TaskOutputTool, TaskOutputToolInput
+from niaharness.tools.task_update_tool import TaskUpdateTool, TaskUpdateToolInput
+from niaharness.tools.team_create_tool import TeamCreateTool, TeamCreateToolInput
 
 
 @pytest.mark.asyncio

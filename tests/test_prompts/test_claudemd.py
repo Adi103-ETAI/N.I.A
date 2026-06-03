@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openharness.config.paths import get_project_issue_file, get_project_pr_comments_file
-from openharness.prompts import build_runtime_system_prompt, discover_claude_md_files, load_claude_md_prompt
-from openharness.config.settings import Settings
+from niaharness.config.paths import get_project_issue_file, get_project_pr_comments_file
+from niaharness.prompts import build_runtime_system_prompt, discover_claude_md_files, load_claude_md_prompt
+from niaharness.config.settings import Settings
 
 
 def test_discover_claude_md_files(tmp_path: Path):

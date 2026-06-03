@@ -10,9 +10,9 @@ import pytest
 
 from urllib.parse import parse_qs, urlparse
 
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.web_fetch_tool import WebFetchTool, WebFetchToolInput
-from openharness.tools.web_search_tool import WebSearchTool, WebSearchToolInput
+from niaharness.tools.base import ToolExecutionContext
+from niaharness.tools.web_fetch_tool import WebFetchTool, WebFetchToolInput
+from niaharness.tools.web_search_tool import WebSearchTool, WebSearchToolInput
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -69,7 +69,7 @@ async def test_web_search_tool_reads_results(tmp_path):
         tool = WebSearchTool()
         result = await tool.execute(
             WebSearchToolInput(
-                query="openharness docs",
+                query="niaharness docs",
                 search_url=f"http://127.0.0.1:{server.server_port}/search",
             ),
             ToolExecutionContext(cwd=tmp_path),
@@ -83,4 +83,4 @@ async def test_web_search_tool_reads_results(tmp_path):
     assert result.is_error is False
     assert "OpenHarness Docs" in result.output
     assert "https://example.com/docs" in result.output
-    assert "openharness docs" in result.output
+    assert "niaharness docs" in result.output

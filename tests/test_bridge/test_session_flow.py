@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from openharness.bridge import build_sdk_url, decode_work_secret, encode_work_secret, spawn_session
-from openharness.bridge.types import WorkSecret
+from niaharness.bridge import build_sdk_url, decode_work_secret, encode_work_secret, spawn_session
+from niaharness.bridge.types import WorkSecret
 
 
 @pytest.mark.asyncio

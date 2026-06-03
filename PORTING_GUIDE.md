@@ -7,24 +7,24 @@
 #### FileEditTool
 - Reference: `/workspaces/openclaude/src/tools/FileEditTool/FileEditTool.ts`
 - Read: FileEditTool.ts, types.ts, prompt.ts, utils.js
-- Port to: `src/openharness/tools/FileEditTool/`
+- Port to: `src/niaharness/tools/FileEditTool/`
 - Focus: String matching, diff generation, formatting preservation
 
 #### BashTool
 - Reference: `/workspaces/openclaude/src/tools/BashTool/BashTool.ts`
 - Read: BashTool.ts, constants.ts
-- Port to: `src/openharness/tools/BashTool/`
+- Port to: `src/niaharness/tools/BashTool/`
 - Focus: Streaming output, timeout, signal handling
 
 #### FileReadTool
 - Reference: `/workspaces/openclaude/src/tools/FileReadTool/FileReadTool.ts`
 - Read: FileReadTool.ts, types.ts
-- Port to: `src/openharness/tools/FileReadTool/`
+- Port to: `src/niaharness/tools/FileReadTool/`
 - Focus: Line number support, encoding, content display
 
 #### FileWriteTool
 - Reference: `/workspaces/openclaude/src/tools/FileWriteTool/FileWriteTool.ts`
-- Port to: `src/openharness/tools/FileWriteTool/`
+- Port to: `src/niaharness/tools/FileWriteTool/`
 - Focus: Create vs update, directory creation, validation
 
 ### Priority 2: Agent Tools (Complex but Critical)
@@ -32,17 +32,17 @@
 #### AgentTool
 - Reference: `/workspaces/openclaude/src/tools/AgentTool/AgentTool.ts`
 - Also read: `/workspaces/openclaude/src/tools/AgentTool/runAgent.ts`
-- Port to: `src/openharness/tools/AgentTool/`
+- Port to: `src/niaharness/tools/AgentTool/`
 - Focus: Subagent spawning, context isolation, forking
 
 #### SendMessageTool
 - Reference: `/workspaces/openclaude/src/tools/SendMessageTool/SendMessageTool.ts`
-- Port to: `src/openharness/tools/SendMessageTool/`
+- Port to: `src/niaharness/tools/SendMessageTool/`
 - Focus: Inter-agent messaging pattern
 
 #### TeamCreateTool
 - Reference: `/workspaces/openclaude/src/tools/TeamCreateTool/TeamCreateTool.ts`
-- Port to: `src/openharness/tools/TeamCreateTool/`
+- Port to: `src/niaharness/tools/TeamCreateTool/`
 - Focus: Team management, member registry
 
 ### Priority 3: All Other Tools
@@ -58,7 +58,7 @@ For each tool (40+ more):
 For each tool, create this structure:
 
 ```
-src/openharness/tools/{ToolName}/
+src/niaharness/tools/{ToolName}/
 ├── __init__.py          # from .{ToolName} import {ToolName}
 ├── {ToolName}.py        # Main tool class
 ├── types.py             # Pydantic input/output models
@@ -72,7 +72,7 @@ src/openharness/tools/{ToolName}/
 
 Read in OpenClaude: `/workspaces/openclaude/src/query.ts`
 
-Add to `src/openharness/engine/query.py`:
+Add to `src/niaharness/engine/query.py`:
 - Query tracking (chainId, depth)
 - Streaming tool executor
 - Tool result budgeting
@@ -81,16 +81,16 @@ Add to `src/openharness/engine/query.py`:
 
 ## Import Updates After Restructuring
 
-File: `src/openharness/tools/__init__.py`
+File: `src/niaharness/tools/__init__.py`
 
 Update all imports from:
 ```python
-from openharness.tools.file_edit_tool import FileEditTool
+from niaharness.tools.file_edit_tool import FileEditTool
 ```
 
 To:
 ```python
-from openharness.tools.FileEditTool import FileEditTool
+from niaharness.tools.FileEditTool import FileEditTool
 ```
 
 ## Testing
@@ -146,7 +146,7 @@ Tool Name: ________________
 □ Create utils.py (helpers)
 □ Create ui.py (messages)
 □ Test imports work
-□ Update src/openharness/tools/__init__.py
+□ Update src/niaharness/tools/__init__.py
 □ Run tests
 □ Move to next tool
 ```

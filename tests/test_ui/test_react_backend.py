@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.ui.backend_host import BackendHostConfig, ReactBackendHost
-from openharness.ui.runtime import build_runtime, close_runtime, start_runtime
+from niaharness.api.client import ApiMessageCompleteEvent
+from niaharness.api.usage import UsageSnapshot
+from niaharness.engine.messages import ConversationMessage, TextBlock
+from niaharness.ui.backend_host import BackendHostConfig, ReactBackendHost
+from niaharness.ui.runtime import build_runtime, close_runtime, start_runtime
 
 
 class StaticApiClient:

@@ -38,7 +38,7 @@ def test_command_picker_shows() -> tuple[bool, str]:
     env["OPENHARNESS_FRONTEND_SCRIPT"] = json.dumps(["/help", "/exit"])
 
     model_name = env.get("ANTHROPIC_MODEL", "kimi-k2.5")
-    backend_cmd = [sys.executable, "-m", "openharness", "--backend-only",
+    backend_cmd = [sys.executable, "-m", "niaharness", "--backend-only",
                    "--model", model_name]
     env["OPENHARNESS_FRONTEND_CONFIG"] = json.dumps({
         "backend_command": backend_cmd,
@@ -81,7 +81,7 @@ def test_permission_flow() -> tuple[bool, str]:
     ])
 
     model_name = env.get("ANTHROPIC_MODEL", "kimi-k2.5")
-    backend_cmd = [sys.executable, "-m", "openharness", "--backend-only",
+    backend_cmd = [sys.executable, "-m", "niaharness", "--backend-only",
                    "--model", model_name]
     env["OPENHARNESS_FRONTEND_CONFIG"] = json.dumps({
         "backend_command": backend_cmd,
@@ -126,7 +126,7 @@ def test_shortcut_hints_visible() -> tuple[bool, str]:
     env["OPENHARNESS_FRONTEND_RAW_RETURN"] = "1"
     env["OPENHARNESS_FRONTEND_SCRIPT"] = json.dumps(["/exit"])
 
-    backend_cmd = [sys.executable, "-m", "openharness", "--backend-only"]
+    backend_cmd = [sys.executable, "-m", "niaharness", "--backend-only"]
     env["OPENHARNESS_FRONTEND_CONFIG"] = json.dumps({
         "backend_command": backend_cmd,
         "initial_prompt": None,
@@ -161,7 +161,7 @@ def test_no_headless_flag() -> tuple[bool, str]:
     """Test that --headless flag is removed."""
     import subprocess
     result = subprocess.run(
-        [sys.executable, "-m", "openharness", "--help"],
+        [sys.executable, "-m", "niaharness", "--help"],
         capture_output=True, text=True, timeout=10,
         cwd=str(PROJECT_ROOT),
     )
