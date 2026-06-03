@@ -4,6 +4,19 @@ All notable changes to N.I.A will be documented in this file.
 
 ## [Unreleased]
 
+### Phase 4 - Voice and MCP Connected (2026-06-03)
+
+NIA now connects to niaharness's MCP (Model Context Protocol) system for remote tool access and voice integration for speech-to-text.
+
+#### Added
+- `src/niaharness/tools/nia_voice_tool.py` - `nia_voice` tool: transcribe audio, check capabilities, extract keyterms
+- MCP auto-connection in `_build_engine()` — loads MCP server configs, creates McpClientManager, connects all servers
+- MCP tools automatically available to brain via registry
+
+#### Changed
+- `src/agents/nia/nia.py` - `_build_engine()` now creates MCP manager and passes to tool registry; shutdown closes MCP connections
+- `src/niaharness/tools/__init__.py` - NiaVoiceTool registered in default tool registry
+
 ### Phase 3 - Swarm Delegation (2026-06-03)
 
 NIA's custom Coordinator and Dispatcher are now dead code — the QueryEngine handles all orchestration. Multi-agent execution is delegated to niaharness's swarm system via the `agent`, `team_create`, `team_delete`, and `send_message` tools already in the registry.

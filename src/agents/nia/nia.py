@@ -88,6 +88,7 @@ class NIA:
 
         # QueryEngine (the body) - created during initialize()
         self._engine: QueryEngine | None = None
+        self._mcp_manager: Any = None
 
         # State
         self._initialized = False
@@ -153,8 +154,21 @@ class NIA:
 
         adapter = NIAProviderAdapter(active_provider, active_model)
 
-        # Create tool registry with all 38+ niaharness tools
-        tool_registry = create_default_tool_registry()
+        # MCP integration: create manager and pass to tool registry
+        mcp_manager = None
+        try:
+            from niaharness.mcp.client import McpClientManager
+            from niaharness.mcp.config import load_mcp_server_configs
+            mcp_servers = load_mcp_server_configs(Settings(), [])
+            if mcp_servers:
+                mcp_manager = McpClientManager(mcp_servers)
+                await mcp_manager.connect_all()
+                logger.info(f"MCP connected: {sum(1 for s in mcp_manager.list_statuses() if s.state == 'connected')} servers")
+        except Exception as e:
+            logger.debug(f"MCP not available: {e}")
+
+        # Create tool registry with all 38+ niaharness tools + MCP tools
+        tool_registry = create_default_tool_registry(mcp_manager)
 
         # Wire NIA's memory and context into the NIA-specific tools
         register_nia_tools(tool_registry, self._memory, self._context)
@@ -175,6 +189,9 @@ class NIA:
             ),
         )
 
+        # Store MCP manager for cleanup
+        self._mcp_manager = mcp_manager
+
         # Create the QueryEngine
         self._engine = QueryEngine(
             api_client=adapter,
@@ -185,9 +202,10 @@ class NIA:
             system_prompt=system_prompt,
             max_tokens=4096,
             hook_executor=hook_executor,
+            tool_metadata={"mcp_manager": mcp_manager} if mcp_manager else None,
         )
 
-        logger.info("QueryEngine built with NIA merged prompt")
+        logger.info("QueryEngine built with NIA merged prompt + MCP")
 
     def _build_merged_system_prompt(self) -> str:
         """Build a merged system prompt: niaharness base + NIA personality + context.
@@ -393,4 +411,11 @@ class NIA:
         self._memory.save()
         if self._engine:
             self._engine.interrupt()
+        if self._mcp_manager:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._mcp_manager.close())
+            except RuntimeError:
+                pass
         logger.info("N.I.A shutdown complete")

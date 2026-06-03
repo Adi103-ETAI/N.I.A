@@ -43,6 +43,7 @@ from niaharness.tools.web_fetch_tool import WebFetchTool
 from niaharness.tools.web_search_tool import WebSearchTool
 from niaharness.tools.nia_memory_tool import NiaMemoryTool
 from niaharness.tools.nia_context_tool import NiaContextTool
+from niaharness.tools.nia_voice_tool import NiaVoiceTool
 
 
 def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
@@ -88,6 +89,7 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         TeamDeleteTool(),
         NiaMemoryTool(),
         NiaContextTool(),
+        NiaVoiceTool(),
     ):
         registry.register(tool)
     if mcp_manager is not None:
