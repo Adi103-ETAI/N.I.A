@@ -170,8 +170,8 @@ class NIA:
         # Create tool registry with all 38+ niaharness tools + MCP tools
         tool_registry = create_default_tool_registry(mcp_manager)
 
-        # Wire NIA's memory and context into the NIA-specific tools
-        register_nia_tools(tool_registry, self._memory, self._context)
+        # Wire NIA's memory, context, and engine into the NIA-specific tools
+        register_nia_tools(tool_registry, self._memory, self._context, self._engine)
 
         # Build merged system prompt: niaharness base + NIA personality + context
         system_prompt = self._build_merged_system_prompt()

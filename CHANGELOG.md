@@ -4,6 +4,19 @@ All notable changes to N.I.A will be documented in this file.
 
 ## [Unreleased]
 
+### Phase 5 - Always-Ready Infrastructure (2026-06-03)
+
+Session persistence allows NIA to save and restore conversations across restarts, making it a true always-ready partner.
+
+#### Added
+- `src/niaharness/tools/nia_session_tool.py` - `nia_session` tool: save, restore, list, new sessions
+- Sessions stored in `~/.nia/sessions/` as JSON files
+- `register_nia_tools()` now also wires the engine into the session tool
+
+#### Changed
+- `src/niaharness/tools/__init__.py` - NiaSessionTool registered, `register_nia_tools()` accepts engine parameter
+- `src/agents/nia/nia.py` - Passes engine to `register_nia_tools()` for session persistence
+
 ### Phase 4 - Voice and MCP Connected (2026-06-03)
 
 NIA now connects to niaharness's MCP (Model Context Protocol) system for remote tool access and voice integration for speech-to-text.

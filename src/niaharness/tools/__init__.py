@@ -44,6 +44,7 @@ from niaharness.tools.web_search_tool import WebSearchTool
 from niaharness.tools.nia_memory_tool import NiaMemoryTool
 from niaharness.tools.nia_context_tool import NiaContextTool
 from niaharness.tools.nia_voice_tool import NiaVoiceTool
+from niaharness.tools.nia_session_tool import NiaSessionTool
 
 
 def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
@@ -90,6 +91,7 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         NiaMemoryTool(),
         NiaContextTool(),
         NiaVoiceTool(),
+        NiaSessionTool(),
     ):
         registry.register(tool)
     if mcp_manager is not None:
@@ -100,8 +102,8 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
     return registry
 
 
-def register_nia_tools(registry: ToolRegistry, memory: object, context: object) -> None:
-    """Wire NIA's memory and context instances into the registered NIA tools.
+def register_nia_tools(registry: ToolRegistry, memory: object, context: object, engine: object = None) -> None:
+    """Wire NIA's memory, context, and engine instances into the registered NIA tools.
 
     Call this after creating the registry and initializing NIA's subsystems.
     """
@@ -111,6 +113,9 @@ def register_nia_tools(registry: ToolRegistry, memory: object, context: object) 
     ctx_tool = registry.get("nia_context")
     if ctx_tool is not None:
         ctx_tool.set_context(context)
+    session_tool = registry.get("nia_session")
+    if session_tool is not None and engine is not None:
+        session_tool.set_engine(engine)
 
 
 __all__ = [
