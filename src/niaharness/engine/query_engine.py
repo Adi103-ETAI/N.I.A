@@ -383,6 +383,14 @@ class QueryEngine:
         ):
             if usage is not None:
                 self._cost_tracker.add(usage)
+            # The low-level run_query loop emits a final QueryResult event to
+            # signal termination.  At the high-level submit_message API we
+            # treat it as a return value rather than a streamed event so
+            # callers can rely on the last streamed event being an
+            # AssistantTurnComplete / tool event.
+            if isinstance(event, QueryResult):
+                self._last_result = event
+                continue
             yield event
 
     # -- Convenience -------------------------------------------------------

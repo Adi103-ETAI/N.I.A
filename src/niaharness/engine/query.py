@@ -504,11 +504,16 @@ async def run_query(
                 return
 
         # --- auto-compact check before calling the model -------------------
-        messages, was_compacted, compact_state = await auto_compact_if_needed(
+        # auto_compact_if_needed returns a (possibly new) list.  When it
+        # mutates the conversation we need to propagate that back to the
+        # caller's list reference so subsequent appends are visible to them.
+        compacted_messages, was_compacted, compact_state = await auto_compact_if_needed(
             messages,
             model=context.model,
             state=compact_state,
         )
+        if was_compacted:
+            messages[:] = compacted_messages
 
         # --- token budget continuation check -------------------------------
         if context.token_budget is not None:
