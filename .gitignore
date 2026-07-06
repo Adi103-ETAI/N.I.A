@@ -63,7 +63,8 @@ htmlcov/
 Thumbs.db
  
 # Ignore non-Python language folders
-services/
+/services/
+/frontend/*/services/
 #frontend/
 
 # Data and logs
