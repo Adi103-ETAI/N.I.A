@@ -45,15 +45,16 @@ def expand_path(path_str: str, base_dir: Optional[str] = None) -> str:
     return os.path.normpath(os.path.join(actual_base, trimmed))
 
 
-def to_relative_path(absolute_path: str) -> str:
-    """Convert an absolute path to relative from cwd if possible.
+def to_relative_path(absolute_path: str, base: str | None = None) -> str:
+    """Convert an absolute path to relative from cwd (or ``base`` if given).
 
-    Returns the relative path if under cwd, otherwise the original absolute
-    path to preserve clarity.
+    Returns the relative path if under the base, otherwise the original
+    absolute path to preserve clarity.
     """
-    cwd = os.getcwd()
+    if base is None:
+        base = os.getcwd()
     try:
-        rel = os.path.relpath(absolute_path, cwd)
+        rel = os.path.relpath(absolute_path, base)
         if rel.startswith(".."):
             return absolute_path
         return rel

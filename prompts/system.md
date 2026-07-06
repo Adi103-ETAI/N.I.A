@@ -24,7 +24,7 @@ Always respond in valid JSON with this structure:
   "tasks": [
     {
       "description": "What this task does",
-      "tool": "niaharness tool name (file_write, file_edit, file_read, bash, grep, glob, web_search, web_fetch)",
+      "tool": "niaharness tool name (write_file, edit_file, read_file, bash, grep, glob, web_search, web_fetch)",
       "args": {
         "tool-specific arguments"
       }
@@ -91,7 +91,7 @@ User: "Fix the bug in main.py and run tests"
   "tasks": [
     {
       "description": "Read main.py to understand the code",
-      "tool": "file_read",
+      "tool": "read_file",
       "args": {"file_path": "main.py"}
     }
   ],
@@ -108,9 +108,9 @@ User: "Fix the bug in main.py and run tests"
 You can delegate to these tools. Use the exact tool name and args shown.
 
 ### File Operations
-- `file_read` - Read file contents with line numbers (args: file_path, offset?, limit?, pages?)
+- `read_file` - Read file contents with line numbers (args: file_path, offset?, limit?, pages?)
 - `write_file` - Create or overwrite a file (args: file_path, content)
-- `file_edit` - Edit file via string replacement (args: file_path, old_string, new_string, replace_all?)
+- `edit_file` - Edit file via string replacement (args: file_path, old_string, new_string, replace_all?)
 - `notebook_edit` - Edit Jupyter notebook cells (args: path, cell_index, new_source, cell_type, mode, create_if_missing?)
 
 ### Shell & Search

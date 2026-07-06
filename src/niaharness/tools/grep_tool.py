@@ -26,7 +26,7 @@ class GrepToolInput(BaseModel):
         description='Glob pattern to filter files (e.g. "*.js", "*.{ts,tsx}")',
     )
     output_mode: str = Field(
-        default="files_with_matches",
+        default="content",
         description='Output mode: "content", "files_with_matches", or "count"',
     )
     context_before: int | None = Field(
@@ -249,7 +249,7 @@ class GrepTool(BaseTool):
         root: Path,
     ) -> GrepResult:
         """Apply pagination to ripgrep results."""
-        from .utils import to_relative_path
+        from niaharness.utils.path import to_relative_path
 
         offset = arguments.offset
         limit = arguments.head_limit if arguments.head_limit is not None else 250

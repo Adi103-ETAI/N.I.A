@@ -39,12 +39,16 @@ class CronListTool(BaseTool):
 
         for job in jobs:
             enabled = "on" if job.get("enabled", True) else "off"
-            last_run = job.get("last_run", "never")
-            if last_run != "never":
+            last_run = job.get("last_run")
+            if last_run:
                 last_run = last_run[:19]
-            next_run = job.get("next_run", "n/a")
-            if next_run != "n/a":
+            else:
+                last_run = "never"
+            next_run = job.get("next_run")
+            if next_run:
                 next_run = next_run[:19]
+            else:
+                next_run = "n/a"
             last_status = job.get("last_status", "")
             status_str = f" ({last_status})" if last_status else ""
             lines.append(
