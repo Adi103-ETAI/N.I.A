@@ -5,6 +5,7 @@ from niaharness.tools.agent_tool import AgentTool
 from niaharness.tools.BashTool import BashTool
 from niaharness.tools.base import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
 from niaharness.tools.brief_tool import BriefTool
+from niaharness.tools.browser_tool import BrowserTool
 from niaharness.tools.config_tool import ConfigTool
 from niaharness.tools.cron_create_tool import CronCreateTool
 from niaharness.tools.cron_delete_tool import CronDeleteTool
@@ -26,9 +27,11 @@ from niaharness.tools.mcp_tool import McpToolAdapter
 from niaharness.tools.notebook_edit_tool import NotebookEditTool
 from niaharness.tools.read_mcp_resource_tool import ReadMcpResourceTool
 from niaharness.tools.remote_trigger_tool import RemoteTriggerTool
+from niaharness.tools.run_code_tool import RunCodeTool
 from niaharness.tools.send_message_tool import SendMessageTool
 from niaharness.tools.skill_tool import SkillTool
 from niaharness.tools.sleep_tool import SleepTool
+from niaharness.tools.speak_tool import SpeakTool
 from niaharness.tools.task_create_tool import TaskCreateTool
 from niaharness.tools.task_get_tool import TaskGetTool
 from niaharness.tools.task_list_tool import TaskListTool
@@ -92,6 +95,11 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         NiaContextTool(),
         NiaVoiceTool(),
         NiaSessionTool(),
+        # Hermes/Jarvis capability layer — interactive browser, code
+        # execution, and text-to-speech.  See audit P1/P2/P3.
+        BrowserTool(),
+        RunCodeTool(),
+        SpeakTool(),
     ):
         registry.register(tool)
     if mcp_manager is not None:
