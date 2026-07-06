@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class FileReadToolInput(BaseModel):
-    """Input schema for FileReadTool."""
+    """Input schema for FileReadTool.
 
-    file_path: str = Field(description="The absolute path to the file to read")
+    Accepts both ``file_path`` (canonical) and ``path`` (alias used by some
+    integration tests and external callers) for the same field.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    file_path: str = Field(alias="path", description="The absolute path to the file to read")
     offset: int | None = Field(
         default=None,
         description=(

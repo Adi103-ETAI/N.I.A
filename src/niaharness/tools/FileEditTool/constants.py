@@ -1,6 +1,6 @@
 """FileEditTool constants."""
 
-FILE_EDIT_TOOL_NAME = "file_edit"
+FILE_EDIT_TOOL_NAME = "edit_file"
 FILE_NOT_FOUND_CWD_NOTE = "File does not exist. Current working directory:"
 FILE_UNEXPECTEDLY_MODIFIED_ERROR = (
     "File has been modified since last read, either by the user or by a linter. "

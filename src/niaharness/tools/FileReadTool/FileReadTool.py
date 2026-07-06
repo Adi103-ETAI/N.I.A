@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from niaharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from niaharness.tools.shared_state import get_read_state_tracker
 
 from .constants import FILE_NOT_FOUND_CWD_NOTE, FILE_READ_TOOL_NAME, MAX_LINES_TO_READ
 from .prompt import get_file_read_description
@@ -289,6 +290,19 @@ class FileReadTool(BaseTool):
         # Build output with file info header
         file_info = format_file_info(str(file_path), total_lines, offset, num_lines)
         output = f"{file_info}\n\n{numbered_content}"
+
+        # Update shared read-state tracker so subsequent edit_file calls know
+        # the agent has seen the current content.
+        try:
+            get_read_state_tracker().update_after_read(
+                str(file_path),
+                text_content,
+                offset=arguments.offset,
+                limit=arguments.limit,
+            )
+        except Exception:
+            # Read-state tracking is best-effort; never fail a read because of it.
+            pass
 
         return ToolResult(
             output=output,
