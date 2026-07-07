@@ -11,6 +11,7 @@ from niaharness.tools.cron_create_tool import CronCreateTool
 from niaharness.tools.cron_delete_tool import CronDeleteTool
 from niaharness.tools.cron_list_tool import CronListTool
 from niaharness.tools.cron_toggle_tool import CronToggleTool
+from niaharness.tools.delegate_task_tool import DelegateTaskTool
 from niaharness.tools.enter_plan_mode_tool import EnterPlanModeTool
 from niaharness.tools.enter_worktree_tool import EnterWorktreeTool
 from niaharness.tools.exit_plan_mode_tool import ExitPlanModeTool
@@ -86,6 +87,7 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         CronListTool(),
         CronDeleteTool(),
         CronToggleTool(),
+        DelegateTaskTool(),
         RemoteTriggerTool(),
         TaskCreateTool(),
         TaskGetTool(),
