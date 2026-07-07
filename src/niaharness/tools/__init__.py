@@ -22,6 +22,7 @@ from niaharness.tools.FileReadTool import FileReadTool
 from niaharness.tools.FileWriteTool import FileWriteTool
 from niaharness.tools.glob_tool import GlobTool
 from niaharness.tools.grep_tool import GrepTool
+from niaharness.tools.image_generate_tool import ImageGenerateTool
 from niaharness.tools.list_mcp_resources_tool import ListMcpResourcesTool
 from niaharness.tools.lsp_tool import LspTool
 from niaharness.tools.mcp_auth_tool import McpAuthTool
@@ -69,6 +70,7 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         McpAuthTool(),
         GlobTool(),
         GrepTool(),
+        ImageGenerateTool(),
         SkillTool(),
         SkillManageTool(),
         SessionSearchTool(),
