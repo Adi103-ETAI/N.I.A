@@ -257,6 +257,24 @@ async def run_scheduler_loop(
             append_history(entry)
             cron_service.mark_job_run(job.get("name", ""), success=entry["status"] == "success")
 
+            # Deliver results to configured channels (email/webhook).
+            delivery = job.get("delivery")
+            if delivery:
+                try:
+                    from niaharness.services.cron_delivery import deliver_result
+
+                    delivery_statuses = await deliver_result(
+                        delivery=delivery,
+                        job_name=job.get("name", ""),
+                        result=entry,
+                    )
+                    entry["delivery"] = delivery_statuses
+                    # Re-append to update the history entry with delivery status.
+                    append_history(entry)
+                except Exception as exc:
+                    logger.warning("Delivery failed for job %s: %s", job.get("name"), exc)
+                    entry["delivery_error"] = str(exc)
+
         if once:
             return
         await asyncio.sleep(poll_interval_seconds)
