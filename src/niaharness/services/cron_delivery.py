@@ -359,29 +359,44 @@ async def deliver_result(
     job_name: str,
     result: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Deliver a job result via all configured channels.
+    """Deliver a job result via all configured channels concurrently.
 
     Returns a list of delivery status dicts (one per channel).
+
+    Audit fix: email and webhook now run concurrently via asyncio.gather
+    instead of sequentially. A slow SMTP server no longer delays the webhook.
     """
-    statuses: list[dict[str, Any]] = []
+    import asyncio
 
     email_cfg = delivery.get("email")
     webhook_cfg = delivery.get("webhook")
 
+    tasks: list[Any] = []
+    channel_order: list[str] = []
+
     if email_cfg:
-        status = await deliver_email(
-            email_cfg=email_cfg,
-            job_name=job_name,
-            result=result,
-        )
-        statuses.append(status)
+        tasks.append(deliver_email(email_cfg=email_cfg, job_name=job_name, result=result))
+        channel_order.append("email")
 
     if webhook_cfg:
-        status = await deliver_webhook(
-            webhook_cfg=webhook_cfg,
-            job_name=job_name,
-            result=result,
-        )
-        statuses.append(status)
+        tasks.append(deliver_webhook(webhook_cfg=webhook_cfg, job_name=job_name, result=result))
+        channel_order.append("webhook")
+
+    if not tasks:
+        return []
+
+    # Run all delivery channels concurrently.
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    statuses: list[dict[str, Any]] = []
+    for i, result_item in enumerate(results):
+        if isinstance(result_item, Exception):
+            statuses.append({
+                "channel": channel_order[i] if i < len(channel_order) else "unknown",
+                "success": False,
+                "error": str(result_item),
+            })
+        else:
+            statuses.append(result_item)
 
     return statuses

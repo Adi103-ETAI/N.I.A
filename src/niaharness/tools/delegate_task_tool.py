@@ -67,6 +67,13 @@ DEFAULT_MAX_DEPTH = 2
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_CONCURRENT_CHILDREN = 3
 
+# Summary budget (adapted from Hermes's DEFAULT_MAX_SUMMARY_CHARS).
+# Caps the per-subagent result text returned to the parent so a chatty
+# subagent can't blow the parent's context window. Full text is spilled
+# to disk with a read_file pointer.
+DEFAULT_MAX_SUMMARY_CHARS = 24000
+_MIN_SUMMARY_CHARS = 2000
+
 
 # Tools that children must never have access to.
 # Mirrors Hermes's DELEGATE_BLOCKED_TOOLS + NIA-specific side-effect tools.
@@ -544,15 +551,111 @@ toolset. You must complete the task and return your result.
 
         return delegation_prompt + base
 
+    # ---- summary budget (adapted from Hermes's _apply_summary_budget) ----
+
+    @staticmethod
+    def _trim_summary(summary: str, cap: int, task_index: int) -> tuple[str, str | None]:
+        """Trim a subagent summary to cap chars, spilling full text to disk.
+
+        Returns (model_text, spill_path). The model_text is a head+tail
+        window with a footer pointing to the full text file.
+
+        Adapted from Hermes Agent's _trim_summary_with_footer.
+        """
+        if len(summary) <= cap:
+            return summary, None
+
+        original_len = len(summary)
+        head_budget = int(cap * 0.75)
+        tail_budget = cap - head_budget
+
+        head = summary[:head_budget]
+        tail = summary[-tail_budget:]
+        # Snap to line boundaries.
+        nl = head.rfind("\n")
+        if nl > head_budget * 0.5:
+            head = head[:nl]
+        nl = tail.find("\n")
+        if 0 <= nl < tail_budget * 0.5:
+            tail = tail[nl + 1:]
+
+        # Spill full text to disk.
+        spill_path = DelegateTaskTool._spill_summary(task_index, summary)
+
+        footer_lines = [
+            "",
+            "─" * 8 + " [SUMMARY TRUNCATED] " + "─" * 8,
+            f"Showing {len(head):,} chars (head) + {len(tail):,} chars (tail) "
+            f"of {original_len:,} total — trimmed to protect the parent's context window.",
+        ]
+        if spill_path:
+            middle_start_line = head.count("\n") + 2
+            footer_lines.append(f"Full subagent output saved to: {spill_path}")
+            footer_lines.append(
+                f'To read the omitted middle: read_file path="{spill_path}" '
+                f"offset={middle_start_line} limit=200"
+            )
+        footer_lines.append("─" * 37)
+
+        model_text = head + "\n\n[... middle omitted — see footer ...]\n\n" + tail + "\n".join(footer_lines)
+        return model_text, spill_path
+
+    @staticmethod
+    def _spill_summary(task_index: int, summary: str) -> str | None:
+        """Write a subagent's full summary to disk. Returns path or None.
+
+        Adapted from Hermes Agent's _spill_summary_to_file.
+        """
+        try:
+            from datetime import datetime, timezone
+            from pathlib import Path
+
+            cache_dir = Path("/home/z/my-project/download/delegation")
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+            path = cache_dir / f"subagent-summary-{task_index}-{ts}.txt"
+            path.write_text(summary, encoding="utf-8")
+            return str(path)
+        except Exception as exc:
+            logger.debug("Failed to spill subagent summary: %s", exc)
+            return None
+
+    def _apply_summary_budget(self, results: list[dict[str, Any]]) -> None:
+        """Trim subagent results in-place so they can't overflow parent context.
+
+        Adapted from Hermes Agent's _apply_summary_budget.
+        """
+        cap = int(os.environ.get("NIA_DELEGATE_MAX_SUMMARY_CHARS", str(DEFAULT_MAX_SUMMARY_CHARS)))
+        if cap <= 0:
+            return  # disabled
+
+        for entry in results:
+            if not isinstance(entry, dict):
+                continue
+            summary = entry.get("result")
+            if not isinstance(summary, str) or len(summary) <= cap:
+                continue
+            model_text, spill_path = self._trim_summary(summary, cap, entry.get("task_index", -1))
+            entry["result"] = model_text
+            entry["result_truncated"] = True
+            if spill_path:
+                entry["result_full_path"] = spill_path
+
     # ---- formatting ----------------------------------------------------
 
     def _format_single_result(self, result: dict[str, Any]) -> str:
-        """Format a single subagent result as structured JSON for the parent."""
-        # Return structured JSON so the model can parse it.
+        """Format a single subagent result as structured JSON for the parent.
+
+        Applies summary budget before serializing.
+        """
+        self._apply_summary_budget([result])
         return json.dumps(result, indent=2, default=str)
 
     def _format_batch_results(self, results: list, total_tasks: int) -> str:
-        """Format batch results as structured JSON for the parent."""
+        """Format batch results as structured JSON for the parent.
+
+        Applies summary budget before serializing.
+        """
         formatted = []
         for i, result in enumerate(results, 1):
             if isinstance(result, Exception):
@@ -571,6 +674,9 @@ toolset. You must complete the task and return your result.
                     "status": "failed",
                     "error": f"Unknown result type: {result}",
                 })
+
+        # Apply summary budget to all results.
+        self._apply_summary_budget(formatted)
 
         envelope = {
             "results": formatted,

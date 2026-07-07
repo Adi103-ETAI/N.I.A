@@ -21,6 +21,7 @@ Output directory: ``NIA_IMAGE_OUTPUT_DIR`` env var (default:
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -230,16 +231,33 @@ class ImageGenerateTool(BaseTool):
                 is_error=True,
             )
 
-        # Call the image generation API.
+        # Call the image generation API with retry (audit fix: no retry
+        # for 429/5xx — adapted from Hermes's error categorization pattern).
         try:
-            images = await self._call_image_api(arguments, config, model_meta)
+            images = await self._call_image_api_with_retry(arguments, config, model_meta)
         except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            error_type = "rate_limit" if status_code == 429 else "api_error"
+            if 500 <= status_code < 600:
+                error_type = "server_error"
             return ToolResult(
-                output=f"Image generation API error: HTTP {exc.response.status_code}\n{exc.response.text[:500]}",
+                output=json.dumps({
+                    "success": False,
+                    "error": f"HTTP {status_code}: {exc.response.text[:500]}",
+                    "error_type": error_type,
+                    "status_code": status_code,
+                }),
                 is_error=True,
             )
         except Exception as exc:
-            return ToolResult(output=f"Image generation failed: {exc}", is_error=True)
+            return ToolResult(
+                output=json.dumps({
+                    "success": False,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                }),
+                is_error=True,
+            )
 
         if not images:
             return ToolResult(output="Image generation returned no images.", is_error=True)
@@ -306,6 +324,48 @@ class ImageGenerateTool(BaseTool):
                 "partial_success": len(saved_paths) < arguments.n,
             },
         )
+
+    async def _call_image_api_with_retry(
+        self,
+        arguments: ImageGenerateInput,
+        config: dict[str, str | None],
+        model_meta: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        """Call the image API with retry for 429/5xx (audit fix).
+
+        Retries up to 2 times with exponential backoff (1s, 2s) on:
+        - HTTP 429 (rate limit)
+        - HTTP 5xx (server error)
+        Adapted from Hermes's error categorization + retry pattern.
+        """
+        import asyncio
+
+        max_retries = int(os.environ.get("NIA_IMAGE_MAX_RETRIES", "2"))
+        base_delay = 1.0
+
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                return await self._call_image_api(arguments, config, model_meta)
+            except httpx.HTTPStatusError as exc:
+                last_exc = exc
+                status = exc.response.status_code
+                should_retry = status == 429 or (500 <= status < 600)
+                if not should_retry or attempt >= max_retries:
+                    raise
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "Image API returned %d, retrying in %ss (attempt %d/%d)",
+                    status, delay, attempt + 1, max_retries,
+                )
+                await asyncio.sleep(delay)
+            except Exception:
+                raise  # non-HTTP errors don't retry
+
+        # Shouldn't reach here, but just in case.
+        if last_exc:
+            raise last_exc
+        return []
 
     async def _call_image_api(
         self,

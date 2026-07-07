@@ -155,6 +155,53 @@ def get_review_model() -> str | None:
     return os.environ.get("NIA_BACKGROUND_REVIEW_MODEL") or None
 
 
+def get_review_runtime() -> dict[str, str | None]:
+    """Resolve the full runtime for the review LLM.
+
+    Returns a dict with: provider, model, api_key, base_url.
+    If NIA_BACKGROUND_REVIEW_PROVIDER is set, resolves that provider's
+    credentials from the ProviderRegistry. Otherwise inherits the parent's
+    runtime (model only — the api_client is shared).
+
+    Audit fix: was model-name-string-only; now supports full provider routing.
+    """
+    provider_name = os.environ.get("NIA_BACKGROUND_REVIEW_PROVIDER", "").strip().lower()
+    model = os.environ.get("NIA_BACKGROUND_REVIEW_MODEL")
+
+    if not provider_name:
+        # Inherit parent's runtime — just override the model if set.
+        return {"provider": None, "model": model, "api_key": None, "base_url": None}
+
+    # Resolve a specific provider from the registry.
+    try:
+        from niaharness.providers.registry import ProviderRegistry
+
+        registry = ProviderRegistry()
+        registry._register_builtin_providers()
+        provider = registry.get_provider(provider_name)
+        if provider is None:
+            logger.warning("Background review provider %r not found", provider_name)
+            return {"provider": None, "model": model, "api_key": None, "base_url": None}
+
+        cfg = provider.config
+        try:
+            api_key = provider.resolve_api_key()
+        except Exception:
+            api_key = ""
+        base_url = provider.resolve_base_url()
+        resolved_model = model or cfg.auth.default_model
+
+        return {
+            "provider": provider_name,
+            "model": resolved_model,
+            "api_key": api_key,
+            "base_url": base_url,
+        }
+    except Exception as exc:
+        logger.debug("Background review runtime resolution failed: %s", exc)
+        return {"provider": None, "model": model, "api_key": None, "base_url": None}
+
+
 def get_review_interval() -> float:
     try:
         return float(os.environ.get("NIA_BACKGROUND_REVIEW_INTERVAL", "30"))
