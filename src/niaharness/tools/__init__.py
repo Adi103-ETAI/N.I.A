@@ -44,6 +44,7 @@ from niaharness.tools.team_create_tool import TeamCreateTool
 from niaharness.tools.team_delete_tool import TeamDeleteTool
 from niaharness.tools.todo_write_tool import TodoWriteTool
 from niaharness.tools.tool_search_tool import ToolSearchTool
+from niaharness.tools.vision_analyze_tool import VisionAnalyzeTool
 from niaharness.tools.web_fetch_tool import WebFetchTool
 from niaharness.tools.web_search_tool import WebSearchTool
 from niaharness.tools.nia_memory_tool import NiaMemoryTool
@@ -70,6 +71,7 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         SkillManageTool(),
         SessionSearchTool(),
         ToolSearchTool(),
+        VisionAnalyzeTool(),
         WebFetchTool(),
         WebSearchTool(),
         ConfigTool(),
