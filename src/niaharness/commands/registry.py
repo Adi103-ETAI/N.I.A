@@ -970,14 +970,199 @@ def create_default_command_registry() -> CommandRegistry:
         tokens = args.split(maxsplit=1)
         if not tokens or tokens[0] == "show":
             return CommandResult(message=f"Model: {settings.model}")
+        if tokens[0] == "list":
+            # List models from the active provider's API (or hardcoded defaults).
+            from niaharness.providers.registry import ProviderRegistry
+
+            registry = ProviderRegistry()
+            registry._register_builtin_providers()
+            registry._auto_detect_providers()
+
+            # Find the provider whose base_url or api_format matches current settings.
+            active_name = None
+            for name, prov in registry._providers.items():
+                cfg = prov.config
+                try:
+                    base = prov.resolve_base_url()
+                    if settings.base_url and base and base.rstrip("/") == (settings.base_url or "").rstrip("/"):
+                        active_name = name
+                        break
+                except Exception:
+                    pass
+            if not active_name:
+                # Fall back to api_format heuristic.
+                active_name = "anthropic" if settings.api_format == "anthropic" else "openai"
+
+            prov = registry._providers.get(active_name)
+            if not prov:
+                return CommandResult(message=f"Active provider not found: {active_name}")
+
+            import asyncio as _aio
+
+            try:
+                models = _aio.run(prov.fetch_models())
+            except Exception as exc:
+                models = prov.config.models
+
+            lines = [f"Models from {active_name} ({len(models)} total):", ""]
+            for m in models:
+                marker = " *" if m.id == settings.model else "  "
+                ctx_w = m.context_window
+                ctx_str = f"{ctx_w // 1000}K" if ctx_w >= 1000 else str(ctx_w)
+                lines.append(f"{marker} {m.id:<50} ({ctx_str} ctx)")
+            lines.append("")
+            lines.append(f"Active model: {settings.model}")
+            lines.append("Use: /model set <id>")
+            return CommandResult(message="\n".join(lines))
         if tokens[0] == "set" and len(tokens) == 2:
             settings.model = tokens[1]
             save_settings(settings)
             context.engine.set_model(tokens[1])
             if context.app_state is not None:
                 context.app_state.set(model=tokens[1])
-            return CommandResult(message=f"Model set to {tokens[1]}. Restart session to use it.")
-        return CommandResult(message="Usage: /model [show|set MODEL]")
+            return CommandResult(message=f"Model set to {tokens[1]}.")
+        return CommandResult(message="Usage: /model [show|list|set MODEL]")
+
+    async def _provider_handler(args: str, context: CommandContext) -> CommandResult:
+        """Provider management slash command.
+
+        Usage:
+            /provider              — show current provider + model
+            /provider list         — list all 20 providers with env vars
+            /provider <name>       — switch to a provider (resolves credentials)
+            /provider <name> <model> — switch to a provider + specific model
+            /provider models       — fetch models from the active provider
+        """
+        settings = load_settings()
+        tokens = args.split()
+
+        # No args → show current.
+        if not tokens:
+            base = settings.base_url or "(default)"
+            fmt = settings.api_format
+            key_set = "yes" if settings.resolve_api_key() else "no"
+            return CommandResult(
+                message=(
+                    f"Current provider config:\n"
+                    f"  Model:    {settings.model}\n"
+                    f"  Base URL: {base}\n"
+                    f"  Format:   {fmt}\n"
+                    f"  API key:  {key_set}\n"
+                    f"\n"
+                    f"Use /provider list to see all 20 providers.\n"
+                    f"Use /provider <name> [model] to switch."
+                )
+            )
+
+        # /provider list
+        if tokens[0] == "list":
+            from niaharness.providers.registry import ProviderRegistry
+
+            registry = ProviderRegistry()
+            registry._register_builtin_providers()
+            lines = [f"Available providers ({len(registry._providers)}):", ""]
+            for name in sorted(registry._providers.keys()):
+                cfg = registry._providers[name].config
+                env = cfg.auth.api_key_env_vars[0] if cfg.auth.api_key_env_vars else "(none)"
+                # Check if configured (env var set).
+                import os
+
+                configured = "✓" if any(os.environ.get(v) for v in cfg.auth.api_key_env_vars) else " "
+                lines.append(f"  [{configured}] {name:<15} {cfg.label:<22} key: {env}")
+            lines.append("")
+            lines.append("✓ = API key detected in environment.")
+            lines.append("Use /provider <name> [model] to switch.")
+            return CommandResult(message="\n".join(lines))
+
+        # /provider models — fetch from active provider
+        if tokens[0] == "models":
+            from niaharness.providers.registry import ProviderRegistry
+
+            registry = ProviderRegistry()
+            registry._register_builtin_providers()
+            registry._auto_detect_providers()
+            # Find active provider by matching base_url.
+            active_name = None
+            for name, prov in registry._providers.items():
+                try:
+                    base = prov.resolve_base_url()
+                    if settings.base_url and base and base.rstrip("/") == (settings.base_url or "").rstrip("/"):
+                        active_name = name
+                        break
+                except Exception:
+                    pass
+            if not active_name:
+                active_name = "anthropic" if settings.api_format == "anthropic" else "openai"
+            prov = registry._providers.get(active_name)
+            if not prov:
+                return CommandResult(message=f"Provider not found: {active_name}", )
+            import asyncio as _aio
+
+            try:
+                models = _aio.run(prov.fetch_models())
+            except Exception as exc:
+                models = prov.config.models
+            lines = [f"Models from {active_name} ({len(models)}):", ""]
+            for m in models:
+                marker = " *" if m.id == settings.model else "  "
+                lines.append(f"{marker} {m.id}")
+            lines.append("")
+            lines.append(f"Active: {settings.model}")
+            lines.append("Use: /model set <id>")
+            return CommandResult(message="\n".join(lines))
+
+        # /provider <name> [model] — switch
+        provider_name = tokens[0]
+        model_override = tokens[1] if len(tokens) >= 2 else None
+
+        from niaharness.providers.registry import ProviderRegistry
+
+        registry = ProviderRegistry()
+        registry._register_builtin_providers()
+        prov = registry.get_provider(provider_name)
+        if prov is None:
+            return CommandResult(
+                message=f"Unknown provider: {provider_name!r}. Use /provider list to see options."
+            )
+        cfg = prov.config
+        try:
+            api_key = prov.resolve_api_key()
+        except Exception:
+            api_key = ""
+        if not api_key:
+            env_hint = cfg.auth.api_key_env_vars[0] if cfg.auth.api_key_env_vars else "(none)"
+            return CommandResult(
+                message=(
+                    f"Provider {provider_name!r} requires an API key. "
+                    f"Set {env_hint} env var first, then restart the session."
+                )
+            )
+        base_url = prov.resolve_base_url()
+        model = model_override or cfg.auth.default_model
+        api_format = "anthropic" if provider_name == "anthropic" else "openai"
+
+        # Update settings.
+        settings.api_key = api_key
+        settings.base_url = base_url
+        settings.model = model
+        settings.api_format = api_format
+        save_settings(settings)
+
+        # Update engine + app state.
+        context.engine.set_model(model)
+        if context.app_state is not None:
+            context.app_state.set(model=model, provider=provider_name, base_url=base_url or "")
+
+        return CommandResult(
+            message=(
+                f"Switched to provider: {provider_name} ({cfg.label})\n"
+                f"  Model:    {model}\n"
+                f"  Base URL: {base_url}\n"
+                f"  Format:   {api_format}\n"
+                f"\n"
+                f"Settings saved. Use /model list to see available models."
+            )
+        )
 
     async def _theme_handler(args: str, context: CommandContext) -> CommandResult:
         settings = load_settings()
@@ -1299,7 +1484,8 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(SlashCommand("fast", "Show or update fast mode", _fast_handler))
     registry.register(SlashCommand("effort", "Show or update reasoning effort", _effort_handler))
     registry.register(SlashCommand("passes", "Show or update reasoning pass count", _passes_handler))
-    registry.register(SlashCommand("model", "Show or update the default model", _model_handler))
+    registry.register(SlashCommand("model", "Show, list, or set the active model", _model_handler))
+    registry.register(SlashCommand("provider", "Show, list, or switch LLM provider", _provider_handler))
     registry.register(SlashCommand("theme", "Show or update the theme", _theme_handler))
     registry.register(SlashCommand("output-style", "Show or update output style", _output_style_handler))
     registry.register(SlashCommand("keybindings", "Show resolved keybindings", _keybindings_handler))
