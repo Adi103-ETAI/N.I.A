@@ -426,6 +426,30 @@ def main(
         help="API format: 'anthropic' (default) or 'openai' (for DashScope, GitHub Models, etc.)",
         rich_help_panel="System & Context",
     ),
+    provider: str | None = typer.Option(
+        None,
+        "--provider",
+        "-P",
+        help=(
+            "LLM provider name (e.g. 'anthropic', 'openai', 'opencode', 'xai', "
+            "'perplexity', 'openrouter', 'groq', 'deepseek', 'ollama', etc.). "
+            "Routes through the ProviderRegistry (20 providers). "
+            "Use --list-providers to see all options."
+        ),
+        rich_help_panel="System & Context",
+    ),
+    list_providers: bool = typer.Option(
+        False,
+        "--list-providers",
+        help="List all available LLM providers and exit",
+        rich_help_panel="System & Context",
+    ),
+    list_models: bool = typer.Option(
+        False,
+        "--list-models",
+        help="Fetch and list all available models from configured providers, then exit",
+        rich_help_panel="System & Context",
+    ),
     # --- Advanced ---
     debug: bool = typer.Option(
         False,
@@ -458,6 +482,66 @@ def main(
         return
 
     import asyncio
+
+    # Handle --list-providers
+    if list_providers:
+        from niaharness.providers.registry import ProviderRegistry
+
+        registry = ProviderRegistry()
+        registry._register_builtin_providers()
+        print(f"\nAvailable LLM providers ({len(registry._providers)} total):\n")
+        for name, prov in sorted(registry._providers.items()):
+            cfg = prov.config
+            env_vars = cfg.auth.api_key_env_vars
+            env_hint = env_vars[0] if env_vars else "(no key needed)"
+            print(f"  {name:<15} {cfg.label:<22} key: {env_hint}")
+            print(f"                  base_url: {cfg.auth.default_base_url}")
+            print(f"                  default model: {cfg.auth.default_model}")
+            print()
+        raise typer.Exit(0)
+
+    # Handle --list-models — fetch models from all configured providers
+    if list_models:
+        import asyncio as _asyncio
+        from niaharness.providers.registry import ProviderRegistry
+
+        registry = ProviderRegistry()
+        registry._register_builtin_providers()
+        registry._auto_detect_providers()
+
+        configured = [
+            name for name, state in registry._states.items()
+            if state.configured or name == "ollama"
+        ]
+        if not configured:
+            print(
+                "No providers configured. Set an API key env var "
+                "(e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENCODE_API_KEY) "
+                "and try again.",
+                file=sys.stderr,
+            )
+            raise typer.Exit(1)
+
+        print(f"\nFetching models from {len(configured)} configured provider(s)...\n")
+        all_models = _asyncio.run(registry.fetch_all_models())
+
+        total = 0
+        for name in sorted(all_models.keys()):
+            models = all_models[name]
+            if not models:
+                continue
+            print(f"=== {name} ({len(models)} models) ===")
+            for m in models:
+                marker = " *" if m.get("active") else "  "
+                ctx_window = m.get("context_window", 0)
+                ctx_str = f"{ctx_window // 1000}K" if ctx_window >= 1000 else str(ctx_window)
+                print(f"{marker} {m['id']:<50} ({ctx_str} ctx)")
+            print()
+            total += len(models)
+
+        print(f"Total: {total} models from {len(configured)} provider(s).")
+        print("\nUse --provider <name> --model <id> to select one.")
+        raise typer.Exit(0)
 
     if dangerously_skip_permissions:
         permission_mode = "full_auto"
@@ -527,32 +611,108 @@ def main(
         if not prompt:
             print("Error: -p/--print requires a prompt value, e.g. -p 'your prompt'", file=sys.stderr)
             raise typer.Exit(1)
+
+        # If --provider was given, resolve credentials from the ProviderRegistry.
+        resolved_api_key = api_key
+        resolved_base_url = base_url
+        resolved_model = model
+        resolved_api_format = api_format
+        if provider:
+            from niaharness.providers.registry import ProviderRegistry as _PR
+
+            _reg = _PR()
+            _reg._register_builtin_providers()
+            _prov = _reg.get_provider(provider)
+            if _prov is None:
+                print(
+                    f"Unknown provider: {provider!r}. "
+                    f"Use --list-providers to see options.",
+                    file=sys.stderr,
+                )
+                raise typer.Exit(1)
+            _cfg = _prov.config
+            try:
+                resolved_api_key = _prov.resolve_api_key(api_key)
+            except Exception:
+                resolved_api_key = api_key
+            resolved_base_url = base_url or _prov.resolve_base_url()
+            resolved_model = model or _cfg.auth.default_model
+            # All providers except Anthropic use the OpenAI-compatible format.
+            resolved_api_format = api_format or (
+                "anthropic" if provider == "anthropic" else "openai"
+            )
+            if not resolved_api_key:
+                env_hint = _cfg.auth.api_key_env_vars[0] if _cfg.auth.api_key_env_vars else "(none)"
+                print(
+                    f"Provider {provider!r} requires an API key. Set {env_hint} env var "
+                    f"or use --api-key.",
+                    file=sys.stderr,
+                )
+                raise typer.Exit(1)
+
         asyncio.run(
             run_print_mode(
                 prompt=prompt,
                 output_format=output_format or "text",
                 cwd=cwd,
-                model=model,
-                base_url=base_url,
+                model=resolved_model,
+                base_url=resolved_base_url,
                 system_prompt=system_prompt,
                 append_system_prompt=append_system_prompt,
-                api_key=api_key,
-                api_format=api_format,
+                api_key=resolved_api_key,
+                api_format=resolved_api_format,
                 permission_mode=permission_mode,
                 max_turns=max_turns,
             )
         )
         return
 
+    # Interactive REPL
+    resolved_api_key = api_key
+    resolved_base_url = base_url
+    resolved_model = model
+    resolved_api_format = api_format
+    if provider:
+        from niaharness.providers.registry import ProviderRegistry as _PR
+
+        _reg = _PR()
+        _reg._register_builtin_providers()
+        _prov = _reg.get_provider(provider)
+        if _prov is None:
+            print(
+                f"Unknown provider: {provider!r}. "
+                f"Use --list-providers to see options.",
+                file=sys.stderr,
+            )
+            raise typer.Exit(1)
+        _cfg = _prov.config
+        try:
+            resolved_api_key = _prov.resolve_api_key(api_key)
+        except Exception:
+            resolved_api_key = api_key
+        resolved_base_url = base_url or _prov.resolve_base_url()
+        resolved_model = model or _cfg.auth.default_model
+        resolved_api_format = api_format or (
+            "anthropic" if provider == "anthropic" else "openai"
+        )
+        if not resolved_api_key:
+            env_hint = _cfg.auth.api_key_env_vars[0] if _cfg.auth.api_key_env_vars else "(none)"
+            print(
+                f"Provider {provider!r} requires an API key. Set {env_hint} env var "
+                f"or use --api-key.",
+                file=sys.stderr,
+            )
+            raise typer.Exit(1)
+
     asyncio.run(
         run_repl(
             prompt=None,
             cwd=cwd,
-            model=model,
+            model=resolved_model,
             backend_only=backend_only,
-            base_url=base_url,
+            base_url=resolved_base_url,
             system_prompt=system_prompt,
-            api_key=api_key,
-            api_format=api_format,
+            api_key=resolved_api_key,
+            api_format=resolved_api_format,
         )
     )

@@ -187,13 +187,63 @@ class LLMProvider(ABC):
         return self.config.models
 
     async def fetch_models(self) -> list[ProviderModel]:
-        """Dynamically fetch models from the provider's API.
+        """Dynamically fetch models from the provider's ``/v1/models`` endpoint.
 
-        Override this method in subclasses to fetch models from the API.
-        Falls back to hardcoded models if API call fails.
+        Works for any OpenAI-compatible provider (OpenAI, OpenRouter, Groq,
+        Together, DeepSeek, OpenCode Zen, xAI, Perplexity, DeepInfra,
+        HuggingFace, etc.).  Skips non-chat models (embeddings, moderation,
+        TTS, DALL-E).  Falls back to hardcoded ``config.models`` if the API
+        call fails or no API key is configured.
+
+        Providers with non-OpenAI-compatible APIs (Anthropic, Bedrock,
+        Vertex, Azure) should override this method.
 
         Returns:
             List of available models.
         """
-        # Default: return hardcoded models
+        api_key = self.resolve_api_key()
+        if not api_key:
+            return self.config.models
+
+        try:
+            import httpx
+
+            base_url = self.resolve_base_url()
+            client = httpx.AsyncClient(
+                base_url=base_url.rstrip("/") + "/",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10.0,
+            )
+            response = await client.get("/models")
+            response.raise_for_status()
+            data = response.json()
+
+            models = []
+            # Skip non-chat model types.
+            skip_keywords = [
+                "embedding", "embed", "moderation", "whisper",
+                "tts", "dall-e", "audio", "transcribe",
+            ]
+            for item in data.get("data", []):
+                model_id = item.get("id", "")
+                if not model_id:
+                    continue
+                if any(s in model_id.lower() for s in skip_keywords):
+                    continue
+                models.append(
+                    ProviderModel(
+                        id=model_id,
+                        label=model_id.split("/")[-1],
+                        context_window=128000,
+                        max_output_tokens=4096,
+                    )
+                )
+
+            if models:
+                self._fetched_models = models
+                return models
+
+        except Exception:
+            pass
+
         return self.config.models

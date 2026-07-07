@@ -546,3 +546,282 @@ class FireworksProvider(LLMProvider):
             },
             timeout=60.0,
         )
+
+
+class OpenCodeProvider(LLMProvider):
+    """OpenCode Zen — curated AI model gateway by the OpenCode team.
+
+    OpenAI-compatible API. Get an API key at https://opencode.ai/zen.
+    Models use the 'opencode/' prefix (e.g. opencode/gpt-4o).
+    """
+
+    @property
+    def config(self) -> ProviderConfig:
+        return ProviderConfig(
+            name="opencode",
+            label="OpenCode Zen",
+            category=ProviderCategory.HOSTED,
+            auth=ProviderAuthConfig(
+                mode=AuthMode.API_KEY,
+                api_key_env_vars=["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
+                base_url_env_vars=["OPENCODE_BASE_URL"],
+                model_env_vars=["OPENCODE_MODEL"],
+                default_base_url="https://opencode.ai/zen/v1",
+                default_model="opencode/gpt-4o",
+            ),
+            models=[
+                ProviderModel(
+                    id="opencode/gpt-4o",
+                    label="GPT-4o (via Zen)",
+                    context_window=128000,
+                    max_output_tokens=16384,
+                ),
+                ProviderModel(
+                    id="opencode/claude-sonnet-4",
+                    label="Claude Sonnet 4 (via Zen)",
+                    context_window=200000,
+                    max_output_tokens=8192,
+                ),
+            ],
+        )
+
+    def get_client(self, api_key: str | None = None, **kwargs: Any) -> Any:
+        import httpx
+
+        resolved_key = self.resolve_api_key(api_key)
+        base_url = self.resolve_base_url(kwargs.get("base_url"))
+
+        return httpx.AsyncClient(
+            base_url=base_url.rstrip("/") + "/",
+            headers={
+                "Authorization": f"Bearer {resolved_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=60.0,
+        )
+
+
+class XAIProvider(LLMProvider):
+    """xAI — Grok models (Grok-3, Grok-4, etc.).
+
+    OpenAI-compatible API. Get an API key at https://x.ai.
+    """
+
+    @property
+    def config(self) -> ProviderConfig:
+        return ProviderConfig(
+            name="xai",
+            label="xAI (Grok)",
+            category=ProviderCategory.HOSTED,
+            auth=ProviderAuthConfig(
+                mode=AuthMode.API_KEY,
+                api_key_env_vars=["XAI_API_KEY", "GROK_API_KEY"],
+                base_url_env_vars=["XAI_BASE_URL"],
+                model_env_vars=["XAI_MODEL"],
+                default_base_url="https://api.x.ai/v1",
+                default_model="grok-4",
+            ),
+            models=[
+                ProviderModel(
+                    id="grok-4",
+                    label="Grok 4",
+                    context_window=131072,
+                    max_output_tokens=8192,
+                ),
+                ProviderModel(
+                    id="grok-3",
+                    label="Grok 3",
+                    context_window=131072,
+                    max_output_tokens=8192,
+                ),
+                ProviderModel(
+                    id="grok-3-mini",
+                    label="Grok 3 Mini",
+                    context_window=131072,
+                    max_output_tokens=8192,
+                ),
+            ],
+        )
+
+    def get_client(self, api_key: str | None = None, **kwargs: Any) -> Any:
+        import httpx
+
+        resolved_key = self.resolve_api_key(api_key)
+        base_url = self.resolve_base_url(kwargs.get("base_url"))
+
+        return httpx.AsyncClient(
+            base_url=base_url.rstrip("/") + "/",
+            headers={
+                "Authorization": f"Bearer {resolved_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=60.0,
+        )
+
+
+class PerplexityProvider(LLMProvider):
+    """Perplexity — online models with built-in web search.
+
+    OpenAI-compatible API. Get an API key at https://perplexity.ai.
+    """
+
+    @property
+    def config(self) -> ProviderConfig:
+        return ProviderConfig(
+            name="perplexity",
+            label="Perplexity",
+            category=ProviderCategory.HOSTED,
+            auth=ProviderAuthConfig(
+                mode=AuthMode.API_KEY,
+                api_key_env_vars=["PERPLEXITY_API_KEY"],
+                base_url_env_vars=["PERPLEXITY_BASE_URL"],
+                model_env_vars=["PERPLEXITY_MODEL"],
+                default_base_url="https://api.perplexity.ai",
+                default_model="sonar-pro",
+            ),
+            models=[
+                ProviderModel(
+                    id="sonar-pro",
+                    label="Sonar Pro",
+                    context_window=200000,
+                    max_output_tokens=8192,
+                ),
+                ProviderModel(
+                    id="sonar",
+                    label="Sonar",
+                    context_window=127072,
+                    max_output_tokens=8192,
+                ),
+                ProviderModel(
+                    id="sonar-reasoning",
+                    label="Sonar Reasoning",
+                    context_window=127072,
+                    max_output_tokens=8192,
+                ),
+            ],
+        )
+
+    def get_client(self, api_key: str | None = None, **kwargs: Any) -> Any:
+        import httpx
+
+        resolved_key = self.resolve_api_key(api_key)
+        base_url = self.resolve_base_url(kwargs.get("base_url"))
+
+        return httpx.AsyncClient(
+            base_url=base_url.rstrip("/") + "/",
+            headers={
+                "Authorization": f"Bearer {resolved_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=60.0,
+        )
+
+
+class DeepInfraProvider(LLMProvider):
+    """DeepInfra — fast inference for open-source models.
+
+    OpenAI-compatible API. Get an API key at https://deepinfra.com.
+    """
+
+    @property
+    def config(self) -> ProviderConfig:
+        return ProviderConfig(
+            name="deepinfra",
+            label="DeepInfra",
+            category=ProviderCategory.HOSTED,
+            auth=ProviderAuthConfig(
+                mode=AuthMode.API_KEY,
+                api_key_env_vars=["DEEPINFRA_API_KEY"],
+                base_url_env_vars=["DEEPINFRA_BASE_URL"],
+                model_env_vars=["DEEPINFRA_MODEL"],
+                default_base_url="https://api.deepinfra.com/v1/openai",
+                default_model="meta-llama/Llama-3.3-70B-Instruct",
+            ),
+            models=[
+                ProviderModel(
+                    id="meta-llama/Llama-3.3-70B-Instruct",
+                    label="Llama 3.3 70B",
+                    context_window=131072,
+                    max_output_tokens=8192,
+                ),
+                ProviderModel(
+                    id="meta-llama/Meta-Llama-3.1-405B-Instruct",
+                    label="Llama 3.1 405B",
+                    context_window=131072,
+                    max_output_tokens=8192,
+                ),
+                ProviderModel(
+                    id="deepseek-ai/DeepSeek-R1",
+                    label="DeepSeek R1",
+                    context_window=131072,
+                    max_output_tokens=32768,
+                ),
+            ],
+        )
+
+    def get_client(self, api_key: str | None = None, **kwargs: Any) -> Any:
+        import httpx
+
+        resolved_key = self.resolve_api_key(api_key)
+        base_url = self.resolve_base_url(kwargs.get("base_url"))
+
+        return httpx.AsyncClient(
+            base_url=base_url.rstrip("/") + "/",
+            headers={
+                "Authorization": f"Bearer {resolved_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=60.0,
+        )
+
+
+class HuggingFaceProvider(LLMProvider):
+    """Hugging Face Inference API — 200K+ open-source models.
+
+    OpenAI-compatible API. Get an API key at https://huggingface.co/settings/tokens.
+    """
+
+    @property
+    def config(self) -> ProviderConfig:
+        return ProviderConfig(
+            name="huggingface",
+            label="Hugging Face",
+            category=ProviderCategory.HOSTED,
+            auth=ProviderAuthConfig(
+                mode=AuthMode.API_KEY,
+                api_key_env_vars=["HF_API_KEY", "HUGGINGFACE_API_KEY"],
+                base_url_env_vars=["HF_BASE_URL"],
+                model_env_vars=["HF_MODEL"],
+                default_base_url="https://api-inference.huggingface.co/v1",
+                default_model="meta-llama/Llama-3.3-70B-Instruct",
+            ),
+            models=[
+                ProviderModel(
+                    id="meta-llama/Llama-3.3-70B-Instruct",
+                    label="Llama 3.3 70B",
+                    context_window=131072,
+                    max_output_tokens=8192,
+                ),
+                ProviderModel(
+                    id="meta-llama/Llama-3.1-8B-Instruct",
+                    label="Llama 3.1 8B",
+                    context_window=131072,
+                    max_output_tokens=8192,
+                ),
+            ],
+        )
+
+    def get_client(self, api_key: str | None = None, **kwargs: Any) -> Any:
+        import httpx
+
+        resolved_key = self.resolve_api_key(api_key)
+        base_url = self.resolve_base_url(kwargs.get("base_url"))
+
+        return httpx.AsyncClient(
+            base_url=base_url.rstrip("/") + "/",
+            headers={
+                "Authorization": f"Bearer {resolved_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=60.0,
+        )

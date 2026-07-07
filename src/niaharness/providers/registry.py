@@ -107,6 +107,11 @@ class ProviderRegistry:
             NVIDIAProvider,
             CerebrasProvider,
             FireworksProvider,
+            OpenCodeProvider,
+            XAIProvider,
+            PerplexityProvider,
+            DeepInfraProvider,
+            HuggingFaceProvider,
         )
         from niaharness.providers.bedrock import BedrockProvider
         from niaharness.providers.vertex import VertexProvider
@@ -125,6 +130,11 @@ class ProviderRegistry:
             "nvidia": NVIDIAProvider(),
             "cerebras": CerebrasProvider(),
             "fireworks": FireworksProvider(),
+            "opencode": OpenCodeProvider(),
+            "xai": XAIProvider(),
+            "perplexity": PerplexityProvider(),
+            "deepinfra": DeepInfraProvider(),
+            "huggingface": HuggingFaceProvider(),
             "bedrock": BedrockProvider(),
             "vertex": VertexProvider(),
             "azure": AzureOpenAIProvider(),
@@ -366,7 +376,7 @@ class ProviderRegistry:
         return []
 
     def get_all_models(self) -> list[dict[str, Any]]:
-        """Get all models from all configured providers."""
+        """Get all models from all configured providers (static — uses cached/hardcoded models)."""
         models = []
         for name, provider in self._providers.items():
             state = self._states.get(name, ProviderState(name=name))
@@ -381,6 +391,40 @@ class ProviderRegistry:
                         "active": (name == self._active_provider_id and model.id == self._active_model),
                     })
         return models
+
+    async def fetch_all_models(self) -> dict[str, list[dict[str, Any]]]:
+        """Fetch models from all configured providers concurrently.
+
+        Returns a dict keyed by provider name, each value a list of model dicts.
+        Providers that fail to fetch fall back to their hardcoded models.
+        """
+        import asyncio
+
+        async def _fetch_one(name: str, provider: Any) -> tuple[str, list[dict[str, Any]]]:
+            state = self._states.get(name, ProviderState(name=name))
+            if not (state.configured or name == "ollama"):
+                return name, []
+            try:
+                models = await provider.fetch_models()
+                return name, [
+                    {
+                        "id": m.id,
+                        "label": m.label,
+                        "provider": name,
+                        "context_window": m.context_window,
+                        "max_output": m.max_output_tokens,
+                        "active": (name == self._active_provider_id and m.id == self._active_model),
+                    }
+                    for m in models
+                ]
+            except Exception as exc:
+                logger.debug("Failed to fetch models from %s: %s", name, exc)
+                return name, []
+
+        results = await asyncio.gather(
+            *[_fetch_one(name, prov) for name, prov in self._providers.items()]
+        )
+        return dict(results)
 
     def search_providers(self, query: str) -> list[dict[str, Any]]:
         """Search providers by name."""

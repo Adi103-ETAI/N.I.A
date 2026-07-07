@@ -76,20 +76,59 @@ def main(
         help="Initial prompt to send",
     ),
 ) -> None:
-    """Start N.I.A interactive session."""
+    """Start N.I.A interactive session.
+
+    .. deprecated::
+        This entry point is deprecated. Use ``python -m niaharness`` instead,
+        which now routes through the unified ProviderRegistry (20 providers)
+        and includes the NIA personality layer (SOUL.md, Jarvis tone).
+
+        ``python -m niaharness --provider <name> --model <id>``
+    """
     if ctx.invoked_subcommand is not None:
         return
 
-    if verbose:
-        import logging
-        logging.basicConfig(level=logging.INFO)
+    import sys
+    import warnings
 
-    if backend_only:
-        asyncio.run(_run_backend(cwd, provider, model, api_key, base_url))
-    elif text_mode:
-        asyncio.run(_run_interactive(cwd))
-    else:
-        asyncio.run(_run_tui(cwd, provider, model, api_key, base_url, prompt))
+    warnings.warn(
+        "`python -m agents.nia` is deprecated. Use `python -m niaharness` instead. "
+        "The niaharness CLI now routes through the ProviderRegistry (20 providers) "
+        "and includes the NIA personality layer. "
+        "Example: python -m niaharness --provider opencode --model opencode/gpt-4o",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    print(
+        "⚠ `python -m agents.nia` is deprecated.\n"
+        "  Use `python -m niaharness` instead — it now routes through the\n"
+        "  ProviderRegistry (20 providers) and includes the NIA personality layer.\n"
+        "  Try: python -m niaharness --list-providers\n"
+        "  Or:  python -m niaharness --provider opencode --model opencode/gpt-4o\n",
+        file=sys.stderr,
+    )
+
+    # Delegate to niaharness, forwarding equivalent flags.
+    nia_args = ["python", "-m", "niaharness"]
+    if provider:
+        nia_args += ["--provider", provider]
+    if model:
+        nia_args += ["--model", model]
+    if api_key:
+        nia_args += ["--api-key", api_key]
+    if base_url:
+        nia_args += ["--base-url", base_url]
+    if cwd:
+        nia_args += ["--cwd", cwd]
+    if verbose:
+        nia_args += ["--debug"]
+    if prompt:
+        nia_args += ["--print", prompt]
+
+    import subprocess
+    result = subprocess.run(nia_args[1:])  # skip "python"
+    sys.exit(result.returncode)
 
 
 @app.command()
