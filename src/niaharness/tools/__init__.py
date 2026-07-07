@@ -27,7 +27,10 @@ from niaharness.tools.list_mcp_resources_tool import ListMcpResourcesTool
 from niaharness.tools.lsp_tool import LspTool
 from niaharness.tools.mcp_auth_tool import McpAuthTool
 from niaharness.tools.mcp_tool import McpToolAdapter
+from niaharness.tools.memory_tool import MemoryBatchedTool
 from niaharness.tools.notebook_edit_tool import NotebookEditTool
+from niaharness.tools.process_tool import ProcessTool
+from niaharness.tools.cronjob_tool import CronjobTool
 from niaharness.tools.read_mcp_resource_tool import ReadMcpResourceTool
 from niaharness.tools.remote_trigger_tool import RemoteTriggerTool
 from niaharness.tools.run_code_tool import RunCodeTool
@@ -91,6 +94,7 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         CronListTool(),
         CronDeleteTool(),
         CronToggleTool(),
+        CronjobTool(),
         DelegateTaskTool(),
         RemoteTriggerTool(),
         TaskCreateTool(),
@@ -99,11 +103,13 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         TaskStopTool(),
         TaskOutputTool(),
         TaskUpdateTool(),
+        ProcessTool(),
         AgentTool(),
         SendMessageTool(),
         TeamCreateTool(),
         TeamDeleteTool(),
         NiaMemoryTool(),
+        MemoryBatchedTool(),
         NiaContextTool(),
         NiaVoiceTool(),
         NiaSessionTool(),

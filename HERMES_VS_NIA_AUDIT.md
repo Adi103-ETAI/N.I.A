@@ -501,21 +501,21 @@ which audit gap it closes.
 | 2 | **Add session search** — port Hermes's FTS5-backed `session_search` design. NIA already persists sessions as JSON; add a SQLite index + search tool. | #4 | 1 week | ✅ **Done (Task 3)** — `session_search` tool + auto-indexing |
 | 3 | **Add `skill_manage` tool** — let the agent create/update/delete skills. Pairs with #1 (the learning loop needs this to write skills). | #10 | 3 days | ✅ **Done (Task 2)** — 6 ops (create/update/edit/delete/list/info) |
 | 4 | **Add SOUL.md identity file** — load `~/.nia/SOUL.md` as the first thing in the system prompt. Keep the Personality class as the default if SOUL.md is empty. | #9 | 2 days | ✅ **Done (Task 1)** — `/soul` command + auto-seeding |
-| 5 | **Add skill slash commands** — scan `~/.nia/skills/` and expose each as `/<skill-name>`. Inject as user message (preserves prompt cache). | #11 | 3 days | ⬜ Open |
+| 5 | **Add skill slash commands** — scan `~/.nia/skills/` and expose each as `/<skill-name>`. Inject as user message (preserves prompt cache). | #11 | 3 days | ✅ **Done** — dynamic skill command resolution in CommandRegistry.lookup()
 
 ### P1 — Important capability additions (1–2 weeks each)
 
 | # | Recommendation | Closes gap | Effort | Status |
 |---|---|---|---|---|
 | 6 | **Add `vision_analyze` tool** — load images into the conversation for multimodal models. | #17 | 3 days | ✅ **Done (Task 4)** — URL + local file support, 3-tier config |
-| 7 | **Add `image_generate` tool** — text-to-image via FAL/DALL-E/Stable Diffusion. | #18 | 1 week | ⬜ Open |
-| 8 | **Add `delegate_task` tool** — spawn isolated subagents with own context + tool whitelist. Replace NIA's `agent` + `team_create` with a single delegator. | #5 | 2 weeks | ⬜ Open |
-| 9 | **Add cron platform delivery** — extend NIA's cron to deliver results to email/webhook (start simple; add Telegram/Discord later). | #7 | 1 week | ⬜ Open |
-| 10 | **Add `computer_use` tool** — PyAutoGUI-based desktop automation (click/type/scroll/screenshot). | #16 | 1 week | ⬜ Open |
-| 11 | **Add `process` multi-op tool** — collapse NIA's 6 task tools into one with 8 operations (list/poll/log/wait/kill/write/submit/close). | #21 | 3 days | ⬜ Open |
-| 12 | **Add `cronjob` multi-op tool** — collapse NIA's 4 cron tools into one with 7 operations. | #22 | 2 days | ⬜ Open |
-| 13 | **Add `memory` batched-ops tool** — replace `nia_memory` with a tool that accepts an `operations` array. | #23 | 3 days | ⬜ Open |
-| 14 | **Extend background review to write skills** — Task 5 covers memory only; add skill creation via `skill_manage` tool-calling in the review thread. | #1 (skill half) | 1 week | ⬜ Open (follow-up to Task 5) |
+| 7 | **Add `image_generate` tool** — text-to-image via FAL/DALL-E/Stable Diffusion. | #18 | 1 week | ✅ **Done** — model catalog + payload filtering + retry + error types
+| 8 | **Add `delegate_task` tool** — spawn isolated subagents with own context + tool whitelist. Replace NIA's `agent` + `team_create` with a single delegator. | #5 | 2 weeks | ✅ **Done** — api_client plumbing + approvals + timeouts + summary budget + 25-tool blocklist
+| 9 | **Add cron platform delivery** — extend NIA's cron to deliver results to email/webhook (start simple; add Telegram/Discord later). | #7 | 1 week | ✅ **Done** — email + webhook (concurrent) + secret redaction + file locking + retention + url_env
+| 10 | **Add `computer_use` tool** — cua-driver backend (cross-platform, background-safe). | #16 | 1 week | ✅ **Done** — cua-driver only, mirrors Hermes exactly (no PyAutoGUI fallback)
+| 11 | **Add `process` multi-op tool** — collapse NIA's 6 task tools into one with 8 operations (list/poll/log/wait/kill/write/submit/close). | #21 | 3 days | ✅ **Done** — 8 ops: list/create/get/output/wait/stop/update/close
+| 12 | **Add `cronjob` multi-op tool** — collapse NIA's 4 cron tools into one with 7 operations. | #22 | 2 days | ✅ **Done** — 7 ops: create/list/update/pause/resume/remove/run
+| 13 | **Add `memory` batched-ops tool** — replace `nia_memory` with a tool that accepts an `operations` array. | #23 | 3 days | ✅ **Done** — batched operations: add/update/remove/search/list/get
+| 14 | **Extend background review to write skills** — Task 5 covers memory only; add skill creation via `skill_manage` tool-calling in the review thread. | #1 (skill half) | 1 week | ✅ **Done** — review has skill_manage + nia_memory tools, COMBINED_REVIEW_PROMPT, agentic loop
 
 ### P2 — Skill catalog expansion (ongoing)
 

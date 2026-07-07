@@ -102,14 +102,80 @@ class CommandRegistry:
         self._commands[command.name] = command
 
     def lookup(self, raw_input: str) -> tuple[SlashCommand, str] | None:
-        """Parse a slash command and return its handler plus raw args."""
+        """Parse a slash command and return its handler plus raw args.
+
+        If the command isn't a registered slash command, checks whether it
+        matches a skill name (P0 #5: skill slash commands). Skill commands
+        are resolved dynamically by scanning the skills directory.
+        """
         if not raw_input.startswith("/"):
             return None
         name, _, args = raw_input[1:].partition(" ")
         command = self._commands.get(name)
-        if command is None:
+        if command is not None:
+            return command, args.strip()
+
+        # P0 #5: Check if this is a skill slash command (/<skill-name>).
+        skill_result = self._lookup_skill_command(name, args.strip())
+        if skill_result is not None:
+            return skill_result
+
+        return None
+
+    def _lookup_skill_command(self, name: str, args: str) -> tuple[SlashCommand, str] | None:
+        """Check if ``name`` matches a skill and return a synthetic command.
+
+        Scans the user skills directory + bundled skills for a matching name.
+        If found, returns a SlashCommand whose handler loads the skill content
+        and injects it as a user message (preserves prompt cache).
+
+        Adapted from Hermes Agent's agent/skill_commands.py.
+        """
+        # Normalize: hyphens and underscores are interchangeable.
+        normalized = name.lower().replace("_", "-")
+
+        # Scan skills.
+        try:
+            from niaharness.skills import load_skill_registry
+
+            registry = load_skill_registry()
+            # Try exact, normalized, and title-case matches.
+            skill = (
+                registry.get(normalized)
+                or registry.get(name)
+                or registry.get(name.title())
+            )
+            if skill is None:
+                return None
+
+            # Build a synthetic slash command that injects the skill content.
+            async def _skill_handler(_args: str, context: CommandContext) -> CommandResult:
+                activation_note = (
+                    f'[IMPORTANT: The user has invoked the "{skill.name}" skill, '
+                    "indicating they want you to follow its instructions. "
+                    "The full skill content is loaded below.]"
+                )
+                user_instruction = f"\n\nUser instruction: {_args}" if _args else ""
+                # Inject as a user message (preserves prompt cache).
+                from niaharness.engine.messages import ConversationMessage, TextBlock
+
+                context.engine._messages.append(
+                    ConversationMessage(
+                        role="user",
+                        content=[TextBlock(text=f"{activation_note}\n\n{skill.content}{user_instruction}")],
+                    )
+                )
+                return CommandResult(
+                    message=f"Loaded skill '{skill.name}'. The skill instructions are now in the conversation.",
+                )
+
+            return SlashCommand(
+                name=normalized,
+                description=f"Invoke the {skill.name} skill",
+                handler=_skill_handler,
+            ), args
+        except Exception:
             return None
-        return command, args.strip()
 
     def help_text(self) -> str:
         """Return a formatted summary of all registered commands."""
