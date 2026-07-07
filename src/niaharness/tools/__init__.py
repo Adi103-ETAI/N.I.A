@@ -30,6 +30,7 @@ from niaharness.tools.remote_trigger_tool import RemoteTriggerTool
 from niaharness.tools.run_code_tool import RunCodeTool
 from niaharness.tools.send_message_tool import SendMessageTool
 from niaharness.tools.skill_tool import SkillTool
+from niaharness.tools.skill_manage_tool import SkillManageTool
 from niaharness.tools.sleep_tool import SleepTool
 from niaharness.tools.speak_tool import SpeakTool
 from niaharness.tools.task_create_tool import TaskCreateTool
@@ -65,6 +66,7 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         GlobTool(),
         GrepTool(),
         SkillTool(),
+        SkillManageTool(),
         ToolSearchTool(),
         WebFetchTool(),
         WebSearchTool(),
