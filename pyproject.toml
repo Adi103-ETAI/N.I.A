@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "niaharness"
 version = "0.1.0"
-description = "Open-source Python port of Claude Code - an AI-powered CLI coding assistant"
+description = "N.I.A — Neural Intelligence Assistant. An AI partner inspired by J.A.R.V.I.S."
 license = "MIT"
 requires-python = ">=3.10"
 authors = [

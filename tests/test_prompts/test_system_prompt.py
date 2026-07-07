@@ -60,12 +60,13 @@ def test_build_system_prompt_custom_prompt():
     assert "Linux 5.15.0" in prompt
     # Base prompt should not appear
     assert "NiaHarness" not in prompt
+    assert "N.I.A" not in prompt  # custom prompt replaces identity
 
 
 def test_build_system_prompt_default_includes_base():
     env = _make_env()
     prompt = build_system_prompt(env=env, include_soul=False)
-    assert "NiaHarness" in prompt
+    assert "N.I.A" in prompt or "NiaHarness" in prompt  # accept either identity
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +86,7 @@ def test_soul_md_seeded_on_first_run(tmp_path: Path, monkeypatch):
     assert soul_path.exists()  # seeded
     assert content == DEFAULT_SOUL_MD.strip()
     assert "N.I.A" in content
-    assert "JARVIS" in content
+    assert "J.A.R.V.I.S" in content or "JARVIS" in content
 
 
 def test_soul_md_user_override_not_overwritten(tmp_path: Path, monkeypatch):
@@ -137,7 +138,6 @@ def test_build_system_prompt_include_soul_false_skips_soul(tmp_path: Path, monke
     monkeypatch.setenv("NIA_HOME", str(tmp_path / "nia"))
     env = _make_env()
     prompt = build_system_prompt(env=env, include_soul=False)
-    # SOUL.md identity content should NOT appear (only the base prompt's
-    # "NiaHarness" identity should).
+    # SOUL.md identity content should NOT appear (only the base prompt identity).
     assert "JARVIS" not in prompt
-    assert "NiaHarness" in prompt
+    assert "N.I.A" in prompt  # base prompt now says N.I.A

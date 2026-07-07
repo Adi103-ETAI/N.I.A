@@ -233,7 +233,7 @@ def create_default_command_registry() -> CommandRegistry:
             version = importlib.metadata.version("niaharness")
         except importlib.metadata.PackageNotFoundError:
             version = "0.1.0"
-        return CommandResult(message=f"NiaHarness {version}")
+        return CommandResult(message=f"N.I.A {version}")
 
     async def _context_handler(_: str, context: CommandContext) -> CommandResult:
         settings = load_settings()

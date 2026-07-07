@@ -226,11 +226,11 @@ async def test_version_context_and_share_commands(tmp_path: Path, monkeypatch):
 
     version_command, version_args = registry.lookup("/version")
     version_result = await version_command.handler(version_args, context)
-    assert "NiaHarness" in version_result.message
+    assert "N.I.A" in version_result.message
 
     context_command, context_args = registry.lookup("/context")
     context_result = await context_command.handler(context_args, context)
-    assert "NiaHarness" in context_result.message or "interactive agent" in context_result.message
+    assert "N.I.A" in context_result.message or "interactive agent" in context_result.message
 
     share_command, share_args = registry.lookup("/share")
     share_result = await share_command.handler(share_args, context)
