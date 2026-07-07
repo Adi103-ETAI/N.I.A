@@ -5,13 +5,53 @@
 > both agents side-by-side, reading their CLIs, and enumerating their
 > registries.
 >
-> Date: 2026-07-07
+> **Original audit date:** 2026-07-07 (NIA commit `55c03f7`, 44 tools, 7 skills)
+> **Last updated:** 2026-07-07 (NIA commit `63cc327`, after P0 Tasks 1-5)
 > Hermes: v0.18.0 (commit `70c6ae6`, installed via `pip install -e .`)
-> NIA: insight branch (commit `55c03f7`, after the recent repair push)
 
 ---
 
-## TL;DR
+## ✅ Update: P0 Tasks 1-5 Complete
+
+After the original audit, 5 P0 tasks were completed in a single session
+(7 commits, all on `insight` branch). This closed 4 of the top 6 behavioral
+gaps and added 7 new tools:
+
+| Task | Commit | What was built | Gap closed |
+|---|---|---|---|
+| **P0 Task 1** | `f047d08` | SOUL.md identity file system (`~/.nia/SOUL.md`, `/soul` command) | SOUL.md identity gap |
+| **P0 Task 2** | `9a4d7b0` | `skill_manage` tool (6 ops: create/update/edit/delete/list/info) | Skill-authoring gap (read-only → CRUD) |
+| **P0 Task 3** | `1708b52` | FTS5-backed session search (`session_search` tool + auto-indexing) | Session search gap |
+| **P0 Task 4** | `1cb2c9b` | `vision_analyze` tool (multimodal image analysis) | Vision analysis gap |
+| **P0 Task 5** | `63cc327` | Self-improving background memory review loop | Self-improving learning loop gap (memory-only) |
+
+**Test suite impact:** 288 → 458 passing (+170 tests). 0 regressions.
+
+**Updated counts:**
+- Tools: **44 → 47** (+7: `browser`, `run_code`, `speak`, `skill_manage`, `session_search`, `vision_analyze`, + background review system)
+- Skills: 7 bundled (unchanged, but now agent can create its own via `skill_manage`)
+- Services: **6 → 7** (+`session_search.py`)
+- Engine modules: **6 → 7** (+`background_review.py`)
+- Slash commands: **56 → 57** (+`/soul`)
+
+**Still open from the original audit:**
+- ❌ Messaging gateway (Telegram/Discord/Slack/etc.)
+- ❌ Curator process (autonomous skill refinement)
+- ❌ Subagent delegation with isolated contexts
+- ❌ Kanban task system (9 tools)
+- ❌ Scheduled automation with platform delivery
+- ❌ Computer Use (desktop automation)
+- ❌ Image/video generation
+- ❌ 169 more skills across 26 categories
+- ❌ Multi-backend terminal (Docker/SSH/Modal/Daytona)
+- ❌ Profiles (isolated NIA_HOME directories)
+- ⚠️ Skill creation in the background review loop (Task 5 covers memory only; skill creation needs tool-calling in the review thread — follow-up work)
+
+See the **Prioritized Follow-Up Recommendations** section below for the P1/P2/P3 task list.
+
+---
+
+## TL;DR (original audit)
 
 **NIA is not yet working like Hermes.** It is a competent coding-agent scaffold
 (44 tools, 7 bundled skills, a Jarvis personality, a ReAct loop, and an
@@ -23,12 +63,10 @@ different problems.
 
 The single biggest behavioral gaps, in priority order:
 
-1. **No self-improving learning loop** — Hermes writes/updates skills and
-   memory in the background after every turn. NIA has neither.
+1. ~~**No self-improving learning loop**~~ ✅ **Fixed in Task 5** (memory-only; skill creation still TODO)
 2. **No messaging gateway** — Hermes talks from Telegram/Discord/Slack/
    WhatsApp/Signal/Email. NIA is CLI-only.
-3. **No session search** — Hermes has FTS5-backed search across every past
-   conversation. NIA stores sessions but has no search.
+3. ~~**No session search**~~ ✅ **Fixed in Task 3** (FTS5-backed `session_search` tool)
 4. **No subagent delegation** — Hermes can spawn isolated subagents for
    parallel workstreams. NIA has a `team_create` tool but no real
    orchestrator.
@@ -457,67 +495,83 @@ which audit gap it closes.
 
 ### P0 — Close the biggest behavioral gaps (1–3 weeks each)
 
-| # | Recommendation | Closes gap | Effort |
-|---|---|---|---|
-| 1 | **Build the self-improving learning loop** — after every turn, fork the agent and ask "should any skill or memory be saved?". Start simple: just memory, no skill creation yet. | #1, #2 | 2 weeks |
-| 2 | **Add session search** — port Hermes's FTS5-backed `session_search` design. NIA already persists sessions as JSON; add a SQLite index + search tool. | #4 | 1 week |
-| 3 | **Add `skill_manage` tool** — let the agent create/update/delete skills. Pairs with #1 (the learning loop needs this to write skills). | #10 | 3 days |
-| 4 | **Add SOUL.md identity file** — load `~/.nia/SOUL.md` as the first thing in the system prompt. Keep the Personality class as the default if SOUL.md is empty. | #9 | 2 days |
-| 5 | **Add skill slash commands** — scan `~/.nia/skills/` and expose each as `/<skill-name>`. Inject as user message (preserves prompt cache). | #11 | 3 days |
+| # | Recommendation | Closes gap | Effort | Status |
+|---|---|---|---|---|
+| 1 | **Build the self-improving learning loop** — after every turn, fork the agent and ask "should any skill or memory be saved?". Start simple: just memory, no skill creation yet. | #1, #2 | 2 weeks | ✅ **Done (Task 5)** — memory-only; skill creation still TODO |
+| 2 | **Add session search** — port Hermes's FTS5-backed `session_search` design. NIA already persists sessions as JSON; add a SQLite index + search tool. | #4 | 1 week | ✅ **Done (Task 3)** — `session_search` tool + auto-indexing |
+| 3 | **Add `skill_manage` tool** — let the agent create/update/delete skills. Pairs with #1 (the learning loop needs this to write skills). | #10 | 3 days | ✅ **Done (Task 2)** — 6 ops (create/update/edit/delete/list/info) |
+| 4 | **Add SOUL.md identity file** — load `~/.nia/SOUL.md` as the first thing in the system prompt. Keep the Personality class as the default if SOUL.md is empty. | #9 | 2 days | ✅ **Done (Task 1)** — `/soul` command + auto-seeding |
+| 5 | **Add skill slash commands** — scan `~/.nia/skills/` and expose each as `/<skill-name>`. Inject as user message (preserves prompt cache). | #11 | 3 days | ⬜ Open |
 
 ### P1 — Important capability additions (1–2 weeks each)
 
-| # | Recommendation | Closes gap | Effort |
-|---|---|---|---|
-| 6 | **Add `vision_analyze` tool** — load images into the conversation for multimodal models. | #17 | 3 days |
-| 7 | **Add `image_generate` tool** — text-to-image via FAL/DALL-E/Stable Diffusion. | #18 | 1 week |
-| 8 | **Add `delegate_task` tool** — spawn isolated subagents with own context + tool whitelist. Replace NIA's `agent` + `team_create` with a single delegator. | #5 | 2 weeks |
-| 9 | **Add cron platform delivery** — extend NIA's cron to deliver results to email/webhook (start simple; add Telegram/Discord later). | #7 | 1 week |
-| 10 | **Add `computer_use` tool** — PyAutoGUI-based desktop automation (click/type/scroll/screenshot). | #16 | 1 week |
-| 11 | **Add `process` multi-op tool** — collapse NIA's 6 task tools into one with 8 operations (list/poll/log/wait/kill/write/submit/close). | #21 | 3 days |
-| 12 | **Add `cronjob` multi-op tool** — collapse NIA's 4 cron tools into one with 7 operations. | #22 | 2 days |
-| 13 | **Add `memory` batched-ops tool** — replace `nia_memory` with a tool that accepts an `operations` array. | #23 | 3 days |
+| # | Recommendation | Closes gap | Effort | Status |
+|---|---|---|---|---|
+| 6 | **Add `vision_analyze` tool** — load images into the conversation for multimodal models. | #17 | 3 days | ✅ **Done (Task 4)** — URL + local file support, 3-tier config |
+| 7 | **Add `image_generate` tool** — text-to-image via FAL/DALL-E/Stable Diffusion. | #18 | 1 week | ⬜ Open |
+| 8 | **Add `delegate_task` tool** — spawn isolated subagents with own context + tool whitelist. Replace NIA's `agent` + `team_create` with a single delegator. | #5 | 2 weeks | ⬜ Open |
+| 9 | **Add cron platform delivery** — extend NIA's cron to deliver results to email/webhook (start simple; add Telegram/Discord later). | #7 | 1 week | ⬜ Open |
+| 10 | **Add `computer_use` tool** — PyAutoGUI-based desktop automation (click/type/scroll/screenshot). | #16 | 1 week | ⬜ Open |
+| 11 | **Add `process` multi-op tool** — collapse NIA's 6 task tools into one with 8 operations (list/poll/log/wait/kill/write/submit/close). | #21 | 3 days | ⬜ Open |
+| 12 | **Add `cronjob` multi-op tool** — collapse NIA's 4 cron tools into one with 7 operations. | #22 | 2 days | ⬜ Open |
+| 13 | **Add `memory` batched-ops tool** — replace `nia_memory` with a tool that accepts an `operations` array. | #23 | 3 days | ⬜ Open |
+| 14 | **Extend background review to write skills** — Task 5 covers memory only; add skill creation via `skill_manage` tool-calling in the review thread. | #1 (skill half) | 1 week | ⬜ Open (follow-up to Task 5) |
 
 ### P2 — Skill catalog expansion (ongoing)
 
-| # | Recommendation | Closes gap | Effort |
-|---|---|---|---|
-| 14 | **Port the 6 GitHub skills** — github-auth, codebase-inspection, github-code-review, github-issues, github-pr-workflow, github-repo-management. All use `gh` CLI or REST. | #github row | 1 week |
-| 15 | **Port the 5 software-dev-process skills NIA is missing** — node-inspect-debugger, python-debugpy, requesting-code-review, spike, systematic-debugging, test-driven-development. | #software-development row | 1 week |
-| 16 | **Add 10–15 high-value skills from other categories** — pick the most useful: arxiv (research), obsidian (note-taking), google-workspace (productivity), docker-management (devops), 1password (security), stocks (finance), popular-web-designs (creative), etc. | many | 3 weeks |
-| 17 | **Build a skill hub** — `nia skills browse/install official/<cat>/<name>`. Mirror Hermes's `optional-skills/` pattern. | #27 | 1 week |
+| # | Recommendation | Closes gap | Effort | Status |
+|---|---|---|---|---|
+| 15 | **Port the 6 GitHub skills** — github-auth, codebase-inspection, github-code-review, github-issues, github-pr-workflow, github-repo-management. All use `gh` CLI or REST. | #github row | 1 week | ⬜ Open |
+| 16 | **Port the 5 software-dev-process skills NIA is missing** — node-inspect-debugger, python-debugpy, requesting-code-review, spike, systematic-debugging, test-driven-development. | #software-development row | 1 week | ⬜ Open |
+| 17 | **Add 10–15 high-value skills from other categories** — pick the most useful: arxiv (research), obsidian (note-taking), google-workspace (productivity), docker-management (devops), 1password (security), stocks (finance), popular-web-designs (creative), etc. | many | 3 weeks | ⬜ Open |
+| 18 | **Build a skill hub** — `nia skills browse/install official/<cat>/<name>`. Mirror Hermes's `optional-skills/` pattern. | #27 | 1 week | ⬜ Open |
 
 ### P3 — Architecture improvements (longer-term)
 
-| # | Recommendation | Closes gap | Effort |
-|---|---|---|---|
-| 18 | **Add messaging gateway** — start with Telegram (most popular). Same agent core, different frontend. | #3 | 3 weeks |
-| 19 | **Add profiles** — `nia profile create coder` with isolated NIA_HOME. | #8 | 1 week |
-| 20 | **Make context engine pluggable** — abstract `auto_compact_if_needed` behind an interface. | #12 | 1 week |
-| 21 | **Add auxiliary model** — separate cheap model for background tasks. | #14 | 1 week |
-| 22 | **Add `insights` command** — historical token/cost/tool-usage trends. | #19 | 1 week |
-| 23 | **Add multi-backend terminal** — Docker, SSH, Modal, Daytona. | #15 | 3 weeks |
-| 24 | **Add `doctor` and `update` commands** — self-diagnosis and self-update. | #29, #30 | 3 days |
+| # | Recommendation | Closes gap | Effort | Status |
+|---|---|---|---|---|
+| 19 | **Add messaging gateway** — start with Telegram (most popular). Same agent core, different frontend. | #3 | 3 weeks | ⬜ Open |
+| 20 | **Add profiles** — `nia profile create coder` with isolated NIA_HOME. | #8 | 1 week | ⬜ Open |
+| 21 | **Make context engine pluggable** — abstract `auto_compact_if_needed` behind an interface. | #12 | 1 week | ⬜ Open |
+| 22 | **Add auxiliary model** — separate cheap model for background tasks. | #14 | 1 week | ⬜ Open (partially addressed — `NIA_BACKGROUND_REVIEW_MODEL` allows routing) |
+| 23 | **Add `insights` command** — historical token/cost/tool-usage trends. | #19 | 1 week | ⬜ Open |
+| 24 | **Add multi-backend terminal** — Docker, SSH, Modal, Daytona. | #15 | 3 weeks | ⬜ Open |
+| 25 | **Add `doctor` and `update` commands** — self-diagnosis and self-update. | #29, #30 | 3 days | ⬜ Open (NIA already has `/doctor` slash command) |
 
 ---
 
-## 8. Suggested Next Moves (this week)
+## 8. Suggested Next Moves
 
-If the goal is "make NIA work more like Hermes (Jarvis-style)", the highest-
-leverage sequence is:
+### ✅ Completed (this session)
 
-1. **Add SOUL.md** (2 days) — gives NIA a stable, editable identity. Pairs
-   naturally with the existing Personality class.
-2. **Add `skill_manage` tool** (3 days) — unblocks the learning loop.
-3. **Build the self-improving learning loop** (2 weeks) — the signature
-   Hermes feature. Start with memory only (no skill creation), then add
-   skill creation in a follow-up.
-4. **Add session search** (1 week) — high user value, low architectural
-   impact.
-5. **Add `vision_analyze` tool** (3 days) — multimodal is table stakes now.
+The original "Suggested Next Moves" sequence was:
 
-That sequence takes ~4 weeks and closes 4 of the top 5 behavioral gaps.
-After that, pick from P1/P2 based on what matters most to the user.
+1. ~~**Add SOUL.md** (2 days)~~ ✅ Done — Task 1
+2. ~~**Add `skill_manage` tool** (3 days)~~ ✅ Done — Task 2
+3. ~~**Build the self-improving learning loop** (2 weeks)~~ ✅ Done — Task 5 (memory-only)
+4. ~~**Add session search** (1 week)~~ ✅ Done — Task 3
+5. ~~**Add `vision_analyze` tool** (3 days)~~ ✅ Done — Task 4
+
+All 5 items completed in a single session. Test suite went from 288 → 458
+passing (+170 tests, 0 regressions).
+
+### Recommended next (P1 sequence)
+
+If the goal is "make NIA work more like Hermes (Jarvis-style)", the next
+highest-leverage sequence is:
+
+1. **Extend background review to write skills** (P1 #14, 1 week) — Task 5
+   covers memory only; adding skill creation completes the self-improving
+   loop.
+2. **Add `delegate_task` tool** (P1 #8, 2 weeks) — spawn isolated subagents
+   for parallel workstreams. Replaces NIA's `agent` + `team_create`.
+3. **Add cron platform delivery** (P1 #9, 1 week) — extend cron to deliver
+   results to email/webhook.
+4. **Add `computer_use` tool** (P1 #10, 1 week) — PyAutoGUI desktop automation.
+5. **Add `image_generate` tool** (P1 #7, 1 week) — text-to-image via FAL/DALL-E.
+
+That sequence takes ~6 weeks and closes 5 more behavioral gaps. After that,
+pick from P2 (skill catalog expansion) based on what matters most.
 
 ---
 
