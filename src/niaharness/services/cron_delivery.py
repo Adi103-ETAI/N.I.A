@@ -98,10 +98,17 @@ def validate_delivery_config(delivery: dict[str, Any]) -> list[str]:
         if not isinstance(webhook_cfg, dict):
             errors.append("delivery.webhook must be a dict")
         else:
-            if not webhook_cfg.get("url"):
-                errors.append("delivery.webhook.url is required")
-            url = webhook_cfg.get("url", "")
-            if not url.startswith(("http://", "https://")):
+            # URL can be provided directly OR via env var indirection
+            # (security: webhook URLs are bearer tokens — prefer env var).
+            url = webhook_cfg.get("url")
+            url_env = webhook_cfg.get("url_env")
+            if not url and not url_env:
+                errors.append(
+                    "delivery.webhook requires 'url' or 'url_env' "
+                    "(env var name holding the webhook URL — recommended "
+                    "for security since webhook URLs are bearer tokens)"
+                )
+            if url and not url.startswith(("http://", "https://")):
                 errors.append("delivery.webhook.url must be http:// or https://")
 
     return errors
@@ -248,8 +255,32 @@ async def deliver_webhook(
     job_name: str,
     result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Send job result via webhook (HTTP POST). Returns a delivery status dict."""
-    url = webhook_cfg.get("url", "")
+    """Send job result via webhook (HTTP POST). Returns a delivery status dict.
+
+    Security: the webhook URL can be provided directly via 'url' OR via
+    env var indirection via 'url_env' (recommended — webhook URLs are
+    bearer tokens and should not be persisted in cron_jobs.json).
+    """
+    # Resolve URL: prefer env var indirection, fall back to direct URL.
+    url_env = webhook_cfg.get("url_env")
+    if url_env:
+        url = os.environ.get(url_env, "")
+        if not url:
+            return {
+                "channel": "webhook",
+                "success": False,
+                "error": f"Webhook URL env var {url_env!r} is not set",
+            }
+    else:
+        url = webhook_cfg.get("url", "")
+
+    if not url:
+        return {
+            "channel": "webhook",
+            "success": False,
+            "error": "No webhook URL configured (set 'url' or 'url_env')",
+        }
+
     method = webhook_cfg.get("method", "POST").upper()
     headers = webhook_cfg.get("headers", {"Content-Type": "application/json"})
     on_success = webhook_cfg.get("on_success", True)

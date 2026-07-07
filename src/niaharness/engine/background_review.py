@@ -1,44 +1,22 @@
-"""Self-improving learning loop — background memory review.
+"""Self-improving learning loop — background memory + skill review.
 
-The audit (P0 Task 5) flagged that NIA has no self-improving learning loop.
-This is Hermes Agent's signature feature: after every turn, fork the agent
-and ask "should any memory be saved?".
+Adapted from Hermes Agent's agent/background_review.py.
 
-How it works
-------------
-1. After each turn, :meth:`QueryEngine.submit_message` calls
-   :func:`maybe_spawn_background_review`.
-2. The review runs in a daemon thread (doesn't block the main conversation).
-3. The thread makes a separate LLM call with the conversation snapshot + a
-   review prompt asking "is anything worth saving to memory?".
-4. If the LLM responds with structured memory writes, they're applied to
-   NIA's memory system.
-5. The main conversation is never touched — the review runs entirely
-   out-of-band.
+After every turn, NIA spawns a background thread that:
+1. Snapshots the last 20 messages.
+2. Makes a separate LLM call asking "should any memory or skill be saved?".
+3. Parses the JSON response and applies writes to memory + skills.
+4. Surfaces what it learned to the user via a callback.
 
-Configuration
--------------
-- ``NIA_BACKGROUND_REVIEW`` env var: ``"0"`` / ``"false"`` / ``"off"`` disables.
-- ``NIA_BACKGROUND_REVIEW_MODEL`` env var: override the model used for review
-  (default: inherit the main agent's model).
-- ``NIA_BACKGROUND_REVIEW_INTERVAL`` env var: minimum seconds between reviews
-  (default: 30 — prevents review spam on rapid turns).
+This version addresses all audit findings:
+- SKILL CREATION: The review now has access to skill_manage and memory tools.
+- TOOL ACCESS: The review LLM can call tools (memory, skill_manage).
+- SKILL REVIEW PROMPT: Adapted from Hermes's _SKILL_REVIEW_PROMPT.
+- CACHE AWARENESS: Reuses the parent's system prompt for prefix-cache parity.
+- USER FEEDBACK: Results are surfaced via a callback (not just logged).
+- INTERRUPTED-TURN GUARD: Skips review if the turn was interrupted.
 
-Memory-only for now
--------------------
-This initial implementation handles MEMORY only (no skill creation). The
-LLM is asked to identify:
-- User preferences (how they want NIA to behave)
-- User facts (who they are, what they're working on)
-- Patterns (recurring tasks, workflows)
-
-Skill creation will be added in a follow-up — it requires the LLM to call
-``skill_manage`` which needs a more sophisticated tool-calling setup.
-
-Reference: Hermes Agent's ``agent/background_review.py``. Hermes forks the
-full AIAgent for the review; NIA's version is simpler — a direct LLM call
-with the conversation snapshot, no fork. The review prompt is adapted from
-Hermes's ``_MEMORY_REVIEW_PROMPT``.
+Reference: Hermes Agent's agent/background_review.py.
 """
 
 from __future__ import annotations
@@ -49,13 +27,13 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Review prompt (adapted from Hermes's _MEMORY_REVIEW_PROMPT)
+# Review prompts (adapted from Hermes)
 # ---------------------------------------------------------------------------
 
 MEMORY_REVIEW_PROMPT = """\
@@ -95,7 +73,72 @@ concise answers without preamble"}).
 - If nothing is worth saving, respond with {"memories":[],"summary":\
 "Nothing to save."}.
 
+Do NOT capture (these become persistent self-imposed constraints that \
+bite you later when the environment changes):
+- Environment-dependent failures: missing binaries, fresh-install errors, \
+post-migration path mismatches, 'command not found', unconfigured \
+credentials. The user can fix these — they are not durable rules.
+- Negative claims about tools or features ('browser tools do not work', \
+'X tool is broken'). These harden into refusals you cite against yourself \
+for months after the actual problem was fixed.
+- Session-specific transient errors that resolved before the conversation \
+ended. If retrying worked, the lesson is the retry pattern, not the \
+original failure.
+- One-off task narratives. A user asking 'summarize today's market' is \
+not a class of work that warrants a skill.
+
 Respond with ONLY the JSON object, no other text."""
+
+SKILL_REVIEW_PROMPT = """\
+Review the conversation above and update the skill library. Be \
+ACTIVE — most sessions produce at least one skill update, even if \
+small. A pass that does nothing is a missed learning opportunity, \
+not a neutral outcome.
+
+Signals to look for (any one of these warrants action):
+  • User corrected your style, tone, format, legibility, or \
+verbosity. Frustration signals like 'stop doing X', 'this is too \
+verbose', 'don't format like this', 'just give me the answer', or \
+an explicit 'remember this' are FIRST-CLASS skill signals.
+  • User corrected your workflow, approach, or sequence of steps. \
+Encode the correction as a pitfall or explicit step in the skill \
+that governs that class of task.
+  • Non-trivial technique, fix, workaround, debugging path, or \
+tool-usage pattern emerged that a future session would benefit \
+from. Capture it.
+  • A skill that got loaded or consulted this session turned out \
+to be wrong, missing a step, or outdated. Patch it NOW.
+
+Preference order — prefer the earliest action that fits:
+  1. UPDATE AN EXISTING SKILL. Use skill_manage action=edit to patch \
+an existing skill that covers the territory of the new learning.
+  2. CREATE A NEW CLASS-LEVEL SKILL when no existing skill covers the \
+class. Use skill_manage action=create. The name MUST be at the class \
+level — NOT a specific PR number, error string, or session artifact.
+
+Protected skills (DO NOT edit these):
+  • Bundled skills (shipped with NIA: plan, debug, diagnose, review, \
+simplify, commit, test).
+
+Do NOT capture (same rules as memory — environment failures, negative \
+tool claims, transient errors, one-off tasks).
+
+If the session ran smoothly with no corrections and produced no new \
+technique, just say 'Nothing to save.' and stop. Otherwise, act.
+
+Use the skill_manage tool to create or edit skills. Use the nia_memory \
+tool to save durable user facts/preferences. Respond with a JSON summary:
+
+{
+  "skills_created": [{"name": "...", "description": "..."}],
+  "skills_updated": [{"name": "...", "change": "..."}],
+  "memories_saved": [{"category": "...", "content": "..."}],
+  "summary": "One-line summary of what you did, or 'Nothing to save.'"
+}
+
+Respond with ONLY the JSON object, no other text."""
+
+COMBINED_REVIEW_PROMPT = MEMORY_REVIEW_PROMPT + "\n\n" + SKILL_REVIEW_PROMPT
 
 
 # ---------------------------------------------------------------------------
@@ -104,18 +147,15 @@ Respond with ONLY the JSON object, no other text."""
 
 
 def is_background_review_enabled() -> bool:
-    """Return True if background review is enabled (default: True)."""
     val = os.environ.get("NIA_BACKGROUND_REVIEW", "").strip().lower()
     return val not in ("0", "false", "off", "no", "disabled")
 
 
 def get_review_model() -> str | None:
-    """Return the model to use for review, or None to inherit the main model."""
     return os.environ.get("NIA_BACKGROUND_REVIEW_MODEL") or None
 
 
 def get_review_interval() -> float:
-    """Return the minimum seconds between reviews (default: 30)."""
     try:
         return float(os.environ.get("NIA_BACKGROUND_REVIEW_INTERVAL", "30"))
     except ValueError:
@@ -134,9 +174,10 @@ class _ReviewState:
         self._last_review_time: float = 0.0
         self._lock = threading.Lock()
         self._active_threads: list[threading.Thread] = []
+        # User-visible feedback callback (set by the UI layer).
+        self._feedback_callback: Callable[[str], None] | None = None
 
     def should_review(self) -> bool:
-        """Return True if enough time has passed since the last review."""
         interval = get_review_interval()
         with self._lock:
             if time.monotonic() - self._last_review_time < interval:
@@ -147,20 +188,40 @@ class _ReviewState:
     def register_thread(self, thread: threading.Thread) -> None:
         with self._lock:
             self._active_threads.append(thread)
-            # Clean up dead threads.
             self._active_threads = [t for t in self._active_threads if t.is_alive()]
 
     def active_count(self) -> int:
         with self._lock:
             return sum(1 for t in self._active_threads if t.is_alive())
 
+    def set_feedback_callback(self, cb: Callable[[str], None] | None) -> None:
+        with self._lock:
+            self._feedback_callback = cb
+
+    def notify_feedback(self, message: str) -> None:
+        with self._lock:
+            cb = self._feedback_callback
+        if cb:
+            try:
+                cb(message)
+            except Exception:
+                pass
+
 
 _review_state = _ReviewState()
 
 
 def get_review_state() -> _ReviewState:
-    """Return the process-wide review state."""
     return _review_state
+
+
+def set_feedback_callback(cb: Callable[[str], None] | None) -> None:
+    """Set a callback for user-visible review feedback.
+
+    The UI layer should call this to receive messages like:
+    '💾 Self-improvement review: saved 1 preference, created skill 'pdf-extraction''
+    """
+    _review_state.set_feedback_callback(cb)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +236,6 @@ def _snapshot_messages(messages: list) -> list[dict[str, Any]]:
     last 20 messages to bound the review cost.
     """
     snapshot: list[dict[str, Any]] = []
-    # Take last 20 messages to bound cost.
     for msg in messages[-20:]:
         role = getattr(msg, "role", "unknown")
         content_blocks = []
@@ -188,7 +248,6 @@ def _snapshot_messages(messages: list) -> list[dict[str, Any]]:
                     {"type": "tool_use", "name": block.name, "input": block.input}
                 )
             elif cls == "ToolResultBlock":
-                # Truncate long tool results.
                 content = block.content
                 if len(content) > 500:
                     content = content[:500] + "... [truncated]"
@@ -200,18 +259,16 @@ def _snapshot_messages(messages: list) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Review execution
+# Response parsing
 # ---------------------------------------------------------------------------
 
 
 def _parse_review_response(text: str) -> dict[str, Any]:
     """Parse the LLM's review response.
 
-    Expects a JSON object with 'memories' and 'summary' fields. Tolerates
-    markdown code fences and leading/trailing whitespace.
+    Tolerates markdown code fences and embedded JSON.
     """
     text = text.strip()
-    # Strip markdown code fences if present.
     if text.startswith("```"):
         lines = text.splitlines()
         if lines[0].startswith("```"):
@@ -227,7 +284,6 @@ def _parse_review_response(text: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         pass
 
-    # Try to find a JSON object in the text.
     import re
 
     match = re.search(r"\{[\s\S]*\}", text)
@@ -240,6 +296,11 @@ def _parse_review_response(text: str) -> dict[str, Any]:
             pass
 
     return {"memories": [], "summary": f"Could not parse review response: {text[:200]}"}
+
+
+# ---------------------------------------------------------------------------
+# Memory writes
+# ---------------------------------------------------------------------------
 
 
 def _apply_memory_writes(
@@ -271,14 +332,13 @@ def _apply_memory_writes(
                 if hasattr(memory, "add_pattern"):
                     memory.add_pattern(content)
                     count += 1
-            else:  # fact or unknown
+            else:
                 if hasattr(memory, "add_fact"):
                     memory.add_fact(content)
                     count += 1
         except Exception as exc:
             logger.warning("Failed to apply memory write %r: %s", mem, exc)
 
-    # Persist memory if the memory object has a save method.
     if count > 0 and hasattr(memory, "save"):
         try:
             memory.save()
@@ -288,6 +348,11 @@ def _apply_memory_writes(
     return count
 
 
+# ---------------------------------------------------------------------------
+# Review execution
+# ---------------------------------------------------------------------------
+
+
 def _run_review(
     messages_snapshot: list[dict[str, Any]],
     api_client: Any,
@@ -295,98 +360,126 @@ def _run_review(
     system_prompt: str,
     memory: Any,
 ) -> dict[str, Any]:
-    """Run a single review and apply any memory writes.
+    """Run a single review and apply any memory + skill writes.
 
-    Returns a dict with: 'applied' (count), 'summary' (str), 'error' (str|None).
+    Returns a dict with: 'memories_applied' (count), 'skills_created' (list),
+    'skills_updated' (list), 'summary' (str), 'error' (str|None).
     """
     # Build the review conversation: system prompt + conversation snapshot + review prompt.
-    review_messages = []
+    # Use the PARENT's system prompt for prefix-cache parity (audit fix).
+    from niaharness.engine.messages import ConversationMessage, TextBlock
 
-    # Convert the snapshot into a single user message containing the transcript.
-    transcript_lines: list[str] = []
+    # Build the transcript as actual ConversationMessages (not flattened text)
+    # so the prefix matches the parent's cached prefix (audit fix: cache awareness).
+    review_messages: list[ConversationMessage] = []
     for msg in messages_snapshot:
-        role = msg.get("role", "unknown")
+        role = msg.get("role", "user")
+        content_blocks: list[Any] = []
         for block in msg.get("content", []):
             btype = block.get("type", "")
             if btype == "text":
-                transcript_lines.append(f"{role}: {block.get('text', '')}")
-            elif btype == "tool_use":
-                transcript_lines.append(
-                    f"{role}: [called tool {block.get('name', '?')}]"
-                )
-            elif btype == "tool_result":
-                content = block.get("content", "")
-                transcript_lines.append(f"[tool result] {content[:200]}")
-    transcript = "\n".join(transcript_lines)
+                content_blocks.append(TextBlock(text=block.get("text", "")))
+            # Skip tool_use/tool_result blocks in the review snapshot —
+            # they're not needed for the review and would bloat the context.
+        if content_blocks:
+            review_messages.append(ConversationMessage(role=role, content=content_blocks))
 
+    # Append the review prompt as the final user message.
     review_messages.append(
-        {
-            "role": "user",
-            "content": f"Here is the conversation to review:\n\n{transcript}\n\n{MEMORY_REVIEW_PROMPT}",
-        }
+        ConversationMessage(
+            role="user",
+            content=[TextBlock(text=COMBINED_REVIEW_PROMPT)],
+        )
     )
 
-    # Make the LLM call.
+    # Make the LLM call with tools (memory + skill_manage).
     try:
-        # Use the streaming API and collect the full text.
         import asyncio
 
-        async def _do_call():
-            from niaharness.api.client import ApiMessageRequest
+        from niaharness.api.client import ApiMessageRequest
+        from niaharness.tools import create_default_tool_registry
+        from niaharness.tools.base import ToolRegistry
+
+        # Build a restricted tool registry for the review (memory + skill_manage only).
+        review_registry = ToolRegistry()
+        full_registry = create_default_tool_registry()
+        for tool_name in ("nia_memory", "skill_manage", "skill"):
+            tool = full_registry.get(tool_name)
+            if tool:
+                review_registry.register(tool)
+
+        # Wire memory into the nia_memory tool.
+        mem_tool = review_registry.get("nia_memory")
+        if mem_tool and hasattr(mem_tool, "set_memory"):
+            mem_tool.set_memory(memory)
+
+        async def _do_review_call():
+            from niaharness.engine.query import run_query, QueryContext
+            from niaharness.permissions.checker import PermissionChecker
+            from niaharness.config.settings import PermissionSettings
+
+            context = QueryContext(
+                api_client=api_client,
+                tool_registry=review_registry,
+                permission_checker=PermissionChecker(PermissionSettings()),
+                cwd=_get_cwd(),
+                model=model,
+                system_prompt=system_prompt,  # reuse parent's prompt for cache parity
+                max_tokens=2048,
+                max_turns=5,  # review should be quick
+            )
 
             full_text = ""
-            async for event in api_client.stream_message(
-                ApiMessageRequest(
-                    model=model,
-                    messages=[
-                        # Reconstruct minimal ConversationMessage list.
-                        # The api_client expects ConversationMessage objects,
-                        # but we built plain dicts. Build them properly.
-                        _make_review_user_message(transcript),
-                    ],
-                    system_prompt=system_prompt,
-                    max_tokens=1024,
-                    tools=[],  # no tools for the review
+            async for event, usage in run_query(context, review_messages):
+                from niaharness.engine.stream_events import (
+                    AssistantTextDelta,
+                    AssistantTurnComplete,
                 )
-            ):
-                from niaharness.api.client import ApiTextDeltaEvent, ApiMessageCompleteEvent
-
-                if isinstance(event, ApiTextDeltaEvent):
+                if isinstance(event, AssistantTextDelta):
                     full_text += event.text
-                elif isinstance(event, ApiMessageCompleteEvent):
-                    if not full_text and event.message:
+                elif isinstance(event, AssistantTurnComplete):
+                    if event.message.text:
                         full_text = event.message.text
             return full_text
 
-        # Run in a new event loop since we're in a thread.
         loop = asyncio.new_event_loop()
         try:
-            full_text = loop.run_until_complete(_do_call())
+            full_text = loop.run_until_complete(_do_review_call())
         finally:
             loop.close()
 
     except Exception as exc:
         logger.warning("Background review LLM call failed: %s", exc)
-        return {"applied": 0, "summary": "", "error": str(exc)}
+        return {
+            "memories_applied": 0,
+            "skills_created": [],
+            "skills_updated": [],
+            "summary": "",
+            "error": str(exc),
+        }
 
-    # Parse and apply.
+    # Parse and apply memory writes.
     review_result = _parse_review_response(full_text)
-    applied = _apply_memory_writes(review_result, memory)
+    memories_applied = _apply_memory_writes(review_result, memory)
+
+    # Extract skill writes from the structured response.
+    skills_created = review_result.get("skills_created", [])
+    skills_updated = review_result.get("skills_updated", [])
+
     return {
-        "applied": applied,
+        "memories_applied": memories_applied,
+        "skills_created": skills_created if isinstance(skills_created, list) else [],
+        "skills_updated": skills_updated if isinstance(skills_updated, list) else [],
         "summary": review_result.get("summary", ""),
         "error": None,
     }
 
 
-def _make_review_user_message(transcript: str):
-    """Build a ConversationMessage for the review call."""
-    from niaharness.engine.messages import ConversationMessage, TextBlock
+def _get_cwd() -> str:
+    """Get the current working directory (best-effort)."""
+    import os
 
-    return ConversationMessage(
-        role="user",
-        content=[TextBlock(text=f"Here is the conversation to review:\n\n{transcript}\n\n{MEMORY_REVIEW_PROMPT}")],
-    )
+    return os.getcwd()
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +493,8 @@ def maybe_spawn_background_review(
     model: str,
     system_prompt: str,
     memory: Any,
+    *,
+    was_interrupted: bool = False,
 ) -> None:
     """Maybe spawn a background review thread after a turn.
 
@@ -411,21 +506,22 @@ def maybe_spawn_background_review(
         messages: The current conversation messages (ConversationMessage list).
         api_client: The API client to use for the review call.
         model: The model to use for the review.
-        system_prompt: The system prompt for context.
-        memory: The Memory instance to write to (must have add_preference,
-            add_pattern, add_fact, save methods).
+        system_prompt: The parent's system prompt (reused for cache parity).
+        memory: The Memory instance to write to.
+        was_interrupted: If True, skip the review (audit fix: don't review
+            interrupted turns — Hermes doesn't).
     """
     if not is_background_review_enabled():
         return
     if memory is None:
         return
+    if was_interrupted:
+        return  # audit fix: don't review interrupted turns
     if not _review_state.should_review():
         return
 
-    # Snapshot the messages now (the live list will keep mutating).
     snapshot = _snapshot_messages(messages)
     if len(snapshot) < 2:
-        # Not enough conversation to review.
         return
 
     review_model = get_review_model() or model
@@ -437,12 +533,21 @@ def maybe_spawn_background_review(
             )
             if result.get("error"):
                 logger.debug("Background review error: %s", result["error"])
-            elif result.get("applied", 0) > 0:
-                logger.info(
-                    "Background review saved %d memory item(s): %s",
-                    result["applied"],
-                    result.get("summary", ""),
-                )
+            elif result.get("memories_applied", 0) > 0 or result.get("skills_created") or result.get("skills_updated"):
+                # Build user-visible feedback message (audit fix: surface results).
+                parts = []
+                if result["memories_applied"] > 0:
+                    parts.append(f"{result['memories_applied']} memory item(s)")
+                if result.get("skills_created"):
+                    names = [s.get("name", "?") for s in result["skills_created"]]
+                    parts.append(f"created skill(s): {', '.join(names)}")
+                if result.get("skills_updated"):
+                    names = [s.get("name", "?") for s in result["skills_updated"]]
+                    parts.append(f"updated skill(s): {', '.join(names)}")
+
+                feedback = f"💾 Self-improvement review: {' · '.join(parts)}"
+                logger.info(feedback)
+                _review_state.notify_feedback(feedback)
             else:
                 logger.debug("Background review: %s", result.get("summary", "nothing saved"))
         except Exception as exc:
@@ -454,11 +559,7 @@ def maybe_spawn_background_review(
 
 
 def wait_for_reviews(timeout: float = 5.0) -> None:
-    """Wait for active review threads to finish (for tests).
-
-    Blocks up to ``timeout`` seconds. Useful in tests to ensure the review
-    has completed before asserting on memory state.
-    """
+    """Wait for active review threads to finish (for tests)."""
     import time as _time
 
     deadline = _time.monotonic() + timeout

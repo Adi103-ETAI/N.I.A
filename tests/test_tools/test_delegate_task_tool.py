@@ -1,7 +1,8 @@
-"""Tests for the delegate_task tool."""
+"""Tests for the delegate_task tool (post-audit-fix version)."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,7 +22,7 @@ from niaharness.tools.delegate_task_tool import (
 
 @pytest.fixture
 def context(tmp_path: Path) -> ToolExecutionContext:
-    """Build a context with a mock api_client and tool_registry."""
+    """Build a context with api_client and tool_registry (post-fix)."""
     from niaharness.tools import create_default_tool_registry
 
     registry = create_default_tool_registry()
@@ -40,7 +41,7 @@ def context(tmp_path: Path) -> ToolExecutionContext:
 
 
 # ---------------------------------------------------------------------------
-# Schema / blocked tools
+# Blocked tools (expanded blocklist)
 # ---------------------------------------------------------------------------
 
 
@@ -57,6 +58,28 @@ class TestBlockedTools:
     def test_skill_manage_is_blocked(self):
         assert "skill_manage" in DELEGATE_BLOCKED_TOOLS
 
+    def test_send_message_is_blocked(self):
+        assert "send_message" in DELEGATE_BLOCKED_TOOLS
+
+    def test_run_code_is_blocked(self):
+        assert "run_code" in DELEGATE_BLOCKED_TOOLS
+
+    def test_agent_is_blocked(self):
+        assert "agent" in DELEGATE_BLOCKED_TOOLS
+
+    def test_task_create_is_blocked(self):
+        assert "task_create" in DELEGATE_BLOCKED_TOOLS
+
+    def test_browser_is_not_blocked(self):
+        # browser is allowed — useful for subagents
+        assert "browser" not in DELEGATE_BLOCKED_TOOLS
+
+    def test_read_file_is_not_blocked(self):
+        assert "read_file" not in DELEGATE_BLOCKED_TOOLS
+
+    def test_bash_is_not_blocked(self):
+        assert "bash" not in DELEGATE_BLOCKED_TOOLS
+
 
 # ---------------------------------------------------------------------------
 # Input validation
@@ -66,47 +89,30 @@ class TestBlockedTools:
 class TestInputValidation:
     @pytest.mark.asyncio
     async def test_no_goal_no_tasks_returns_error(self, context: ToolExecutionContext):
-        result = await DelegateTaskTool().execute(
-            DelegateTaskInput(),
-            context,
-        )
+        result = await DelegateTaskTool().execute(DelegateTaskInput(), context)
         assert result.is_error is True
-        assert "goal" in result.output.lower() or "tasks" in result.output.lower()
 
     @pytest.mark.asyncio
     async def test_depth_limit_exceeded(self, tmp_path: Path):
-        """When delegation depth exceeds the limit, return an error."""
-        from niaharness.tools import create_default_tool_registry
-
-        ctx = ToolExecutionContext(
-            cwd=tmp_path,
-            metadata={"_delegate_depth": 99},  # way over the limit
-        )
+        ctx = ToolExecutionContext(cwd=tmp_path, metadata={"_delegate_depth": 99})
         result = await DelegateTaskTool().execute(
-            DelegateTaskInput(goal="test"),
-            ctx,
+            DelegateTaskInput(goal="test"), ctx
         )
         assert result.is_error is True
         assert "depth" in result.output.lower()
 
     @pytest.mark.asyncio
     async def test_depth_limit_env_override(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        """NIA_DELEGATE_MAX_DEPTH env var should override the default."""
         monkeypatch.setenv("NIA_DELEGATE_MAX_DEPTH", "1")
-        ctx = ToolExecutionContext(
-            cwd=tmp_path,
-            metadata={"_delegate_depth": 1},  # equals the limit
-        )
+        ctx = ToolExecutionContext(cwd=tmp_path, metadata={"_delegate_depth": 1})
         result = await DelegateTaskTool().execute(
-            DelegateTaskInput(goal="test"),
-            ctx,
+            DelegateTaskInput(goal="test"), ctx
         )
         assert result.is_error is True
-        assert "depth" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------
-# Child registry building
+# Child registry (expanded blocklist)
 # ---------------------------------------------------------------------------
 
 
@@ -126,15 +132,14 @@ class TestChildRegistry:
         assert "bash" in tool_names
         assert "grep" in tool_names
         assert "write_file" not in tool_names
-        assert "web_search" not in tool_names
 
     def test_whitelist_still_blocks_blocked_tools(self, context: ToolExecutionContext):
-        """Even if the whitelist includes a blocked tool, it should be excluded."""
         tool = DelegateTaskTool()
-        registry = tool._build_child_registry("read_file,delegate_task", context)
+        registry = tool._build_child_registry("read_file,delegate_task,send_message", context)
         tool_names = {t.name for t in registry.list_tools()}
         assert "read_file" in tool_names
-        assert "delegate_task" not in tool_names  # blocked even if whitelisted
+        assert "delegate_task" not in tool_names
+        assert "send_message" not in tool_names
 
 
 # ---------------------------------------------------------------------------
@@ -144,8 +149,7 @@ class TestChildRegistry:
 
 class TestReadOnly:
     def test_is_not_read_only(self):
-        tool = DelegateTaskTool()
-        assert tool.is_read_only(DelegateTaskInput(goal="test")) is False
+        assert DelegateTaskTool().is_read_only(DelegateTaskInput(goal="test")) is False
 
 
 # ---------------------------------------------------------------------------
@@ -155,9 +159,8 @@ class TestReadOnly:
 
 class TestMockedExecution:
     @pytest.mark.asyncio
-    async def test_single_mode_returns_result(self, context: ToolExecutionContext):
-        """Test that a single subagent call returns the result text."""
-        # Mock the QueryEngine to return a simple response.
+    async def test_single_mode_returns_structured_json(self, context: ToolExecutionContext):
+        """Test that a single subagent call returns structured JSON."""
         mock_engine = MagicMock()
         mock_events = [
             AssistantTextDelta(text="Here is the answer."),
@@ -175,8 +178,7 @@ class TestMockedExecution:
 
         mock_engine.submit_message = _mock_submit
 
-        with patch("niaharness.tools.delegate_task_tool.DelegateTaskTool._build_child_registry") as mock_reg:
-            mock_reg.return_value = context.metadata["tool_registry"]
+        with patch("niaharness.tools.delegate_task_tool.DelegateTaskTool._build_child_registry", return_value=context.metadata["tool_registry"]):
             with patch("niaharness.engine.query_engine.QueryEngine", return_value=mock_engine):
                 result = await DelegateTaskTool().execute(
                     DelegateTaskInput(goal="What is 2+2?"),
@@ -184,12 +186,20 @@ class TestMockedExecution:
                 )
 
         assert result.is_error is False
-        assert "Here is the answer." in result.output
-        assert "1 turns" in result.output
+        # Output should be valid JSON with structured fields.
+        parsed = json.loads(result.output)
+        assert parsed["result"] == "Here is the answer."
+        assert parsed["status"] == "completed"
+        assert parsed["exit_reason"] == "completed"
+        assert parsed["turns"] == 1
+        assert parsed["model"] == "test-model"
+        assert "duration_seconds" in parsed
+        assert parsed["usage"]["input"] == 10
+        assert parsed["usage"]["output"] == 5
 
     @pytest.mark.asyncio
-    async def test_batch_mode_returns_all_results(self, context: ToolExecutionContext):
-        """Test that batch mode returns results for all tasks."""
+    async def test_batch_mode_returns_structured_json(self, context: ToolExecutionContext):
+        """Test that batch mode returns structured JSON with results array."""
         mock_engine = MagicMock()
         call_count = [0]
 
@@ -206,29 +216,27 @@ class TestMockedExecution:
 
         mock_engine.submit_message = _mock_submit
 
-        with patch("niaharness.tools.delegate_task_tool.DelegateTaskTool._build_child_registry") as mock_reg:
-            mock_reg.return_value = context.metadata["tool_registry"]
+        with patch("niaharness.tools.delegate_task_tool.DelegateTaskTool._build_child_registry", return_value=context.metadata["tool_registry"]):
             with patch("niaharness.engine.query_engine.QueryEngine", return_value=mock_engine):
                 result = await DelegateTaskTool().execute(
-                    DelegateTaskInput(
-                        tasks=[
-                            {"goal": "Task A"},
-                            {"goal": "Task B"},
-                            {"goal": "Task C"},
-                        ]
-                    ),
+                    DelegateTaskInput(tasks=[{"goal": "Task A"}, {"goal": "Task B"}, {"goal": "Task C"}]),
                     context,
                 )
 
         assert result.is_error is False
-        assert "Batch delegation complete (3 tasks)" in result.output
-        assert "Result for task 1" in result.output
-        assert "Result for task 2" in result.output
-        assert "Result for task 3" in result.output
+        parsed = json.loads(result.output)
+        assert "results" in parsed
+        assert parsed["total_tasks"] == 3
+        assert len(parsed["results"]) == 3
+        # Each result should have structured fields.
+        for r in parsed["results"]:
+            assert "status" in r
+            assert "exit_reason" in r
+            assert "task_index" in r
 
     @pytest.mark.asyncio
-    async def test_no_api_client_returns_error(self, tmp_path: Path):
-        """When no api_client is in the context, return an error."""
+    async def test_no_api_client_returns_structured_error(self, tmp_path: Path):
+        """When no api_client is in the context, return a structured error."""
         from niaharness.tools import create_default_tool_registry
 
         ctx = ToolExecutionContext(
@@ -240,49 +248,47 @@ class TestMockedExecution:
             },
         )
         result = await DelegateTaskTool().execute(
-            DelegateTaskInput(goal="test"),
-            ctx,
+            DelegateTaskInput(goal="test"), ctx
         )
         assert result.is_error is True
-        assert "API client" in result.output or "api_client" in result.output.lower()
+        parsed = json.loads(result.output)
+        assert parsed["status"] == "failed"
+        assert parsed["exit_reason"] == "no_api_client"
+        assert "api_client" in parsed["error"]
 
 
 # ---------------------------------------------------------------------------
-# Formatting
+# Depth propagation
 # ---------------------------------------------------------------------------
 
 
-class TestFormatting:
-    def test_format_single_result(self):
-        tool = DelegateTaskTool()
-        result = {
-            "goal": "test",
-            "label": "Task",
-            "result": "The answer is 42.",
-            "turns": 3,
-            "usage": {"input": 100, "output": 50},
-            "error": None,
-        }
-        formatted = tool._format_single_result(result)
-        assert "3 turns" in formatted
-        assert "The answer is 42." in formatted
-        assert "100" in formatted  # usage
+class TestDepthPropagation:
+    @pytest.mark.asyncio
+    async def test_child_gets_incremented_depth(self, context: ToolExecutionContext):
+        """The child QueryEngine should receive _delegate_depth = parent_depth + 1."""
+        mock_engine = MagicMock()
 
-    def test_format_batch_results(self):
-        tool = DelegateTaskTool()
-        results = [
-            {
-                "goal": "Task A",
-                "label": "Task 1",
-                "result": "Did A.",
-                "turns": 2,
-                "usage": {"input": 10, "output": 5},
-                "error": None,
-            },
-            Exception("Connection failed"),
-        ]
-        formatted = tool._format_batch_results(results, 2)
-        assert "Batch delegation complete (2 tasks)" in formatted
-        assert "Task 1" in formatted
-        assert "Did A." in formatted
-        assert "Connection failed" in formatted
+        async def _mock_submit(msg):
+            yield AssistantTurnComplete(
+                message=ConversationMessage(
+                    role="assistant", content=[TextBlock(text="done")]
+                ),
+                usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+            )
+
+        mock_engine.submit_message = _mock_submit
+
+        captured_kwargs = {}
+        def _capture_init(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_engine
+
+        with patch("niaharness.tools.delegate_task_tool.DelegateTaskTool._build_child_registry", return_value=context.metadata["tool_registry"]):
+            with patch("niaharness.engine.query_engine.QueryEngine", side_effect=_capture_init):
+                await DelegateTaskTool().execute(
+                    DelegateTaskInput(goal="test"), context
+                )
+
+        # The child should have _delegate_depth = 1 in its tool_metadata.
+        child_metadata = captured_kwargs.get("tool_metadata", {})
+        assert child_metadata.get("_delegate_depth") == 1

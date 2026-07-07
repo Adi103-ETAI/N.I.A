@@ -392,21 +392,29 @@ class QueryEngine:
             # AssistantTurnComplete / tool event.
             if isinstance(event, QueryResult):
                 self._last_result = event
-                # After the turn completes, maybe spawn a background memory
-                # review (Task 5 — self-improving learning loop). Non-blocking,
-                # best-effort, runs in a daemon thread.
+                # After the turn completes, maybe spawn a background memory +
+                # skill review (Task 5 — self-improving learning loop).
+                # Non-blocking, best-effort, runs in a daemon thread.
+                # Audit fix: skip review on interrupted turns (Hermes doesn't
+                # review interrupted turns either).
                 if self._memory is not None:
                     try:
                         from niaharness.engine.background_review import (
                             maybe_spawn_background_review,
                         )
 
+                        was_interrupted = (
+                            event.reason is not None
+                            and "interrupt" in str(event.reason).lower()
+                        )
+
                         maybe_spawn_background_review(
                             messages=self._messages,
                             api_client=self._api_client,
                             model=self._model,
-                            system_prompt=self._system_prompt,
+                            system_prompt=self._system_prompt,  # reuse for cache parity
                             memory=self._memory,
+                            was_interrupted=was_interrupted,
                         )
                     except Exception:
                         # Review is best-effort — never break the turn.

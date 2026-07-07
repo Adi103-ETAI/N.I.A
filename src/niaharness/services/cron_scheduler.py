@@ -17,13 +17,49 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import re
 import signal
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from niaharness.services import cron as cron_service
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Secret redaction (adapted from Hermes's redact_sensitive_text)
+# ---------------------------------------------------------------------------
+
+# Patterns that look like credentials. Redacted to [REDACTED] in job output.
+_SECRET_PATTERNS = [
+    # API keys (common formats)
+    (re.compile(r"sk-[a-zA-Z0-9]{20,}"), "[REDACTED:api_key]"),
+    (re.compile(r"sk-ant-[a-zA-Z0-9]{20,}"), "[REDACTED:anthropic_key]"),
+    (re.compile(r"sk-or-[a-zA-Z0-9]{20,}"), "[REDACTED:openrouter_key]"),
+    (re.compile(r"ghp_[a-zA-Z0-9]{36}"), "[REDACTED:github_token]"),
+    (re.compile(r"gho_[a-zA-Z0-9]{36}"), "[REDACTED:github_token]"),
+    # Bearer tokens
+    (re.compile(r"[Bb]earer\s+[a-zA-Z0-9._\-]{20,}"), "Bearer [REDACTED:token]"),
+    # AWS keys
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "[REDACTED:aws_key]"),
+    # Generic password assignments in env-style output
+    (re.compile(r"(?i)(password|passwd|pwd|secret|token|api_key)\s*[=:]\s*\S+"), r"\1=[REDACTED]"),
+]
+
+
+def _redact_secrets(text: str) -> str:
+    """Redact potential secrets from text before storing in history.
+
+    Adapted from Hermes Agent's redact_sensitive_text. Covers common API
+    key formats, bearer tokens, AWS keys, and password assignments.
+    """
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 # ---------------------------------------------------------------------------
 # Path helpers
@@ -220,12 +256,21 @@ async def execute_job(job: dict[str, Any]) -> dict[str, Any]:
         return entry
 
     returncode = proc.returncode if proc.returncode is not None else -1
+    stdout_str = stdout_b.decode("utf-8", errors="replace")
+    stderr_str = stderr_b.decode("utf-8", errors="replace")
+
+    # Redact potential secrets from output before storing in history
+    # (audit fix: shell stdout/stderr was stored verbatim, leaking any
+    # secrets the command happened to print).
+    stdout_str = _redact_secrets(stdout_str)
+    stderr_str = _redact_secrets(stderr_str)
+
     entry.update(
         {
             "status": "success" if returncode == 0 else "failed",
             "returncode": returncode,
-            "stdout": stdout_b.decode("utf-8", errors="replace"),
-            "stderr": stderr_b.decode("utf-8", errors="replace"),
+            "stdout": stdout_str,
+            "stderr": stderr_str,
             "finished_at": datetime.now(timezone.utc).isoformat(),
         }
     )
@@ -254,10 +299,11 @@ async def run_scheduler_loop(
 
         for job in due:
             entry = await execute_job(job)
-            append_history(entry)
-            cron_service.mark_job_run(job.get("name", ""), success=entry["status"] == "success")
 
-            # Deliver results to configured channels (email/webhook).
+            # Deliver results to configured channels (email/webhook) BEFORE
+            # appending to history, so the history entry includes delivery
+            # status. This fixes the double-append bug where the entry was
+            # appended both before and after delivery.
             delivery = job.get("delivery")
             if delivery:
                 try:
@@ -269,11 +315,24 @@ async def run_scheduler_loop(
                         result=entry,
                     )
                     entry["delivery"] = delivery_statuses
-                    # Re-append to update the history entry with delivery status.
-                    append_history(entry)
+
+                    # Track delivery errors on the job record (audit fix:
+                    # operators couldn't see if delivery succeeded).
+                    delivery_errors = [d for d in delivery_statuses if not d.get("success")]
+                    if delivery_errors:
+                        entry["delivery_error"] = "; ".join(
+                            d.get("error", "unknown") for d in delivery_errors
+                        )
                 except Exception as exc:
                     logger.warning("Delivery failed for job %s: %s", job.get("name"), exc)
                     entry["delivery_error"] = str(exc)
+
+            # Append the complete entry (with delivery status) to history ONCE.
+            append_history(entry)
+            cron_service.mark_job_run(
+                job.get("name", ""),
+                success=entry["status"] == "success",
+            )
 
         if once:
             return

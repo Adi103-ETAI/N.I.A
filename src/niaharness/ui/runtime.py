@@ -171,7 +171,16 @@ async def build_runtime(
         permission_prompt=permission_prompt,
         ask_user_prompt=ask_user_prompt,
         hook_executor=hook_executor,
-        tool_metadata={"mcp_manager": mcp_manager, "bridge_manager": bridge_manager},
+        tool_metadata={
+            "mcp_manager": mcp_manager,
+            "bridge_manager": bridge_manager,
+            # Inject api_client + model + max_tokens so delegate_task can
+            # spawn child QueryEngines (audit fix: api_client was never
+            # threaded through, making delegate_task non-functional).
+            "api_client": resolved_api_client,
+            "model": settings.model,
+            "max_tokens": settings.max_tokens,
+        },
     )
     # Restore messages from a saved session if provided
     if restore_messages:
