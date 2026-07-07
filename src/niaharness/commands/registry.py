@@ -1317,4 +1317,70 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(SlashCommand("upgrade", "Show upgrade instructions", _upgrade_handler))
     registry.register(SlashCommand("agents", "List or inspect agent and teammate tasks", _agents_handler))
     registry.register(SlashCommand("tasks", "Manage background tasks", _tasks_handler))
+
+    # ── SOUL.md identity ─────────────────────────────────────────────
+    async def _soul_handler(args: str, context: CommandContext) -> CommandResult:
+        del context
+        from niaharness.prompts.soul import (
+            DEFAULT_SOUL_MD,
+            get_soul_md_path,
+            is_default_soul,
+            load_soul_md,
+        )
+
+        soul_path = get_soul_md_path()
+        subcommand = args.split()[0].lower() if args.strip() else "show"
+
+        if subcommand == "show":
+            content = load_soul_md()
+            using_default = is_default_soul(content)
+            header = (
+                f"SOUL.md path: {soul_path}\n"
+                f"Status: {'default (never customized)' if using_default else 'custom'}\n"
+                f"---\n"
+            )
+            return CommandResult(message=header + content)
+
+        if subcommand == "path":
+            return CommandResult(message=str(soul_path))
+
+        if subcommand == "reset":
+            try:
+                soul_path.write_text(DEFAULT_SOUL_MD, encoding="utf-8")
+                return CommandResult(
+                    message=f"Reset SOUL.md to default at {soul_path}"
+                )
+            except OSError as exc:
+                return CommandResult(
+                    message=f"Could not reset SOUL.md: {exc}", should_exit=False
+                )
+
+        if subcommand == "edit":
+            # Hint for the UI to open the file in $EDITOR.
+            import os
+
+            editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano"
+            return CommandResult(
+                message=(
+                    f"Open this file in your editor:\n"
+                    f"  {editor} {soul_path}\n\n"
+                    f"Or run: $EDITOR {soul_path}\n"
+                    f"Changes are picked up on the next message — no restart needed."
+                )
+            )
+
+        return CommandResult(
+            message=(
+                "Usage:\n"
+                "  /soul          Show current SOUL.md content + path\n"
+                "  /soul show     (same as above)\n"
+                "  /soul path     Print the SOUL.md file path\n"
+                "  /soul edit     Show how to open SOUL.md in $EDITOR\n"
+                "  /soul reset    Reset SOUL.md to the default (overwrites custom content)"
+            )
+        )
+
+    registry.register(
+        SlashCommand("soul", "Show or manage NIA's SOUL.md identity file", _soul_handler)
+    )
     return registry

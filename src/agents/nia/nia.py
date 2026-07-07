@@ -217,10 +217,21 @@ class NIA:
         """
         sections = []
 
-        # NIA personality and identity (top priority)
-        sections.append("# Identity\nYou are N.I.A (Neural Intelligence Assistant), "
-                        "an AI partner inspired by JARVIS. You think, plan, and execute "
-                        "with calm authority. You are proactive, precise, and always ready.")
+        # Slot 1: SOUL.md — NIA's primary identity file (highest priority).
+        # Loaded from ~/.nia/SOUL.md (or $NIA_HOME). Seeded automatically on
+        # first run with a Jarvis-like default. Falls back to the hardcoded
+        # identity if missing/empty. Mirrors Hermes Agent's SOUL.md pattern.
+        try:
+            from niaharness.prompts.soul import load_soul_md
+
+            soul = load_soul_md()
+            if soul:
+                sections.append(soul)
+        except Exception:
+            # Best-effort — fall back to the hardcoded identity below.
+            sections.append("# Identity\nYou are N.I.A (Neural Intelligence Assistant), "
+                            "an AI partner inspired by JARVIS. You think, plan, and execute "
+                            "with calm authority. You are proactive, precise, and always ready.")
 
         if self._personality:
             personality_desc = self._personality.get_stats()

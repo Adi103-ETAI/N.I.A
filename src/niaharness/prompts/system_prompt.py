@@ -80,21 +80,56 @@ def build_system_prompt(
     custom_prompt: str | None = None,
     env: EnvironmentInfo | None = None,
     cwd: str | None = None,
+    *,
+    include_soul: bool = True,
 ) -> str:
     """Build the complete system prompt.
 
     Args:
         custom_prompt: If provided, replaces the base system prompt entirely.
+            SOUL.md is still prepended (slot #1) unless ``include_soul=False``.
         env: Pre-built EnvironmentInfo. If None, auto-detects.
         cwd: Working directory override (only used when env is None).
+        include_soul: If True (default), prepend ``~/.nia/SOUL.md`` as the
+            first slot in the system prompt. Set to False to skip SOUL.md
+            loading (e.g. for tests that need a deterministic prompt).
 
     Returns:
         The assembled system prompt string.
+
+    Layout (top → bottom, highest priority → lowest):
+
+    1. ``~/.nia/SOUL.md`` content (the agent's identity)
+    2. ``custom_prompt`` (if given) OR ``_BASE_SYSTEM_PROMPT`` (tool/safety rules)
+    3. Environment section (cwd, OS, Python, git, date)
     """
     if env is None:
         env = get_environment_info(cwd=cwd)
 
-    base = custom_prompt if custom_prompt is not None else _BASE_SYSTEM_PROMPT
-    env_section = _format_environment_section(env)
+    parts: list[str] = []
 
-    return f"{base}\n\n{env_section}"
+    # Slot 1: SOUL.md identity (highest priority).
+    if include_soul:
+        try:
+            from niaharness.prompts.soul import load_soul_md
+
+            soul = load_soul_md()
+            if soul:
+                parts.append(soul)
+        except Exception as exc:
+            # SOUL.md is best-effort — never break the system prompt over it.
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Failed to load SOUL.md: %s — continuing without identity slot", exc
+            )
+
+    # Slot 2: base prompt (custom or default).
+    base = custom_prompt if custom_prompt is not None else _BASE_SYSTEM_PROMPT
+    parts.append(base)
+
+    # Slot 3: environment section.
+    env_section = _format_environment_section(env)
+    parts.append(env_section)
+
+    return "\n\n".join(parts)
