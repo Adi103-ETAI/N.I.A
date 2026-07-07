@@ -7,6 +7,7 @@ from niaharness.tools.base import BaseTool, ToolExecutionContext, ToolRegistry, 
 from niaharness.tools.brief_tool import BriefTool
 from niaharness.tools.browser_tool import BrowserTool
 from niaharness.tools.config_tool import ConfigTool
+from niaharness.tools.computer_use_tool import ComputerUseTool
 from niaharness.tools.cron_create_tool import CronCreateTool
 from niaharness.tools.cron_delete_tool import CronDeleteTool
 from niaharness.tools.cron_list_tool import CronListTool
@@ -76,6 +77,7 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         WebFetchTool(),
         WebSearchTool(),
         ConfigTool(),
+        ComputerUseTool(),
         BriefTool(),
         SleepTool(),
         EnterWorktreeTool(),
