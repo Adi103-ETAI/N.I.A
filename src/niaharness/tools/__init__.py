@@ -29,6 +29,7 @@ from niaharness.tools.read_mcp_resource_tool import ReadMcpResourceTool
 from niaharness.tools.remote_trigger_tool import RemoteTriggerTool
 from niaharness.tools.run_code_tool import RunCodeTool
 from niaharness.tools.send_message_tool import SendMessageTool
+from niaharness.tools.session_search_tool import SessionSearchTool
 from niaharness.tools.skill_tool import SkillTool
 from niaharness.tools.skill_manage_tool import SkillManageTool
 from niaharness.tools.sleep_tool import SleepTool
@@ -67,6 +68,7 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         GrepTool(),
         SkillTool(),
         SkillManageTool(),
+        SessionSearchTool(),
         ToolSearchTool(),
         WebFetchTool(),
         WebSearchTool(),

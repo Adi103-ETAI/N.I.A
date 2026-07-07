@@ -124,6 +124,15 @@ def save_session_snapshot(
     }
 
     path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+    # Best-effort: update the FTS5 search index.  Never fails the save.
+    try:
+        from niaharness.services.session_search import index_session_on_save
+
+        index_session_on_save(payload)
+    except Exception:
+        pass
+
     return path
 
 
