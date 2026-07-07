@@ -125,8 +125,17 @@ def load_history(
     return data
 
 
+# Maximum history entries to keep (audit fix: no retention → disk fill risk).
+# Adapted from Hermes's _CRON_OUTPUT_DEFAULT_KEEP pattern.
+_MAX_HISTORY_ENTRIES = 500
+
+
 def append_history(entry: dict[str, Any]) -> None:
-    """Append a single history entry to the log."""
+    """Append a single history entry to the log with retention (audit fix).
+
+    Retains only the most recent ``_MAX_HISTORY_ENTRIES`` entries to prevent
+    unbounded disk growth on high-frequency jobs. Uses atomic write.
+    """
     path = _get_history_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     existing: list[dict[str, Any]] = []
@@ -140,7 +149,34 @@ def append_history(entry: dict[str, Any]) -> None:
     # Always stamp with timestamp if missing.
     entry.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
     existing.append(entry)
-    path.write_text(json.dumps(existing, indent=2, default=str), encoding="utf-8")
+
+    # Retention: trim to last N entries (audit fix).
+    if len(existing) > _MAX_HISTORY_ENTRIES:
+        existing = existing[-_MAX_HISTORY_ENTRIES:]
+
+    # Atomic write (adapted from save_cron_jobs pattern).
+    import os
+    import tempfile
+
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            try:
+                import fcntl
+
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                pass
+            json.dump(existing, f, indent=2, default=str)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 # ---------------------------------------------------------------------------

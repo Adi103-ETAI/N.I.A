@@ -527,31 +527,39 @@ def maybe_spawn_background_review(
     review_model = get_review_model() or model
 
     def _target():
-        try:
-            result = _run_review(
-                snapshot, api_client, review_model, system_prompt, memory
-            )
-            if result.get("error"):
-                logger.debug("Background review error: %s", result["error"])
-            elif result.get("memories_applied", 0) > 0 or result.get("skills_created") or result.get("skills_updated"):
-                # Build user-visible feedback message (audit fix: surface results).
-                parts = []
-                if result["memories_applied"] > 0:
-                    parts.append(f"{result['memories_applied']} memory item(s)")
-                if result.get("skills_created"):
-                    names = [s.get("name", "?") for s in result["skills_created"]]
-                    parts.append(f"created skill(s): {', '.join(names)}")
-                if result.get("skills_updated"):
-                    names = [s.get("name", "?") for s in result["skills_updated"]]
-                    parts.append(f"updated skill(s): {', '.join(names)}")
+        # Audit fix: silence stdout/stderr in the review thread so any
+        # print statements from the API client or tools don't leak into
+        # the main conversation's console. Thread-scoped, not process-global.
+        # Adapted from Hermes Agent's thread_scoped_silence().
+        import contextlib
+        import io
 
-                feedback = f"💾 Self-improvement review: {' · '.join(parts)}"
-                logger.info(feedback)
-                _review_state.notify_feedback(feedback)
-            else:
-                logger.debug("Background review: %s", result.get("summary", "nothing saved"))
-        except Exception as exc:
-            logger.warning("Background review thread failed: %s", exc)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                result = _run_review(
+                    snapshot, api_client, review_model, system_prompt, memory
+                )
+                if result.get("error"):
+                    logger.debug("Background review error: %s", result["error"])
+                elif result.get("memories_applied", 0) > 0 or result.get("skills_created") or result.get("skills_updated"):
+                    # Build user-visible feedback message (audit fix: surface results).
+                    parts = []
+                    if result["memories_applied"] > 0:
+                        parts.append(f"{result['memories_applied']} memory item(s)")
+                    if result.get("skills_created"):
+                        names = [s.get("name", "?") for s in result["skills_created"]]
+                        parts.append(f"created skill(s): {', '.join(names)}")
+                    if result.get("skills_updated"):
+                        names = [s.get("name", "?") for s in result["skills_updated"]]
+                        parts.append(f"updated skill(s): {', '.join(names)}")
+
+                    feedback = f"💾 Self-improvement review: {' · '.join(parts)}"
+                    logger.info(feedback)
+                    _review_state.notify_feedback(feedback)
+                else:
+                    logger.debug("Background review: %s", result.get("summary", "nothing saved"))
+            except Exception as exc:
+                logger.warning("Background review thread failed: %s", exc)
 
     thread = threading.Thread(target=_target, daemon=True, name="nia-background-review")
     _review_state.register_thread(thread)

@@ -189,10 +189,40 @@ def load_cron_jobs() -> list[dict[str, Any]]:
 
 
 def save_cron_jobs(jobs: list[dict[str, Any]]) -> None:
-    """Persist the job list to disk."""
+    """Persist the job list to disk with file locking (audit fix).
+
+    Uses fcntl.flock on Unix to prevent concurrent writes from corrupting
+    the file. Adapted from Hermes Agent's jobs.py file-locking pattern.
+    """
     path = get_cron_registry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(jobs, indent=2, default=str), encoding="utf-8")
+
+    # Atomic write: write to temp file, then rename.
+    import tempfile
+
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        import os
+
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            # File locking (Unix only — fcntl not available on Windows).
+            try:
+                import fcntl
+
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                pass  # Windows or non-Unix — no locking, best-effort.
+            json.dump(jobs, f, indent=2, default=str)
+            f.flush()
+            os.fsync(f.fileno())
+        # Atomic rename.
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def upsert_cron_job(job: dict[str, Any]) -> dict[str, Any]:
