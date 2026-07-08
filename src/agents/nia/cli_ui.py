@@ -1,16 +1,15 @@
-"""N.I.A CLI UI — medical-themed terminal interface with caduceus logo.
+"""N.I.A CLI UI — medical-themed terminal interface with Hermes caduceus.
+
+Layout (ported from Hermes Agent's hermes_cli/banner.py):
+  - Left column: golden caduceus (braille art)
+  - Right column: NIA block letters + model + built by + tools/skills
 
 Features:
-  - Golden caduceus ASCII art (medical symbol — NIA wanted to be a doctor)
-  - "NIA" name in large figlet-style text
-  - Startup screen showing model, session ID, provider, tools, skills
-  - Clean input prompt with orange accent line
+  - Hermes-style caduceus (braille art, gold/orange/bronze gradient)
+  - NIA name in block letters
+  - Two-column layout: caduceus on left, info on right
   - Flicker-free streaming output (buffered rendering)
-  - Color scheme: gold + cyan + orange on black
-
-Usage:
-    from agents.nia.cli_ui import run_interactive
-    await run_interactive(nia)
+  - Color scheme: gold + orange + bronze on black
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ import asyncio
 import os
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -29,165 +27,126 @@ from rich.text import Text
 from rich.table import Table
 from rich.rule import Rule
 from rich.align import Align
-from rich.live import Live
 from rich.theme import Theme
 
 # ---------------------------------------------------------------------------
-# Color theme — gold + cyan + orange on black (medical + tech aesthetic)
+# Color theme
 # ---------------------------------------------------------------------------
 
 NIA_THEME = Theme({
-    # Primary brand colors
-    "nia.gold": "#FFD700",        # Gold — caduceus, NIA name, headers
-    "nia.gold.dim": "#B8860B",     # Dark gold — secondary accents
-    "nia.cyan": "#00CED1",         # Cyan — tech accent, paths, URLs
-    "nia.orange": "#FF8C00",       # Orange — input line, active items
-    "nia.green": "#50FA7B",        # Green — success, tool completion
-    "nia.red": "#FF5555",          # Red — errors, tool failure
-    "nia.gray": "#6272A4",         # Gray — secondary info, hints
-    "nia.white": "#F8F8F2",        # Off-white — body text
-    "nia.purple": "#BD93F9",       # Purple — skills, special items
-    # Semantic
-    "nia.model": "#00CED1",        # Model name in cyan
-    "nia.session": "#6272A4",      # Session ID in gray
-    "nia.path": "#6272A4",         # Working directory in gray
-    "nia.tools": "#FF8C00",        # Tools count in orange
-    "nia.skills": "#BD93F9",       # Skills count in purple
+    "nia.gold": "#FFD700",
+    "nia.gold.dim": "#B8860B",
+    "nia.orange": "#FF8C00",
+    "nia.bronze": "#CD7F32",
+    "nia.cyan": "#00CED1",
+    "nia.green": "#50FA7B",
+    "nia.red": "#FF5555",
+    "nia.gray": "#6272A4",
+    "nia.white": "#F8F8F2",
+    "nia.purple": "#BD93F9",
 })
 
 console = Console(theme=NIA_THEME, force_terminal=True)
 
 # ---------------------------------------------------------------------------
-# ASCII Art — Caduceus (medical symbol) + NIA name
+# ASCII Art — Hermes caduceus (braille art, ported from hermes_cli/banner.py)
 # ---------------------------------------------------------------------------
 
-# The caduceus: two snakes winding around a winged staff.
-# Designed to look good in a terminal at 80+ columns.
-CADUCEUS = r"""
-                    .:.
-                   .' '.
-              .-.-.`     `.-.-.
-            .'     \       /     `.
-                   _\     /_
-              .-"".__\   /__.""-.
-             /    .-"  |  "-.    \
-            |   .'  .-"|`"-.  `.   |
-            |  |   |   |   |   |  |
-            |  |   |.-.|.-.|   |  |
-            |  |   |   |   |   |  |
-            |  |   |.-.|.-.|   |  |
-            |  |   |   |   |   |  |
-            |  |   |.-.|.-.|   |  |
-            |  |   |   |   |   |  |
-             \  `. |.-.|.-.| .'  /
-              `-._|____|____|_.-'
-                  |    |    |
-                  |    |    |
-                 /|    |    |\
-                / |    |    | \
-                  |____|____|
-                  \    |    /
-                   \   |   /
-                    \  |  /
-                     \ | /
-                      \|/
-                      ` '
-"""
+# Each line has a color. Gradient: bronze → orange → gold → orange → bronze → dark gold
+CADUCEUS_LINES = [
+    ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⡀⠀⣀⣀⠀⢀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#CD7F32"),
+    ("⠀⠀⠀⠀⠀⠀⢀⣠⣴⣾⣿⣿⣇⠸⣿⣿⠇⣸⣿⣿⣷⣦⣄⡀⠀⠀⠀⠀⠀⠀", "#CD7F32"),
+    ("⠀⢀⣠⣴⣶⠿⠋⣩⡿⣿⡿⠻⣿⡇⢠⡄⢸⣿⠟⢿⣿⢿⣍⠙⠿⣶⣦⣄⡀⠀", "#FFBF00"),
+    ("⠀⠀⠉⠉⠁⠶⠟⠋⠀⠉⠀⢀⣈⣁⡈⢁⣈⣁⡀⠀⠉⠀⠙⠻⠶⠈⠉⠉⠀⠀", "#FFBF00"),
+    ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣴⣿⡿⠛⢁⡈⠛⢿⣿⣦⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#FFD700"),
+    ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠿⣿⣦⣤⣈⠁⢠⣴⣿⠿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#FFD700"),
+    ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠻⢿⣿⣦⡉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#FFBF00"),
+    ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⢷⣦⣈⠛⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#FFBF00"),
+    ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣴⠦⠈⠙⠿⣦⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#CD7F32"),
+    ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⣿⣤⡈⠁⢤⣿⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#CD7F32"),
+    ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠷⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#B8860B"),
+    ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⠑⢶⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#B8860B"),
+    ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⠁⢰⡆⠈⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#B8860B"),
+    ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠳⠈⣡⠞⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#B8860B"),
+    ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#B8860B"),
+]
 
-# NIA name in large figlet-style block letters
-NIA_BANNER = r"""
-  ███╗   ██╗ █████╗ ███████╗
-  ████╗  ██║██╔══██╗██╔════╝
-  ██╔██╗ ██║███████║███████╗
-  ██║╚██╗██║██╔══██║╚════██║
-  ██║ ╚████║██║  ██║███████║
-  ╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝
-"""
-
-# Compact NIA for smaller terminals
-NIA_COMPACT = "N.I.A"
+# NIA in block letters (same style as Hermes HERMES_AGENT_LOGO)
+NIA_LOGO_LINES = [
+    ("██╗  ██╗███████╗██████╗ ███╗   ███╗███████╗███████╗", "#FFD700"),
+    ("██║  ██║██╔════╝██╔══██╗████╗ ████║██╔════╝██╔════╝", "#FFD700"),
+    ("███████║█████╗  ██████╔╝██╔████╔██║█████╗  ███████╗", "#FFBF00"),
+    ("██╔══██║██╔══╝  ██╔══██╗██║╚██╔╝██║██╔══╝  ╚════██║", "#FFBF00"),
+    ("██║  ██║███████╗██║  ██║██║ ╚═╝ ██║███████╗███████║", "#CD7F32"),
+    ("╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚══════╝", "#CD7F32"),
+]
 
 
-def render_banner() -> Text:
-    """Render the startup banner: caduceus + NIA name + tagline."""
-    parts = []
-
-    # Caduceus in gold
-    caduceus = Text(CADUCEUS, style="nia.gold")
-    parts.append(Align.center(caduceus))
-
-    # NIA name in gold
-    nia_name = Text(NIA_BANNER, style="nia.gold bold")
-    parts.append(Align.center(nia_name))
-
-    # Tagline
-    tagline = Text("Neural Intelligence Assistant", style="nia.cyan")
-    parts.append(Align.center(tagline))
-
-    subtitle = Text("Your AI partner, inspired by J.A.R.V.I.S", style="nia.gray")
-    parts.append(Align.center(subtitle))
-
-    return Group(*parts)
-
-
-def render_session_info(
-    model: str,
-    session_id: str,
-    cwd: str,
+def render_banner(
+    model: str = "",
     provider: str = "",
-    built_by: str = "Adi103-ETAI",
-) -> Panel:
-    """Render the session info panel (model, session ID, path, built by)."""
-    info = Table(show_header=False, show_edge=False, padding=(0, 1), expand=True)
-    info.add_column(style="nia.gray", no_wrap=True)
-    info.add_column(style="nia.white")
+    session_id: str = "",
+    cwd: str = "",
+    tool_count: int = 0,
+    skill_count: int = 0,
+    built_by: str = "Aditya",
+    version: str = "0.1.0",
+) -> Table:
+    """Render the two-column banner: caduceus on left, NIA + info on right.
 
-    info.add_row("Model:", Text(model or "unknown", style="nia.model"))
-    if provider:
-        info.add_row("Provider:", Text(provider, style="nia.cyan"))
-    info.add_row("Session:", Text(session_id, style="nia.session"))
-    info.add_row("Path:", Text(cwd, style="nia.path"))
-    info.add_row("Built by:", Text(built_by, style="nia.orange bold"))
+    Ported from Hermes Agent's build_welcome_banner() layout.
+    """
+    # Build the two-column grid layout (like Hermes Table.grid)
+    layout = Table.grid(padding=(0, 3))
+    layout.add_column(justify="center", vertical="middle")  # Left: caduceus
+    layout.add_column(justify="left", vertical="top")       # Right: NIA + info
 
-    return Panel(
-        info,
-        border_style="#B8860B",
-        title="[bold #FFD700] Session [/]",
-        title_align="left",
-        padding=(1, 2),
-    )
+    # Left column: caduceus
+    caduceus_text = Text()
+    for line, color in CADUCEUS_LINES:
+        caduceus_text.append(line + "\n", style=color)
 
+    # Right column: NIA name + model + built by + tools/skills
+    right_text = Text()
 
-def render_tools_and_skills(tool_count: int, skill_count: int) -> Panel:
-    """Render the available tools and skills summary."""
-    # Tools table
-    tools_table = Table(show_header=False, show_edge=False, padding=(0, 1), expand=True)
-    tools_table.add_column(style="nia.orange", no_wrap=True)
-    tools_table.add_column(style="nia.gray")
+    # NIA block letters
+    for line, color in NIA_LOGO_LINES:
+        right_text.append(line + "\n", style=f"bold {color}")
 
-    tools_table.add_row(
-        Text(f"  {tool_count}", style="nia.orange bold"),
-        Text("tools available", style="nia.gray"),
-    )
-    tools_table.add_row(
-        Text(f"  {skill_count}", style="nia.purple bold"),
-        Text("skills loaded", style="nia.gray"),
-    )
+    right_text.append("\n")
 
-    hints = Text(
-        "  /help for commands  ·  /model to switch  ·  /tools to list  ·  /skills to browse",
-        style="nia.gray",
-    )
+    # Model + provider
+    if model:
+        model_short = model.split("/")[-1] if "/" in model else model
+        if len(model_short) > 28:
+            model_short = model_short[:25] + "..."
+        right_text.append(model_short, style="#FFD700 bold")
+        if provider:
+            right_text.append(f" · {provider}", style="#6272A4")
+        right_text.append("\n")
 
-    content = Group(tools_table, Text(""), hints)
+    # Built by
+    right_text.append("Built by ", style="#6272A4")
+    right_text.append(built_by, style="#FF8C00 bold")
+    right_text.append(f" · v{version}", style="#6272A4")
+    right_text.append("\n\n")
 
-    return Panel(
-        content,
-        border_style="#B8860B",
-        title="[bold #FFD700] Ready [/]",
-        title_align="left",
-        padding=(1, 2),
-    )
+    # Tools and skills
+    right_text.append(str(tool_count), style="#FF8C00 bold")
+    right_text.append(" tools", style="#6272A4")
+    right_text.append(" · ", style="#6272A4")
+    right_text.append(str(skill_count), style="#BD93F9 bold")
+    right_text.append(" skills", style="#6272A4")
+    right_text.append("\n\n")
+
+    # Session + path
+    if session_id:
+        right_text.append(f"Session: {session_id}\n", style="#6272A4")
+    if cwd:
+        right_text.append(f"{cwd}\n", style="#6272A4")
+
+    layout.add_row(caduceus_text, right_text)
+    return layout
 
 
 def render_startup_screen(
@@ -198,52 +157,51 @@ def render_startup_screen(
     tool_count: int = 0,
     skill_count: int = 0,
 ) -> None:
-    """Render the full startup screen."""
+    """Render the full startup screen with the two-column banner."""
     console.clear()
 
-    # Banner
-    console.print(render_banner())
+    # Two-column banner
+    console.print(render_banner(
+        model=model,
+        provider=provider,
+        session_id=session_id,
+        cwd=cwd,
+        tool_count=tool_count,
+        skill_count=skill_count,
+    ))
+
+    console.print()
+    console.print(Rule(style="#B8860B"))
     console.print()
 
-    # Divider
-    console.print(Rule(style="nia.gold.dim"))
+    # Command hints
+    hints = Text(
+        "  /help for commands  ·  /tools to list  ·  /skills to browse  ·  /model to switch  ·  Ctrl+C exit",
+        style="#6272A4",
+    )
+    console.print(hints)
     console.print()
-
-    # Session info
-    console.print(render_session_info(model, session_id, cwd, provider))
-    console.print()
-
-    # Tools and skills
-    console.print(render_tools_and_skills(tool_count, skill_count))
-    console.print()
-
-    # Input hint
-    console.print(Text("  Type your message below. Press Enter to send.", style="nia.gray"))
+    console.print(Text("  Type your message below. Press Enter to send.", style="#6272A4"))
     console.print()
 
 
 def render_input_prompt() -> None:
     """Render the input prompt area with orange accent line."""
-    console.print(Rule(style="nia.orange"))
-    console.print(Text("> ", style="nia.orange bold"), end="")
+    console.print(Rule(style="#FF8C00"))
+    console.print(Text("> ", style="#FF8C00 bold"), end="")
 
 
 def render_tool_start(tool_name: str) -> None:
     """Render a tool execution start indicator."""
-    console.print(Text(f"  ⚡ {tool_name}", style="nia.orange"), end="")
+    console.print(Text(f"  ⚡ {tool_name}", style="#FF8C00"), end="")
 
 
 def render_tool_complete(tool_name: str, is_error: bool = False) -> None:
     """Render a tool execution completion indicator."""
     if is_error:
-        console.print(Text(f" ✗", style="nia.red"))
+        console.print(Text(" ✗", style="#FF5555"))
     else:
-        console.print(Text(f" ✓", style="nia.green"))
-
-
-def render_assistant_text(text: str) -> None:
-    """Render assistant text (non-streaming, for complete responses)."""
-    console.print(Text(text, style="nia.white"))
+        console.print(Text(" ✓", style="#50FA7B"))
 
 
 class StreamingRenderer:
@@ -257,13 +215,11 @@ class StreamingRenderer:
     def __init__(self) -> None:
         self._buffer: list[str] = []
         self._last_flush = time.monotonic()
-        self._flush_interval = 0.05  # 50ms — smooth but not too frequent
-        self._total_text = ""
+        self._flush_interval = 0.05  # 50ms
 
     def add_text(self, text: str) -> None:
         """Add text to the buffer and flush if needed."""
         self._buffer.append(text)
-        self._total_text += text
         now = time.monotonic()
         if now - self._last_flush >= self._flush_interval:
             self._flush()
@@ -274,7 +230,6 @@ class StreamingRenderer:
             return
         text = "".join(self._buffer)
         self._buffer.clear()
-        # Use plain stdout write — no rich formatting to avoid flicker.
         sys.stdout.write(text)
         sys.stdout.flush()
         self._last_flush = time.monotonic()
@@ -286,22 +241,13 @@ class StreamingRenderer:
         sys.stdout.flush()
 
 
-def render_thinking_indicator() -> None:
-    """Render a subtle thinking indicator (non-flickering).
-
-    Uses a simple dot animation that doesn't clear the screen.
-    """
-    sys.stdout.write(Text("  thinking", style="nia.gray").__str__())
-    sys.stdout.flush()
-
-
 # ---------------------------------------------------------------------------
 # Interactive REPL
 # ---------------------------------------------------------------------------
 
 
 async def run_interactive(nia) -> None:
-    """Run the interactive REPL with the new NIA UI.
+    """Run the interactive REPL with the NIA UI.
 
     Args:
         nia: An initialized NIA instance.
@@ -313,13 +259,12 @@ async def run_interactive(nia) -> None:
         ToolExecutionCompleted,
     )
 
-    # Gather session info for the startup screen.
+    # Gather session info
     model = nia.engine._model if nia.engine else "unknown"
     session_id = nia.engine._session_id if nia.engine else "unknown"
     cwd = nia._working_directory
     provider = ""
 
-    # Try to get provider name.
     try:
         from niaharness.api.provider import detect_provider
         from niaharness.config.settings import load_settings
@@ -328,7 +273,7 @@ async def run_interactive(nia) -> None:
     except Exception:
         pass
 
-    # Count tools and skills.
+    # Count tools and skills
     tool_count = 0
     skill_count = 0
     try:
@@ -341,7 +286,7 @@ async def run_interactive(nia) -> None:
     except Exception:
         pass
 
-    # Render the startup screen.
+    # Render startup screen
     render_startup_screen(
         model=model,
         session_id=session_id,
@@ -351,45 +296,42 @@ async def run_interactive(nia) -> None:
         skill_count=skill_count,
     )
 
-    # Interactive loop.
+    # Interactive loop
     while True:
         try:
-            # Input prompt with orange accent line.
             render_input_prompt()
             user_input = input().strip()
         except (KeyboardInterrupt, EOFError):
-            console.print(Text("\n  Goodbye.", style="nia.gold"))
+            console.print(Text("\n  Goodbye.", style="#FFD700"))
             break
 
         if not user_input:
             continue
 
-        # Handle slash commands.
+        # Handle slash commands
         if user_input.startswith("/"):
             if user_input.lower() in ("/exit", "/quit", "exit", "quit"):
-                console.print(Text("  Goodbye.", style="nia.gold"))
+                console.print(Text("  Goodbye.", style="#FFD700"))
                 break
-            # Other slash commands — pass to the command registry if available.
-            # For now, just show a hint.
             if user_input.lower() in ("/help", "/h"):
-                console.print(Text("\n  Commands:", style="nia.gold bold"))
-                console.print(Text("    /help     — Show this help", style="nia.gray"))
-                console.print(Text("    /tools    — List available tools", style="nia.gray"))
-                console.print(Text("    /skills   — List available skills", style="nia.gray"))
-                console.print(Text("    /model    — Show or switch model", style="nia.gray"))
-                console.print(Text("    /insights — Show usage analytics", style="nia.gray"))
-                console.print(Text("    /profile  — Manage profiles", style="nia.gray"))
-                console.print(Text("    /oauth    — Anthropic OAuth login", style="nia.gray"))
-                console.print(Text("    /soul     — Edit NIA's identity", style="nia.gray"))
-                console.print(Text("    /exit     — Quit NIA\n", style="nia.gray"))
+                console.print(Text("\n  Commands:", style="#FFD700 bold"))
+                console.print(Text("    /help     — Show this help", style="#6272A4"))
+                console.print(Text("    /tools    — List available tools", style="#6272A4"))
+                console.print(Text("    /skills   — List available skills", style="#6272A4"))
+                console.print(Text("    /model    — Show or switch model", style="#6272A4"))
+                console.print(Text("    /insights — Show usage analytics", style="#6272A4"))
+                console.print(Text("    /profile  — Manage profiles", style="#6272A4"))
+                console.print(Text("    /oauth    — Anthropic OAuth login", style="#6272A4"))
+                console.print(Text("    /soul     — Edit NIA's identity", style="#6272A4"))
+                console.print(Text("    /exit     — Quit NIA\n", style="#6272A4"))
                 continue
             if user_input.lower() in ("/tools", "/t"):
                 try:
                     tools = sorted(nia.engine._tool_registry._tools.keys())
-                    console.print(Text(f"\n  Available tools ({len(tools)}):", style="nia.orange bold"))
+                    console.print(Text(f"\n  Available tools ({len(tools)}):", style="#FF8C00 bold"))
                     for i in range(0, len(tools), 4):
                         row = tools[i:i+4]
-                        console.print(Text("    " + "  ".join(f"{t:<20}" for t in row), style="nia.white"))
+                        console.print(Text("    " + "  ".join(f"{t:<20}" for t in row), style="#F8F8F2"))
                     console.print()
                 except Exception:
                     pass
@@ -398,15 +340,15 @@ async def run_interactive(nia) -> None:
                 try:
                     from niaharness.tools.skills_loader import load_skill_registry
                     skills = sorted(load_skill_registry().list_skills(), key=lambda s: s.name)
-                    console.print(Text(f"\n  Available skills ({len(skills)}):", style="nia.purple bold"))
+                    console.print(Text(f"\n  Available skills ({len(skills)}):", style="#BD93F9 bold"))
                     for s in skills:
-                        console.print(Text(f"    {s.name:<30} {s.description[:50]}", style="nia.white"))
+                        console.print(Text(f"    {s.name:<30} {s.description[:50]}", style="#F8F8F2"))
                     console.print()
                 except Exception:
                     pass
                 continue
 
-        # Send message to NIA and stream the response.
+        # Send message to NIA and stream the response
         try:
             renderer = StreamingRenderer()
             async for event in nia.chat(user_input):
@@ -425,20 +367,18 @@ async def run_interactive(nia) -> None:
             sys.stdout.write("\n")
             sys.stdout.flush()
         except KeyboardInterrupt:
-            console.print(Text("\n  [interrupted]", style="nia.orange"))
+            console.print(Text("\n  [interrupted]", style="#FF8C00"))
         except Exception as exc:
-            console.print(Text(f"\n  [error: {exc}]", style="nia.red"))
+            console.print(Text(f"\n  [error: {exc}]", style="#FF5555"))
 
 
 __all__ = [
-    "CADUCEUS",
-    "NIA_BANNER",
+    "CADUCEUS_LINES",
+    "NIA_LOGO_LINES",
     "NIA_THEME",
     "StreamingRenderer",
     "render_banner",
     "render_input_prompt",
     "render_startup_screen",
-    "render_tools_and_skills",
-    "render_session_info",
     "run_interactive",
 ]
