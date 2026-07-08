@@ -28,7 +28,6 @@ from niaharness.tools.list_mcp_resources_tool import ListMcpResourcesTool
 from niaharness.tools.lsp_tool import LspTool
 from niaharness.tools.mcp_auth_tool import McpAuthTool
 from niaharness.tools.mcp_tool import McpToolAdapter
-from niaharness.tools.memory_tool import MemoryBatchedTool
 from niaharness.tools.notebook_edit_tool import NotebookEditTool
 from niaharness.tools.process_tool import ProcessTool
 from niaharness.tools.cronjob_tool import CronjobTool
@@ -116,7 +115,6 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         TeamCreateTool(),
         TeamDeleteTool(),
         NiaMemoryTool(),
-        MemoryBatchedTool(),
         NiaContextTool(),
         NiaVoiceTool(),
         NiaSessionTool(),
