@@ -48,7 +48,7 @@ class TestCreate:
         )
         assert result.is_error is False
         assert "Created skill 'my-skill'" in result.output
-        path = isolated_skills_dir / "my-skill.md"
+        path = isolated_skills_dir / "my-skill" / "SKILL.md"
         assert path.exists()
         content = path.read_text(encoding="utf-8")
         assert content.startswith("---")
@@ -79,7 +79,7 @@ Do the thing.
             context,
         )
         assert result.is_error is False
-        path = isolated_skills_dir / "custom-skill.md"
+        path = isolated_skills_dir / "custom-skill" / "SKILL.md"
         assert path.exists()
         assert path.read_text(encoding="utf-8").strip() == full_content.strip()
 
@@ -88,7 +88,7 @@ Do the thing.
         self, isolated_skills_dir: Path, context: ToolExecutionContext
     ):
         # Pre-create the skill.
-        (isolated_skills_dir / "exists.md").write_text("---\nname: exists\ndescription: x\n---\nbody", encoding="utf-8")
+        import shutil; shutil.rmtree(isolated_skills_dir, ignore_errors=True); isolated_skills_dir.mkdir(parents=True, exist_ok=True); (isolated_skills_dir / "exists").mkdir(parents=True, exist_ok=True); (isolated_skills_dir / "exists" / "SKILL.md").write_text("---\nname: exists\ndescription: x\n---\nbody", encoding="utf-8")
 
         result = await SkillManageTool().execute(
             SkillManageToolInput(
@@ -178,7 +178,8 @@ class TestUpdate:
         self, isolated_skills_dir: Path, context: ToolExecutionContext
     ):
         # Pre-create.
-        path = isolated_skills_dir / "upd.md"
+        path = isolated_skills_dir / "upd" / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("---\nname: upd\ndescription: old\n---\nold body", encoding="utf-8")
 
         result = await SkillManageTool().execute(
@@ -222,7 +223,8 @@ class TestEdit:
     async def test_edit_first_occurrence(
         self, isolated_skills_dir: Path, context: ToolExecutionContext
     ):
-        path = isolated_skills_dir / "edit.md"
+        path = isolated_skills_dir / "edit" / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("---\nname: edit\ndescription: d\n---\nfoo bar foo bar", encoding="utf-8")
 
         result = await SkillManageTool().execute(
@@ -242,7 +244,8 @@ class TestEdit:
     async def test_edit_replace_all(
         self, isolated_skills_dir: Path, context: ToolExecutionContext
     ):
-        path = isolated_skills_dir / "editall.md"
+        path = isolated_skills_dir / "editall" / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("---\nname: editall\ndescription: d\n---\nfoo bar foo bar", encoding="utf-8")
 
         result = await SkillManageTool().execute(
@@ -263,7 +266,8 @@ class TestEdit:
     async def test_edit_string_not_found(
         self, isolated_skills_dir: Path, context: ToolExecutionContext
     ):
-        path = isolated_skills_dir / "notfound.md"
+        path = isolated_skills_dir / "notfound" / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("---\nname: notfound\ndescription: d\n---\nhello world", encoding="utf-8")
 
         result = await SkillManageTool().execute(
@@ -282,7 +286,8 @@ class TestEdit:
     async def test_edit_same_old_new(
         self, isolated_skills_dir: Path, context: ToolExecutionContext
     ):
-        path = isolated_skills_dir / "same.md"
+        path = isolated_skills_dir / "same" / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("---\nname: same\ndescription: d\n---\nbody", encoding="utf-8")
 
         result = await SkillManageTool().execute(
@@ -308,7 +313,8 @@ class TestDelete:
     async def test_delete_user_skill(
         self, isolated_skills_dir: Path, context: ToolExecutionContext
     ):
-        path = isolated_skills_dir / "del.md"
+        path = isolated_skills_dir / "del" / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("---\nname: del\ndescription: d\n---\nbody", encoding="utf-8")
         assert path.exists()
 
@@ -342,7 +348,7 @@ class TestListInfo:
         self, isolated_skills_dir: Path, context: ToolExecutionContext
     ):
         # Add a user skill.
-        (isolated_skills_dir / "user-skill.md").write_text(
+        import shutil; shutil.rmtree(isolated_skills_dir, ignore_errors=True); isolated_skills_dir.mkdir(parents=True, exist_ok=True); (isolated_skills_dir / "exists").mkdir(parents=True, exist_ok=True); (isolated_skills_dir / "exists" / "SKILL.md").write_text(
             "---\nname: user-skill\ndescription: A user skill.\n---\nbody", encoding="utf-8"
         )
 
@@ -359,7 +365,7 @@ class TestListInfo:
     async def test_info_shows_metadata(
         self, isolated_skills_dir: Path, context: ToolExecutionContext
     ):
-        (isolated_skills_dir / "info-test.md").write_text(
+        import shutil; shutil.rmtree(isolated_skills_dir, ignore_errors=True); isolated_skills_dir.mkdir(parents=True, exist_ok=True); (isolated_skills_dir / "exists").mkdir(parents=True, exist_ok=True); (isolated_skills_dir / "exists" / "SKILL.md").write_text(
             "---\nname: info-test\ndescription: Info test skill.\n---\n## Body\nContent here.",
             encoding="utf-8",
         )

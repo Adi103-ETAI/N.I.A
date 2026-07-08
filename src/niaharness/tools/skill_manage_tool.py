@@ -181,8 +181,17 @@ def _validate_frontmatter(content: str) -> str | None:
 
 
 def _skill_file_path(name: str) -> Path:
-    """Return the path to a user skill file."""
-    return skills_loader.get_user_skills_dir() / f"{name}.md"
+    """Return the path to a user skill's SKILL.md file.
+
+    Uses directory-based structure: <user_skills_dir>/<name>/SKILL.md
+    (mirrors Hermes's skills/<name>/SKILL.md layout).
+    """
+    return skills_loader.get_user_skills_dir() / name / "SKILL.md"
+
+
+def _skill_dir_path(name: str) -> Path:
+    """Return the directory for a user skill (references/, templates/, etc.)."""
+    return skills_loader.get_user_skills_dir() / name
 
 
 def _is_user_skill(name: str) -> bool:

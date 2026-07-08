@@ -38,20 +38,62 @@ def load_skill_registry(cwd: str | Path | None = None) -> SkillRegistry:
 
 
 def load_user_skills() -> list[SkillDefinition]:
-    """Load markdown skills from the user config directory."""
+    """Load skills from the user config directory.
+
+    Scans for directory-based skills (<name>/SKILL.md) first (mirrors
+    Hermes's structure), then falls back to flat *.md files for backward
+    compatibility.
+    """
     skills: list[SkillDefinition] = []
-    for path in sorted(get_user_skills_dir().glob("*.md")):
-        content = path.read_text(encoding="utf-8")
-        name, description = _parse_skill_markdown(path.stem, content)
-        skills.append(
-            SkillDefinition(
-                name=name,
-                description=description,
-                content=content,
-                source="user",
-                path=str(path),
+    seen_names: set[str] = set()
+    user_dir = get_user_skills_dir()
+
+    # Primary: directory-based skills (<name>/SKILL.md).
+    if user_dir.exists():
+        for skill_dir in sorted(user_dir.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                continue
+            try:
+                content = skill_md.read_text(encoding="utf-8")
+                name, description = _parse_skill_markdown(skill_dir.name, content)
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+                skills.append(
+                    SkillDefinition(
+                        name=name,
+                        description=description,
+                        content=content,
+                        source="user",
+                        path=str(skill_md),
+                    )
+                )
+            except Exception:
+                continue
+
+    # Legacy: flat *.md files (only if not already loaded by name).
+    for path in sorted(user_dir.glob("*.md")):
+        try:
+            content = path.read_text(encoding="utf-8")
+            name, description = _parse_skill_markdown(path.stem, content)
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+            skills.append(
+                SkillDefinition(
+                    name=name,
+                    description=description,
+                    content=content,
+                    source="user",
+                    path=str(path),
+                )
             )
-        )
+        except Exception:
+            continue
+
     return skills
 
 
