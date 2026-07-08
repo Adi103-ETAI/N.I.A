@@ -16,7 +16,7 @@ def test_build_backend_command_includes_flags():
         system_prompt="system",
         api_key="secret",
     )
-    assert command[:3] == [command[0], "-m", "niaharness"]
+    assert command[:3] == [command[0], "-m", "niaharness.cli"]
     assert "--backend-only" in command
     assert "--cwd" in command
     assert "--model" in command

@@ -23,7 +23,7 @@ from niaharness.tasks import get_task_manager
 from niaharness.ui.protocol import BackendEvent, FrontendRequest, TranscriptItem
 from niaharness.ui.runtime import build_runtime, close_runtime, handle_line, start_runtime
 
-_PROTOCOL_PREFIX = "OHJSON:"
+_PROTOCOL_PREFIX = "NIAJSON:"
 
 
 @dataclass(frozen=True)
