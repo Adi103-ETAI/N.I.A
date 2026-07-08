@@ -1,11 +1,29 @@
-"""N.I.A - Neural Intelligence Assistant.
+"""N.I.A — Neural Intelligence Assistant.
 
-Unified architecture: NIA is the soul (personality, reasoning, memory),
-niaharness is the body (tools, execution, permissions, hooks, swarm).
+NIA is the agent. niaharness is its runtime.
 
-NIA Brain decides WHAT to do.
-niaharness QueryEngine handles HOW to do it (tool execution, permissions, cost tracking).
-NIA Personality formats HOW it speaks.
+NIA owns: identity (SOUL.md), memory, personality, proactive review.
+niaharness owns: tool execution (57 tools), permissions, hooks, MCP, cost tracking.
+
+There is ONE LLM call per turn — the QueryEngine's. NIA does not make a
+separate "thinking" LLM call. The LLM IS the brain. This mirrors Hermes's
+AIAgent architecture (one class, no separate brain).
+
+Architecture:
+┌─────────────────────────────────────────────────┐
+│                   N.I.A (agent)                  │
+│  ┌──────────┐ ┌──────────┐ ┌────────────────┐   │
+│  │ Memory   │ │ Context  │ │ Personality    │   │
+│  │ (file)   │ │ (env)    │ │ (SOUL.md tone) │   │
+│  └──────────┘ └──────────┘ └────────────────┘   │
+│  ┌──────────────────────────────────────────┐   │
+│  │ QueryEngine (niaharness — the runtime)   │   │
+│  │  • LLM call (THE brain)                  │   │
+│  │  • Tool execution (57 tools)             │   │
+│  │  • Permissions, hooks, MCP               │   │
+│  │  • Background review (proactive)         │   │
+│  └──────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────┘
 """
 
 from __future__ import annotations
@@ -13,51 +31,36 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator, Optional
 
-from niaharness.config.settings import PermissionSettings, Settings
+from niaharness.config.settings import Settings
 from niaharness.engine.query_engine import QueryEngine
+from niaharness.engine.stream_events import StreamEvent
 from niaharness.hooks import HookExecutor, HookExecutionContext, HookRegistry
 from niaharness.permissions import PermissionChecker
 from niaharness.tools import create_default_tool_registry, register_nia_tools
 
-from agents.nia.core.brain import NIABrain, BrainResponse
-from agents.nia.core.personality import Personality, PersonalityConfig
 from agents.nia.core.memory import Memory
 from agents.nia.core.context import Context
-from agents.nia.communication.listener import Listener
-from agents.nia.communication.speaker import Speaker
-from agents.nia.orchestration.state import StateManager, SystemState
-from agents.nia.config import ConfigManager
-from agents.nia.providers.adapter import NIAProviderAdapter
-from agents.nia.providers.registry import ProviderRegistry
+from agents.nia.core.personality import Personality, PersonalityConfig
 
 logger = logging.getLogger(__name__)
 
 
 class NIA:
-    """N.I.A - Neural Intelligence Assistant.
+    """N.I.A — the agent. niaharness is its runtime.
 
-    Architecture (UNIFIED):
-    ┌──────────────────────────────────────────────────────┐
-    │                    N.I.A (THE SOUL)                   │
-    │  ┌──────────┐  ┌──────────┐  ┌────────────────────┐  │
-    │  │  Brain   │  │  Memory  │  │    Personality     │  │
-    │  │ (reason) │  │ (file)   │  │ (JARVIS tone)      │  │
-    │  └────┬─────┘  └──────────┘  └────────────────────┘  │
-    │       │                                               │
-    │  ┌────▼──────────────────────────────────────────┐    │
-    │  │         QueryEngine (THE BODY)                │    │
-    │  │  • Conversation loop                          │    │
-    │  │  • Tool orchestration (38+ tools)             │    │
-    │  │  • Permission checks                          │    │
-    │  │  • Pre/post hooks                             │    │
-    │  │  • Cost tracking                              │    │
-    │  │  • File state cache                           │    │
-    │  │  • Abort controller                           │    │
-    │  │  • MCP integration                            │    │
-    │  └───────────────────────────────────────────────┘    │
-    └──────────────────────────────────────────────────────┘
+    Use::
+
+        nia = NIA(working_directory="/path/to/project")
+        await nia.initialize(api_key="sk-...", model="claude-3-opus")
+        async for event in nia.chat("Read main.py and summarize it"):
+            print(event)
+        await nia.shutdown()
+
+    NIA does NOT make a separate "thinking" LLM call. The QueryEngine's
+    LLM call IS the brain. NIA's job is to own identity, memory, and
+    proactive behavior — then hand each turn to niaharness for execution.
     """
 
     def __init__(
@@ -65,368 +68,259 @@ class NIA:
         working_directory: str | None = None,
         personality_config: PersonalityConfig | None = None,
     ) -> None:
-        self._config_manager = ConfigManager()
         self._working_directory = working_directory or str(Path.cwd())
-
-        # Provider system
-        self._provider_registry = ProviderRegistry(self._config_manager)
-
-        # Core NIA systems (the soul)
-        self._brain = NIABrain()
         self._personality = Personality(personality_config)
-        self._memory = Memory(
-            storage_path=Path.home() / ".nia" / "memory.json"
-        )
+        self._memory = Memory(storage_path=Path.home() / ".nia" / "memory.json")
         self._context = Context()
-
-        # Communication
-        self._listener = Listener()
-        self._speaker = Speaker()
-
-        # Orchestration
-        self._state = StateManager()
-
-        # QueryEngine (the body) - created during initialize()
         self._engine: QueryEngine | None = None
         self._mcp_manager: Any = None
-
-        # State
+        self._hook_executor: HookExecutor | None = None
         self._initialized = False
 
-        logger.info("N.I.A initialized (unified architecture)")
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
-    async def initialize(self) -> str:
-        """Initialize N.I.A and all subsystems."""
-        self._state.system_state = SystemState.INITIALIZING
+    async def initialize(
+        self,
+        *,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        api_client: Any = None,
+        mcp_manager: Any = None,
+    ) -> str:
+        """Boot NIA. Returns the greeting string.
 
-        # Initialize provider registry
-        await self._provider_registry.initialize()
-
-        # Set up brain with active provider
-        active_provider = self._provider_registry.get_active_provider()
-        active_model = self._provider_registry.get_active_model()
-        if active_provider:
-            self._brain.set_provider(active_provider, active_model)
-
-        # Detect environment
+        Args:
+            api_key: API key (defaults to settings-resolved key).
+            model: Model name (defaults to settings model).
+            base_url: Optional base URL override.
+            api_client: Pre-built API client (skips internal client creation).
+            mcp_manager: Pre-built MCP manager (skips internal MCP connection).
+        """
+        # Load NIA's identity layer.
+        self._memory.load()
         self._context.detect_environment(self._working_directory)
 
-        # Load memory
-        self._memory.load()
+        # Resolve settings.
+        settings = Settings()
 
-        # Build the QueryEngine (the body)
-        await self._build_engine(active_provider, active_model)
-
-        # Get greeting
-        time_str = self._context.time_of_day.value
-        greeting = self._personality.greet(time_str)
-
-        # Add provider info to greeting
-        if active_provider:
-            provider_name = (
-                active_provider.config.label
-                if hasattr(active_provider, "config")
-                else "Unknown"
-            )
-            greeting += f"\nConnected to {provider_name}/{active_model or 'default model'}"
+        # Build the API client (the body's voice).
+        if api_client is not None:
+            resolved_api_client = api_client
         else:
-            greeting += self._get_setup_prompt()
+            resolved_api_client = self._build_api_client(
+                settings, api_key=api_key, base_url=base_url
+            )
 
-        self._state.system_state = SystemState.READY
-        self._initialized = True
+        # Build the MCP manager (the body's external tools).
+        if mcp_manager is not None:
+            self._mcp_manager = mcp_manager
+        else:
+            self._mcp_manager = await self._build_mcp_manager(settings)
 
-        logger.info(
-            f"N.I.A ready. Provider: "
-            f"{active_provider.config.name if active_provider and hasattr(active_provider, 'config') else 'none'}"
-        )
-        return greeting
+        # Build the tool registry (the body's hands).
+        tool_registry = create_default_tool_registry(self._mcp_manager)
 
-    async def _build_engine(
-        self,
-        active_provider: Any,
-        active_model: str | None,
-    ) -> None:
-        """Build the QueryEngine with NIA's merged system prompt."""
-        # Create the adapter: NIA provider → SupportsStreamingMessages
-        if active_provider is None:
-            logger.warning("No provider available, QueryEngine will not work")
-            return
-
-        adapter = NIAProviderAdapter(active_provider, active_model)
-
-        # MCP integration: create manager and pass to tool registry
-        mcp_manager = None
-        try:
-            from niaharness.mcp.client import McpClientManager
-            from niaharness.mcp.config import load_mcp_server_configs
-            mcp_servers = load_mcp_server_configs(Settings(), [])
-            if mcp_servers:
-                mcp_manager = McpClientManager(mcp_servers)
-                await mcp_manager.connect_all()
-                logger.info(f"MCP connected: {sum(1 for s in mcp_manager.list_statuses() if s.state == 'connected')} servers")
-        except Exception as e:
-            logger.debug(f"MCP not available: {e}")
-
-        # Create tool registry with all 38+ niaharness tools + MCP tools
-        tool_registry = create_default_tool_registry(mcp_manager)
-
-        # Wire NIA's memory, context, and engine into the NIA-specific tools
+        # Wire NIA's memory + context into the nia_memory/nia_context tools.
+        # This is the one line that makes those tools functional.
         register_nia_tools(tool_registry, self._memory, self._context, self._engine)
 
-        # Build merged system prompt: niaharness base + NIA personality + context
-        system_prompt = self._build_merged_system_prompt()
-
-        # Permission checker (niaharness handles permissions now)
-        permission_checker = PermissionChecker(PermissionSettings())
-
-        # Hook executor (niaharness handles hooks now)
-        hook_executor = HookExecutor(
+        # Build the hook executor (the body's reflexes).
+        resolved_model = model or settings.model
+        self._hook_executor = HookExecutor(
             HookRegistry(),
             HookExecutionContext(
                 cwd=Path(self._working_directory).resolve(),
-                api_client=adapter,
-                default_model=active_model or "unknown",
+                api_client=resolved_api_client,
+                default_model=resolved_model,
             ),
         )
 
-        # Store MCP manager for cleanup
-        self._mcp_manager = mcp_manager
-
-        # Create the QueryEngine
+        # Build the QueryEngine (the body — does the actual LLM + tool loop).
         self._engine = QueryEngine(
-            api_client=adapter,
+            api_client=resolved_api_client,
             tool_registry=tool_registry,
-            permission_checker=permission_checker,
+            permission_checker=PermissionChecker(settings.permission),
             cwd=self._working_directory,
-            model=active_model or "unknown",
-            system_prompt=system_prompt,
-            max_tokens=4096,
-            hook_executor=hook_executor,
-            tool_metadata={"mcp_manager": mcp_manager} if mcp_manager else None,
+            model=resolved_model,
+            system_prompt=self._build_system_prompt(),
+            max_tokens=settings.max_tokens,
+            hook_executor=self._hook_executor,
+            tool_metadata={
+                "mcp_manager": self._mcp_manager,
+                "api_client": resolved_api_client,
+                "model": resolved_model,
+                "max_tokens": settings.max_tokens,
+            },
+            memory=self._memory,  # enables background review (proactive layer)
         )
 
-        logger.info("QueryEngine built with NIA merged prompt + MCP")
+        self._initialized = True
+        logger.info(
+            "N.I.A ready. Model: %s, Tools: %d",
+            resolved_model,
+            len(tool_registry._tools) if hasattr(tool_registry, "_tools") else 0,
+        )
+        return self._greet()
 
-    def _build_merged_system_prompt(self) -> str:
-        """Build a merged system prompt: niaharness base + NIA personality + context.
+    async def chat(self, message: str) -> AsyncIterator[StreamEvent]:
+        """Send a message to NIA. Yields streaming events.
 
-        This gives the QueryEngine:
-        - niaharness's tool instructions and safety rules
-        - NIA's JARVIS personality and tone
-        - NIA's context awareness
+        This is the main entry point for a conversation turn. The
+        QueryEngine handles the LLM call + tool execution loop + background
+        review spawning. NIA does NOT make a separate "thinking" call.
+
+        Args:
+            message: The user's message.
+
+        Yields:
+            StreamEvent: Assistant text deltas, tool events, turn-complete.
         """
-        sections = []
+        if not self._initialized or self._engine is None:
+            raise RuntimeError("NIA not initialized. Call await nia.initialize() first.")
+        async for event in self._engine.submit_message(message):
+            yield event
 
-        # Slot 1: SOUL.md — NIA's primary identity file (highest priority).
-        # Loaded from ~/.nia/SOUL.md (or $NIA_HOME). Seeded automatically on
-        # first run with a Jarvis-like default. Falls back to the hardcoded
-        # identity if missing/empty. Mirrors Hermes Agent's SOUL.md pattern.
+    async def shutdown(self) -> None:
+        """Clean shutdown. Saves memory, closes MCP."""
+        self._initialized = False
         try:
-            from niaharness.prompts.soul import load_soul_md
+            self._memory.save()
+        except Exception as exc:
+            logger.warning("Memory save failed during shutdown: %s", exc)
+        if self._mcp_manager is not None:
+            try:
+                await self._mcp_manager.close()
+            except Exception as exc:
+                logger.warning("MCP close failed during shutdown: %s", exc)
 
-            soul = load_soul_md()
-            if soul:
-                sections.append(soul)
-        except Exception:
-            # Best-effort — fall back to the hardcoded identity below.
-            sections.append("# Identity\nYou are N.I.A (Neural Intelligence Assistant), "
-                            "an AI partner inspired by JARVIS. You think, plan, and execute "
-                            "with calm authority. You are proactive, precise, and always ready.")
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
 
-        if self._personality:
-            personality_desc = self._personality.get_stats()
-            sections.append(f"# Personality\nTone: Professional, confident, slightly witty. "
-                          f"Style: Direct and efficient. Voice: Calm authority. "
-                          f"When appropriate, use dry wit — never forced.")
+    @property
+    def engine(self) -> QueryEngine | None:
+        """The underlying QueryEngine (niaharness runtime)."""
+        return self._engine
 
-        # NIA's context
-        context_data = self._context.get_full_context()
-        if context_data:
-            ctx_lines = []
-            if context_data.get("time_of_day"):
-                ctx_lines.append(f"Time: {context_data['time_of_day']}")
-            if context_data.get("working_directory"):
-                ctx_lines.append(f"Working directory: {context_data['working_directory']}")
-            if context_data.get("git_branch"):
-                ctx_lines.append(f"Git branch: {context_data['git_branch']}")
-            if context_data.get("project_type"):
-                ctx_lines.append(f"Project type: {context_data['project_type']}")
-            if ctx_lines:
-                sections.append("# Environment Context\n" + "\n".join(ctx_lines))
+    @property
+    def memory(self) -> Memory:
+        return self._memory
 
-        # NIA's memory summary
-        if self._memory:
-            stats = self._memory.get_stats()
-            if stats.get("total_conversations", 0) > 0:
-                sections.append(f"# Memory\nPrevious conversations: {stats['total_conversations']}. "
-                              "Use memory to maintain continuity across sessions.")
+    @property
+    def context(self) -> Context:
+        return self._context
 
-        # niaharness base system prompt (tools, safety, instructions)
-        from niaharness.prompts.system_prompt import build_system_prompt
-        niaharness_prompt = build_system_prompt(cwd=self._working_directory)
-        sections.append(niaharness_prompt)
+    @property
+    def personality(self) -> Personality:
+        return self._personality
 
-        # NIA's tool delegation instructions
-        sections.append("# Delegation\n"
-                        "You are the head — you decide WHAT needs to happen. "
-                        "niaharness tools are your hands — they execute your decisions. "
-                        "Use tools precisely: specify file paths, exact content, and clear commands. "
-                        "For complex multi-step tasks, think through each step before acting.")
-
-        return "\n\n".join(sections)
-
-    def _get_setup_prompt(self) -> str:
-        """Generate first-run setup prompt."""
-        providers = self._provider_registry.list_providers()
-        lines = ["\n"]
-        lines.append("No provider configured. Let's set one up.\n")
-        lines.append("Available providers:")
-        lines.append("")
-        for i, p in enumerate(providers, 1):
-            lines.append(f"  {i}. {p.name:<20} ({p.id})")
-        lines.append("")
-        lines.append("Quick start:")
-        lines.append("  /connect anthropic api_key=sk-ant-...")
-        lines.append("  /connect openai api_key=sk-...")
-        lines.append("  /connect ollama")
-        lines.append("")
-        lines.append("Or set environment variables:")
-        lines.append("  export ANTHROPIC_API_KEY=sk-ant-...")
-        lines.append("  export OPENAI_API_KEY=sk-...")
-        return "\n".join(lines)
-
-    async def process(self, user_input: str) -> str:
-        """Process user input and return response.
-
-        Unified flow:
-        1. Listen (parse input)
-        2. Brain pre-processes (optional: intent detection for complex tasks)
-        3. QueryEngine handles conversation + tool execution (with permissions, hooks, cost)
-        4. Speak (format response with personality)
-        """
-        if not self._initialized:
-            await self.initialize()
-
-        # Handle slash commands
-        if user_input.startswith("/"):
-            from agents.nia.commands import handle_command
-            parts = user_input[1:].split()
-            command = parts[0] if parts else "help"
-            args = {}
-            for i, part in enumerate(parts[1:], 1):
-                if "=" in part:
-                    key, value = part.split("=", 1)
-                    args[key] = value
-                else:
-                    args[str(i)] = part
-                    args["0"] = part if i == 1 else args.get("0", "")
-            return await handle_command(self, command, args)
-
-        # Track activity
-        self._context.track_activity()
-        self._memory.add_conversation("user", user_input)
-
-        # 1. Listen - Parse input
-        self._listener.listen(user_input)
-
-        # 2. QueryEngine handles the conversation (tools, permissions, hooks, cost)
-        if self._engine is None:
-            return "Engine not initialized. Please run /connect to set up a provider."
-
-        response_text = ""
-        async for event in self._engine.submit_message(user_input):
-            # Collect text deltas for the final response
-            from niaharness.engine.stream_events import (
-                AssistantTextDelta,
-                AssistantTurnComplete,
-                ToolExecutionStarted,
-                ToolExecutionCompleted,
-            )
-            if isinstance(event, AssistantTextDelta):
-                response_text += event.text
-            elif isinstance(event, ToolExecutionStarted):
-                logger.info(f"Tool starting: {event.tool_name}")
-            elif isinstance(event, ToolExecutionCompleted):
-                logger.info(f"Tool completed: {event.tool_name} (error={event.is_error})")
-            elif isinstance(event, AssistantTurnComplete):
-                # Final response from the engine
-                if event.message and event.message.text:
-                    response_text = event.message.text
-
-        # 3. Speak - Format response with personality
-        if response_text:
-            spoken = self._speaker.speak(response_text)
-            response_text = spoken.text
-
-        # Store in memory
-        if response_text:
-            self._memory.add_conversation("assistant", response_text)
-
-        return response_text or "No response generated."
-
-    def switch_provider(self, provider_id: str, model: str | None = None) -> bool:
-        """Switch the active LLM provider."""
-        success = self._provider_registry.set_active(provider_id, model)
-        if success:
-            provider = self._provider_registry.get_provider(provider_id)
-            if provider:
-                self._brain.set_provider(provider, model)
-                # Rebuild the engine with the new provider
-                asyncio.create_task(self._rebuild_engine(provider, model))
-        return success
-
-    async def _rebuild_engine(self, provider: Any, model: str | None) -> None:
-        """Rebuild QueryEngine after provider switch."""
-        try:
-            await self._build_engine(provider, model)
-            logger.info("QueryEngine rebuilt after provider switch")
-        except Exception as e:
-            logger.error(f"Failed to rebuild engine: {e}")
+    @property
+    def initialized(self) -> bool:
+        return self._initialized
 
     def get_status(self) -> dict[str, Any]:
-        """Get N.I.A's current status."""
-        provider_info = {}
-        active = self._provider_registry.get_active_provider()
-        if active:
-            config = getattr(active, "config", None)
-            if config:
-                provider_info = {
-                    "id": config.name,
-                    "name": config.label,
-                    "model": self._provider_registry.get_active_model(),
-                    "configured": True,
-                }
-
-        engine_info = {}
-        if self._engine:
-            engine_info = {
-                "session_id": self._engine.session_id,
-                "total_cost_usd": self._engine.total_cost_usd,
-                "messages": len(self._engine.messages),
-                "permission_denials": len(self._engine.permission_denials),
-            }
-
+        """Return a status dict for UIs / monitoring."""
         return {
-            "state": self._state.system_state.value,
-            "provider": provider_info,
-            "brain": self._brain.get_stats(),
-            "personality": self._personality.get_stats(),
-            "memory": self._memory.get_stats(),
-            "context": self._context.get_summary(),
-            "engine": engine_info,
+            "state": "ready" if self._initialized else "uninitialized",
+            "model": self._engine._model if self._engine else None,
+            "memory": self._memory.get_stats() if self._memory else None,
+            "tools": (
+                len(self._engine._tool_registry._tools)
+                if self._engine and hasattr(self._engine._tool_registry, "_tools")
+                else 0
+            ),
+            "cwd": self._working_directory,
         }
 
-    def shutdown(self) -> None:
-        """Shutdown N.I.A gracefully."""
-        self._state.system_state = SystemState.SHUTDOWN
-        self._memory.save()
-        if self._engine:
-            self._engine.interrupt()
-        if self._mcp_manager:
-            import asyncio
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._mcp_manager.close())
-            except RuntimeError:
-                pass
-        logger.info("N.I.A shutdown complete")
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _build_api_client(
+        self, settings: Settings, *, api_key: str | None, base_url: str | None
+    ) -> Any:
+        """Build the API client (Anthropic or OpenAI-compatible)."""
+        resolved_key = api_key or settings.resolve_api_key()
+        resolved_base = base_url or settings.base_url
+
+        if getattr(settings, "api_format", "anthropic") == "openai":
+            from niaharness.api.openai_client import OpenAICompatibleClient
+
+            return OpenAICompatibleClient(api_key=resolved_key, base_url=resolved_base)
+        from niaharness.api.client import AnthropicApiClient
+
+        return AnthropicApiClient(api_key=resolved_key, base_url=resolved_base)
+
+    async def _build_mcp_manager(self, settings: Settings) -> Any:
+        """Build and connect the MCP client manager."""
+        from niaharness.mcp.client import McpClientManager
+        from niaharness.mcp.config import load_mcp_server_configs
+
+        mcp_servers = load_mcp_server_configs(settings, [])
+        manager = McpClientManager(mcp_servers)
+        try:
+            await manager.connect_all()
+        except Exception as exc:
+            logger.warning("MCP connect failed (non-fatal): %s", exc)
+        return manager
+
+    def _build_system_prompt(self) -> str:
+        """Build NIA's merged system prompt.
+
+        Layout (highest priority first):
+          1. SOUL.md (NIA's identity — loaded from ~/.nia/SOUL.md)
+          2. Personality (Jarvis tone)
+          3. Memory summary (continuity across sessions)
+          4. niaharness base (tool instructions, safety rules, environment)
+
+        SOUL.md and the niaharness base come from
+        ``niaharness.prompts.system_prompt.build_system_prompt``, which
+        already prepends SOUL.md. We inject personality + memory before it.
+        """
+        from niaharness.prompts.system_prompt import build_system_prompt
+
+        # build_system_prompt() returns: SOUL.md + base rules + environment.
+        base = build_system_prompt(cwd=self._working_directory)
+
+        # Personality block (Jarvis tone).
+        personality_block = (
+            "# Personality\n"
+            "Tone: Professional, confident, slightly witty. "
+            "Style: Direct and efficient. Voice: Calm authority.\n"
+            "When appropriate, use dry wit — never forced."
+        )
+
+        # Memory block (continuity).
+        memory_block = ""
+        try:
+            stats = self._memory.get_stats()
+            if stats.get("total_memories", 0) > 0:
+                memory_block = (
+                    f"# Memory\nYou have {stats['total_memories']} stored memories. "
+                    "Use the nia_memory tool to search and recall them."
+                )
+        except Exception:
+            pass
+
+        # Inject personality + memory BEFORE the base (which already has SOUL.md at top).
+        # build_system_prompt returns SOUL.md + base; we want SOUL.md first,
+        # then personality, then memory, then base rules.
+        # Split base into SOUL.md part and rest.
+        soul_marker = "---"
+        if soul_marker in base:
+            soul_part, _, rest = base.partition(soul_marker)
+            return f"{soul_part.strip()}\n\n---\n\n{personality_block}\n\n{memory_block}\n\n{rest}".strip()
+        return f"{personality_block}\n\n{memory_block}\n\n{base}".strip()
+
+    def _greet(self) -> str:
+        """Return NIA's greeting string."""
+        greeting = self._personality.greet(self._context.time_of_day.value)
+        if self._engine is not None:
+            greeting += f"\n\nModel: {self._engine._model}"
+        return greeting
+
+
+__all__ = ["NIA"]

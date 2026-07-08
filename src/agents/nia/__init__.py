@@ -1,7 +1,7 @@
-"""N.I.A - Neural Intelligence Assistant.
+"""N.I.A — Neural Intelligence Assistant.
 
-The head that listens, speaks, and divides tasks.
-OpenHarness is the hands that execute.
+NIA is the agent. niaharness is its runtime (tools, permissions, hooks, MCP).
+NIA owns: identity (SOUL.md), memory, personality, proactive review.
 """
 
 from __future__ import annotations
@@ -10,12 +10,11 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agents.nia.nia import NIA
-    from agents.nia.core.brain import NIABrain
     from agents.nia.core.personality import Personality
     from agents.nia.core.memory import Memory
     from agents.nia.core.context import Context
 
-__all__ = ["NIA", "NIABrain", "Personality", "Memory", "Context"]
+__all__ = ["NIA", "Personality", "Memory", "Context"]
 
 
 def get_version() -> str:

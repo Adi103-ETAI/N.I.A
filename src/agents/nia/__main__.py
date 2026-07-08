@@ -1,23 +1,32 @@
-"""N.I.A CLI - Command line interface for Neural Intelligence Assistant.
+"""N.I.A CLI — Jarvis-style entry point.
 
 Usage:
-    python -m agents.nia              # Start N.I.A with React TUI
-    python -m agents.nia --text       # Start text-only mode
-    python -m agents.nia --backend-only  # Run as backend for React frontend
+    python -m agents.nia              # Start N.I.A (interactive REPL)
+    python -m agents.nia --print "..." # Single prompt, print and exit
     python -m agents.nia --help       # Show help
+
+This is the primary entry point for NIA. It boots the NIA agent, which
+owns identity (SOUL.md), memory, and personality, and uses niaharness
+as its runtime (tools, permissions, hooks, MCP).
+
+The niaharness CLI (niaharness.cli) remains available for backward
+compatibility and power users who want the raw harness without NIA's
+identity layer.
 """
 
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 import typer
 
 app = typer.Typer(
     name="nia",
-    help="N.I.A - Neural Intelligence Assistant\n\nThe head that listens, speaks, and divides tasks.",
+    help="N.I.A — Neural Intelligence Assistant. Your Jarvis-style AI partner.",
     add_completion=False,
+    rich_markup_mode="rich",
     invoke_without_command=True,
 )
 
@@ -28,204 +37,177 @@ def main(
     cwd: str = typer.Option(
         str(Path.cwd()),
         "--cwd",
-        help="Working directory",
-    ),
-    text_mode: bool = typer.Option(
-        False,
-        "--text",
-        "-t",
-        help="Text-only mode (no React TUI)",
-    ),
-    backend_only: bool = typer.Option(
-        False,
-        "--backend-only",
-        help="Run as backend for React frontend (internal use)",
-    ),
-    provider: str | None = typer.Option(
-        None,
-        "--provider",
-        "-p",
-        help="LLM provider (anthropic, openai, ollama, etc.)",
+        help="Working directory for the session.",
     ),
     model: str | None = typer.Option(
         None,
         "--model",
         "-m",
-        help="Model to use",
+        help="Model name (e.g. 'claude-3-opus', 'gpt-4o'). Defaults to config.",
     ),
     api_key: str | None = typer.Option(
         None,
         "--api-key",
         "-k",
-        help="API key for the provider",
+        help="API key (overrides config and environment).",
     ),
     base_url: str | None = typer.Option(
         None,
         "--base-url",
-        help="Custom API base URL",
+        help="API base URL override.",
     ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Enable verbose logging",
-    ),
-    prompt: str | None = typer.Option(
+    provider: str | None = typer.Option(
         None,
-        "--prompt",
-        help="Initial prompt to send",
+        "--provider",
+        "-p",
+        help=(
+            "LLM provider (anthropic, openai, opencode, xai, perplexity, "
+            "openrouter, groq, deepseek, ollama, etc.). Use --list-providers."
+        ),
+    ),
+    print_mode: str | None = typer.Option(
+        None,
+        "--print",
+        help="Non-interactive: print response and exit. Pass prompt as value.",
+    ),
+    list_providers: bool = typer.Option(
+        False,
+        "--list-providers",
+        help="List all available LLM providers and exit.",
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        "-d",
+        help="Enable debug logging.",
     ),
 ) -> None:
-    """Start N.I.A interactive session.
-
-    .. deprecated::
-        This entry point is deprecated. Use ``python -m niaharness`` instead,
-        which now routes through the unified ProviderRegistry (20 providers)
-        and includes the NIA personality layer (SOUL.md, Jarvis tone).
-
-        ``python -m niaharness --provider <name> --model <id>``
-    """
+    """Start N.I.A — your Jarvis-style AI assistant."""
     if ctx.invoked_subcommand is not None:
         return
 
-    import sys
-    import warnings
+    if debug:
+        import logging
+        logging.basicConfig(level=logging.DEBUG)
 
-    warnings.warn(
-        "`python -m agents.nia` is deprecated. Use `python -m niaharness` instead. "
-        "The niaharness CLI now routes through the ProviderRegistry (20 providers) "
-        "and includes the NIA personality layer. "
-        "Example: python -m niaharness --provider opencode --model opencode/gpt-4o",
-        DeprecationWarning,
-        stacklevel=2,
-    )
+    # --list-providers: delegate to niaharness's provider registry.
+    if list_providers:
+        from niaharness.providers.registry import ProviderRegistry
 
-    print(
-        "⚠ `python -m agents.nia` is deprecated.\n"
-        "  Use `python -m niaharness` instead — it now routes through the\n"
-        "  ProviderRegistry (20 providers) and includes the NIA personality layer.\n"
-        "  Try: python -m niaharness --list-providers\n"
-        "  Or:  python -m niaharness --provider opencode --model opencode/gpt-4o\n",
-        file=sys.stderr,
-    )
+        registry = ProviderRegistry()
+        registry._register_builtin_providers()
+        print(f"\nAvailable LLM providers ({len(registry._providers)} total):\n")
+        for name, prov in sorted(registry._providers.items()):
+            cfg = prov.config
+            env_vars = cfg.auth.api_key_env_vars
+            env_hint = env_vars[0] if env_vars else "(no key needed)"
+            print(f"  {name:<15} {cfg.label:<22} key: {env_hint}")
+        raise typer.Exit(0)
 
-    # Delegate to niaharness, forwarding equivalent flags.
-    nia_args = ["python", "-m", "niaharness"]
+    # If --provider was given, resolve credentials from niaharness's registry.
+    resolved_api_key = api_key
+    resolved_base_url = base_url
+    resolved_model = model
     if provider:
-        nia_args += ["--provider", provider]
-    if model:
-        nia_args += ["--model", model]
-    if api_key:
-        nia_args += ["--api-key", api_key]
-    if base_url:
-        nia_args += ["--base-url", base_url]
-    if cwd:
-        nia_args += ["--cwd", cwd]
-    if verbose:
-        nia_args += ["--debug"]
-    if prompt:
-        nia_args += ["--print", prompt]
+        from niaharness.providers.registry import ProviderRegistry as _PR
 
-    import subprocess
-    result = subprocess.run(nia_args[1:])  # skip "python"
-    sys.exit(result.returncode)
-
-
-@app.command()
-def status() -> None:
-    """Show N.I.A system status."""
-    import json
-    from agents.nia.nia import NIA
-    nia = NIA()
-    asyncio.run(nia.initialize())
-    print(json.dumps(nia.get_status(), indent=2))
-    nia.shutdown()
-
-
-@app.command()
-def greet(
-    time: str = typer.Option(
-        None,
-        "--time",
-        help="Time of day (morning, afternoon, evening, night)",
-    ),
-) -> None:
-    """Get a greeting from N.I.A."""
-    from agents.nia.core.personality import Personality
-    personality = Personality()
-    print(personality.greet(time or "afternoon"))
-
-
-async def _run_tui(
-    cwd: str,
-    provider: str | None,
-    model: str | None,
-    api_key: str | None,
-    base_url: str | None,
-    prompt: str | None,
-) -> None:
-    """Run N.I.A with the React terminal UI."""
-    from agents.nia.ui.launcher import launch_nia_tui
-
-    exit_code = await launch_nia_tui(
-        prompt=prompt,
-        cwd=cwd,
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-    )
-    if exit_code != 0:
-        raise SystemExit(exit_code)
-
-
-async def _run_backend(
-    cwd: str,
-    provider: str | None,
-    model: str | None,
-    api_key: str | None,
-    base_url: str | None,
-) -> None:
-    """Run N.I.A as a backend for the React frontend."""
-    from agents.nia.ui.backend_host import BackendHostConfig, run_nia_backend
-
-    config = BackendHostConfig(
-        working_directory=cwd,
-        provider=provider or "",
-        model=model or "",
-        api_key=api_key or "",
-        base_url=base_url or "",
-    )
-    await run_nia_backend(config)
-
-
-async def _run_interactive(cwd: str) -> None:
-    """Run N.I.A in text-only interactive mode."""
-    from agents.nia.nia import NIA
-
-    nia = NIA(working_directory=cwd)
-    greeting = await nia.initialize()
-    print(f"\n{greeting}\n")
-    print("Type 'exit' or 'quit' to leave.\n")
-
-    while True:
+        _reg = _PR()
+        _reg._register_builtin_providers()
+        _prov = _reg.get_provider(provider)
+        if _prov is None:
+            print(
+                f"Unknown provider: {provider!r}. Use --list-providers to see options.",
+                file=sys.stderr,
+            )
+            raise typer.Exit(1)
+        _cfg = _prov.config
         try:
-            user_input = input("You: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nShutting down N.I.A...")
-            break
+            resolved_api_key = _prov.resolve_api_key(api_key)
+        except Exception:
+            resolved_api_key = api_key
+        resolved_base_url = base_url or _prov.resolve_base_url()
+        resolved_model = model or _cfg.auth.default_model
+        if not resolved_api_key:
+            env_hint = _cfg.auth.api_key_env_vars[0] if _cfg.auth.api_key_env_vars else "(none)"
+            print(
+                f"Provider {provider!r} requires an API key. Set {env_hint} env var or use --api-key.",
+                file=sys.stderr,
+            )
+            raise typer.Exit(1)
 
-        if not user_input:
-            continue
+    # Boot NIA.
+    from agents.nia.nia import NIA
+    from niaharness.engine.stream_events import (
+        AssistantTextDelta,
+        AssistantTurnComplete,
+        ToolExecutionStarted,
+        ToolExecutionCompleted,
+    )
 
-        if user_input.lower() in ("exit", "quit", "bye"):
-            print("\nN.I.A: Goodbye. All systems secured.")
-            break
+    async def run() -> int:
+        nia = NIA(working_directory=cwd)
+        try:
+            greeting = await nia.initialize(
+                api_key=resolved_api_key,
+                model=resolved_model,
+                base_url=resolved_base_url,
+            )
+        except Exception as exc:
+            print(f"Failed to initialize N.I.A: {exc}", file=sys.stderr)
+            return 1
 
-        response = await nia.process(user_input)
-        print(f"\nN.I.A: {response}\n")
+        if print_mode is not None:
+            # Non-interactive mode: print response and exit.
+            prompt = print_mode.strip()
+            if not prompt:
+                print("Error: --print requires a prompt value.", file=sys.stderr)
+                return 1
+            try:
+                async for event in nia.chat(prompt):
+                    if isinstance(event, AssistantTextDelta):
+                        sys.stdout.write(event.text)
+                        sys.stdout.flush()
+                    elif isinstance(event, AssistantTurnComplete):
+                        sys.stdout.write("\n")
+                return 0
+            finally:
+                await nia.shutdown()
+        else:
+            # Interactive REPL.
+            print(greeting)
+            print("\nType your message. Type 'exit' or '/exit' to quit.\n")
+            while True:
+                try:
+                    user_input = input("\n> ").strip()
+                except (KeyboardInterrupt, EOFError):
+                    print("\nGoodbye.")
+                    break
+                if not user_input:
+                    continue
+                if user_input.lower() in ("exit", "quit", "/exit", "/quit"):
+                    break
+                try:
+                    async for event in nia.chat(user_input):
+                        if isinstance(event, AssistantTextDelta):
+                            sys.stdout.write(event.text)
+                            sys.stdout.flush()
+                        elif isinstance(event, ToolExecutionStarted):
+                            print(f"\n[tool: {event.tool_name}]", end="", flush=True)
+                        elif isinstance(event, ToolExecutionCompleted):
+                            status = "✓" if not event.is_error else "✗"
+                            print(f" {status}", end="", flush=True)
+                        elif isinstance(event, AssistantTurnComplete):
+                            print("\n")
+                except KeyboardInterrupt:
+                    print("\n[interrupted]")
+                except Exception as exc:
+                    print(f"\n[error: {exc}]", file=sys.stderr)
+            await nia.shutdown()
+            return 0
 
-    nia.shutdown()
+    exit_code = asyncio.run(run())
+    if exit_code != 0:
+        raise typer.Exit(exit_code)
 
 
 if __name__ == "__main__":
