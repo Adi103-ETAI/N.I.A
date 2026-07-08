@@ -24,14 +24,14 @@ const CADUCEUS_LINES: {text: string; color: string}[] = [
         {text: '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀', color: '#B8860B'},
 ];
 
-// NIA in block letters — spells "N.I.A"
+// NIA in block letters — N (two pillars + diagonal), I (bar), A (triangle + crossbar)
 const NIA_LOGO: {text: string; color: string}[] = [
-        {text: '███╗   ██╗ █████╗ ███████╗', color: '#FFD700'},
-        {text: '████╗  ██║██╔══██╗██╔════╝', color: '#FFD700'},
-        {text: '██╔██╗ ██║███████║███████╗', color: '#FFBF00'},
-        {text: '██║╚██╗██║██╔══██║╚════██║', color: '#FFBF00'},
-        {text: '██║ ╚████║██║  ██║███████║', color: '#CD7F32'},
-        {text: '╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝', color: '#CD7F32'},
+        {text: '██╗  ██╗ ██╗ ██████╗', color: '#FFD700'},
+        {text: '██║  ██║ ██║ ██╔══██╗', color: '#FFD700'},
+        {text: '██╔████║ ██║ ███████║', color: '#FFBF00'},
+        {text: '██║╚███║ ██║ ██╔══██║', color: '#FFBF00'},
+        {text: '██║ ╚██║ ██║ ██║  ██║', color: '#CD7F32'},
+        {text: '╚═╝  ╚═╝ ╚═╝ ╚═╝  ╚═╝', color: '#CD7F32'},
 ];
 
 interface WelcomeBannerProps {
