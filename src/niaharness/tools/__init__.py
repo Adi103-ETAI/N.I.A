@@ -14,6 +14,7 @@ from niaharness.tools.cron_list_tool import CronListTool
 from niaharness.tools.cron_toggle_tool import CronToggleTool
 from niaharness.tools.delegate_task_tool import DelegateTaskTool
 from niaharness.tools.enter_plan_mode_tool import EnterPlanModeTool
+from niaharness.tools.execute_code_tool import ExecuteCodeTool
 from niaharness.tools.enter_worktree_tool import EnterWorktreeTool
 from niaharness.tools.exit_plan_mode_tool import ExitPlanModeTool
 from niaharness.tools.exit_worktree_tool import ExitWorktreeTool
@@ -39,6 +40,8 @@ from niaharness.tools.session_search_tool import SessionSearchTool
 from niaharness.tools.skill_tool import SkillTool
 from niaharness.tools.skill_hub_tool import SkillHubTool
 from niaharness.tools.skill_manage_tool import SkillManageTool
+from niaharness.tools.skill_view_tool import SkillViewTool
+from niaharness.tools.skills_list_tool import SkillsListTool
 from niaharness.tools.sleep_tool import SleepTool
 from niaharness.tools.speak_tool import SpeakTool
 from niaharness.tools.task_create_tool import TaskCreateTool
@@ -78,6 +81,8 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         SkillTool(),
         SkillManageTool(),
         SkillHubTool(),
+        SkillViewTool(),
+        SkillsListTool(),
         SessionSearchTool(),
         ToolSearchTool(),
         VisionAnalyzeTool(),
@@ -120,6 +125,7 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         BrowserTool(),
         RunCodeTool(),
         SpeakTool(),
+        ExecuteCodeTool(),
     ):
         registry.register(tool)
     if mcp_manager is not None:

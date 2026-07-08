@@ -1,4 +1,12 @@
-"""Permission checking for tool execution."""
+"""Permission checking for tool execution.
+
+Enhanced with shell hardening (deobfuscation + hardline blocklist +
+dangerous patterns) from ``niaharness.permissions.shell_hardening``.
+Shell commands are normalized before pattern matching so that
+obfuscation techniques (backslash-escapes, empty-string splits, $IFS
+expansions, line continuations, Unicode fullwidth) cannot bypass
+detection.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +15,11 @@ from dataclasses import dataclass
 
 from niaharness.config.settings import PermissionSettings
 from niaharness.permissions.modes import PermissionMode
+from niaharness.permissions.shell_hardening import (
+    ShellHardeningDecision,
+    append_permission_audit_log,
+    check_command,
+)
 
 
 @dataclass(frozen=True)
@@ -16,6 +29,7 @@ class PermissionDecision:
     allowed: bool
     requires_confirmation: bool = False
     reason: str = ""
+    category: str = "ok"  # ok | hardline | sudo_stdin | user_deny | dangerous | denied_tool | path_rule
 
 
 @dataclass(frozen=True)
@@ -68,16 +82,56 @@ class PermissionChecker:
 
         # Check command deny patterns (e.g. deny "rm -rf /")
         if command:
+            # First, run the shell hardening check (deobfuscation + hardline
+            # blocklist + dangerous patterns + sudo stdin guard). This is the
+            # primary security gate — it catches obfuscated commands that
+            # fnmatch on the raw string would miss (r\m, r''m, rm${IFS}, etc.).
+            user_deny_patterns = list(getattr(self._settings, "denied_commands", []))
+            full_auto = self._settings.mode == PermissionMode.FULL_AUTO
+            hardening_decision = check_command(
+                command,
+                user_deny_patterns=user_deny_patterns,
+                full_auto=full_auto,
+            )
+            if not hardening_decision.allowed:
+                # Log to the permission audit log for forensic review.
+                append_permission_audit_log(
+                    command=command,
+                    decision=hardening_decision,
+                    tool_name=tool_name,
+                )
+                return PermissionDecision(
+                    allowed=False,
+                    requires_confirmation=hardening_decision.requires_confirmation,
+                    reason=hardening_decision.reason,
+                    category=hardening_decision.category,
+                )
+            if hardening_decision.requires_confirmation:
+                # Dangerous command in non-auto mode — require confirmation.
+                append_permission_audit_log(
+                    command=command,
+                    decision=hardening_decision,
+                    tool_name=tool_name,
+                )
+                return PermissionDecision(
+                    allowed=False,
+                    requires_confirmation=True,
+                    reason=hardening_decision.reason,
+                    category=hardening_decision.category,
+                )
+
+            # Also check the legacy fnmatch patterns (for backward compat).
             for pattern in getattr(self._settings, "denied_commands", []):
                 if isinstance(pattern, str) and fnmatch.fnmatch(command, pattern):
                     return PermissionDecision(
                         allowed=False,
                         reason=f"Command matches deny pattern: {pattern}",
+                        category="user_deny",
                     )
 
-        # Full auto: allow everything
+        # Full auto: allow everything (hardline + dangerous already checked above)
         if self._settings.mode == PermissionMode.FULL_AUTO:
-            return PermissionDecision(allowed=True, reason="Auto mode allows all tools")
+            return PermissionDecision(allowed=True, reason="Auto mode allows all tools", category="ok")
 
         # Read-only tools always allowed
         if is_read_only:

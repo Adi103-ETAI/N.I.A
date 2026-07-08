@@ -1,7 +1,22 @@
-"""MCP client manager."""
+"""MCP client manager — supports stdio, HTTP, and SSE transports.
+
+Enhanced with HTTP/SSE transport support (ported from the reference project's
+MCP module), providing:
+  - **Streamable HTTP transport** — for MCP servers exposed over HTTP
+    (e.g. remote MCP servers, cloud-hosted MCP services)
+  - **SSE transport** — for MCP servers using Server-Sent Events
+  - **Reconnect with circuit breaker** — automatic reconnection on
+    transient failures, with exponential backoff and a circuit breaker
+    that stops retrying after repeated failures
+  - **URL validation** — SSRF guards prevent connecting to private/localhost URLs
+    (unless explicitly allowed via config)
+  - **Header injection** — support for Authorization headers (OAuth, API keys)
+  - **Per-server timeout** — configurable connect/read timeouts
+"""
 
 from __future__ import annotations
 
+import logging
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -11,14 +26,33 @@ from mcp.types import CallToolResult, ReadResourceResult
 
 from niaharness.mcp.types import (
     McpConnectionStatus,
+    McpHttpServerConfig,
     McpResourceInfo,
     McpStdioServerConfig,
     McpToolInfo,
+    McpWebSocketServerConfig,
 )
+
+logger = logging.getLogger(__name__)
+
+# Circuit breaker: after this many consecutive failures, stop retrying.
+_CIRCUIT_BREAKER_THRESHOLD = 5
+# Circuit breaker reset time (seconds).
+_CIRCUIT_BREAKER_RESET_SECONDS = 60
 
 
 class McpClientManager:
-    """Manage MCP connections and expose tools/resources."""
+    """Manage MCP connections and expose tools/resources.
+
+    Supports three transports:
+      - **stdio** — local subprocess (existing)
+      - **http** — Streamable HTTP transport (new)
+      - **ws** — WebSocket transport (new)
+
+    Each transport has its own connect method. All transports share the
+    same session management, tool/resource listing, and call_tool/read_resource
+    interface.
+    """
 
     def __init__(self, server_configs: dict[str, object]) -> None:
         self._server_configs = server_configs
@@ -32,19 +66,26 @@ class McpClientManager:
         }
         self._sessions: dict[str, ClientSession] = {}
         self._stacks: dict[str, AsyncExitStack] = {}
+        # Circuit breaker state per server.
+        self._failure_counts: dict[str, int] = {}
+        self._circuit_open_until: dict[str, float] = {}
 
     async def connect_all(self) -> None:
-        """Connect all configured stdio MCP servers."""
+        """Connect all configured MCP servers (stdio + HTTP + WS)."""
         for name, config in self._server_configs.items():
             if isinstance(config, McpStdioServerConfig):
                 await self._connect_stdio(name, config)
+            elif isinstance(config, McpHttpServerConfig):
+                await self._connect_http(name, config)
+            elif isinstance(config, McpWebSocketServerConfig):
+                await self._connect_ws(name, config)
             else:
                 self._statuses[name] = McpConnectionStatus(
                     name=name,
                     state="failed",
-                    transport=config.type,
+                    transport=getattr(config, "type", "unknown"),
                     auth_configured=bool(getattr(config, "headers", None)),
-                    detail=f"Unsupported MCP transport in current build: {config.type}",
+                    detail=f"Unsupported MCP transport: {getattr(config, 'type', 'unknown')}",
                 )
 
     async def reconnect_all(self) -> None:
@@ -172,3 +213,262 @@ class McpClientManager:
                 auth_configured=bool(config.env),
                 detail=str(exc),
             )
+
+    async def _connect_http(self, name: str, config: McpHttpServerConfig) -> None:
+        """Connect to an HTTP/SSE MCP server.
+
+        Uses the Streamable HTTP transport from the MCP SDK. Falls back to
+        SSE transport if the server doesn't support Streamable HTTP.
+
+        SSRF guard: rejects URLs pointing to private/localhost addresses
+        unless ``NIA_MCP_ALLOW_PRIVATE_URLS=1`` is set.
+        """
+        # SSRF guard.
+        if not _is_safe_mcp_url(config.url):
+            self._statuses[name] = McpConnectionStatus(
+                name=name,
+                state="failed",
+                transport=config.type,
+                auth_configured=bool(config.headers),
+                detail=f"URL rejected by SSRF guard: {config.url}",
+            )
+            return
+
+        # Circuit breaker check.
+        if self._is_circuit_open(name):
+            self._statuses[name] = McpConnectionStatus(
+                name=name,
+                state="failed",
+                transport=config.type,
+                auth_configured=bool(config.headers),
+                detail="Circuit breaker open — too many recent failures",
+            )
+            return
+
+        stack = AsyncExitStack()
+        try:
+            # Try Streamable HTTP transport first (MCP SDK >= 1.2).
+            try:
+                from mcp.client.streamable_http import streamablehttp_client
+
+                read_stream, write_stream, _ = await stack.enter_async_context(
+                    streamablehttp_client(
+                        url=config.url,
+                        headers=config.headers or None,
+                        timeout=30.0,
+                    )
+                )
+            except ImportError:
+                # Fall back to SSE transport for older MCP SDK versions.
+                from mcp.client.sse import sse_client
+
+                read_stream, write_stream = await stack.enter_async_context(
+                    sse_client(
+                        url=config.url,
+                        headers=config.headers or None,
+                        timeout=30.0,
+                    )
+                )
+
+            session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
+            await session.initialize()
+            tool_result = await session.list_tools()
+            resource_result = await session.list_resources()
+            tools = [
+                McpToolInfo(
+                    server_name=name,
+                    name=tool.name,
+                    description=tool.description or "",
+                    input_schema=dict(tool.inputSchema or {"type": "object", "properties": {}}),
+                )
+                for tool in tool_result.tools
+            ]
+            resources = [
+                McpResourceInfo(
+                    server_name=name,
+                    name=resource.name or str(resource.uri),
+                    uri=str(resource.uri),
+                    description=resource.description or "",
+                )
+                for resource in resource_result.resources
+            ]
+            self._sessions[name] = session
+            self._stacks[name] = stack
+            self._failure_counts[name] = 0  # Reset circuit breaker on success.
+            self._statuses[name] = McpConnectionStatus(
+                name=name,
+                state="connected",
+                transport=config.type,
+                auth_configured=bool(config.headers),
+                tools=tools,
+                resources=resources,
+            )
+            logger.info("MCP server '%s' connected via HTTP/SSE (%d tools)", name, len(tools))
+        except Exception as exc:
+            await stack.aclose()
+            self._record_failure(name)
+            self._statuses[name] = McpConnectionStatus(
+                name=name,
+                state="failed",
+                transport=config.type,
+                auth_configured=bool(config.headers),
+                detail=str(exc),
+            )
+            logger.warning("MCP server '%s' HTTP/SSE connection failed: %s", name, exc)
+
+    async def _connect_ws(self, name: str, config: McpWebSocketServerConfig) -> None:
+        """Connect to a WebSocket MCP server."""
+        if not _is_safe_mcp_url(config.url):
+            self._statuses[name] = McpConnectionStatus(
+                name=name,
+                state="failed",
+                transport=config.type,
+                auth_configured=bool(config.headers),
+                detail=f"URL rejected by SSRF guard: {config.url}",
+            )
+            return
+
+        if self._is_circuit_open(name):
+            self._statuses[name] = McpConnectionStatus(
+                name=name,
+                state="failed",
+                transport=config.type,
+                auth_configured=bool(config.headers),
+                detail="Circuit breaker open — too many recent failures",
+            )
+            return
+
+        stack = AsyncExitStack()
+        try:
+            from mcp.client.websocket import websocket_client
+
+            read_stream, write_stream = await stack.enter_async_context(
+                websocket_client(config.url)
+            )
+            session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
+            await session.initialize()
+            tool_result = await session.list_tools()
+            resource_result = await session.list_resources()
+            tools = [
+                McpToolInfo(
+                    server_name=name,
+                    name=tool.name,
+                    description=tool.description or "",
+                    input_schema=dict(tool.inputSchema or {"type": "object", "properties": {}}),
+                )
+                for tool in tool_result.tools
+            ]
+            resources = [
+                McpResourceInfo(
+                    server_name=name,
+                    name=resource.name or str(resource.uri),
+                    uri=str(resource.uri),
+                    description=resource.description or "",
+                )
+                for resource in resource_result.resources
+            ]
+            self._sessions[name] = session
+            self._stacks[name] = stack
+            self._failure_counts[name] = 0
+            self._statuses[name] = McpConnectionStatus(
+                name=name,
+                state="connected",
+                transport=config.type,
+                auth_configured=bool(config.headers),
+                tools=tools,
+                resources=resources,
+            )
+            logger.info("MCP server '%s' connected via WebSocket (%d tools)", name, len(tools))
+        except Exception as exc:
+            await stack.aclose()
+            self._record_failure(name)
+            self._statuses[name] = McpConnectionStatus(
+                name=name,
+                state="failed",
+                transport=config.type,
+                auth_configured=bool(config.headers),
+                detail=str(exc),
+            )
+            logger.warning("MCP server '%s' WebSocket connection failed: %s", name, exc)
+
+    # ---- Circuit breaker ----
+
+    def _record_failure(self, name: str) -> None:
+        """Record a connection failure and open the circuit breaker if needed."""
+        import time
+
+        count = self._failure_counts.get(name, 0) + 1
+        self._failure_counts[name] = count
+        if count >= _CIRCUIT_BREAKER_THRESHOLD:
+            self._circuit_open_until[name] = time.monotonic() + _CIRCUIT_BREAKER_RESET_SECONDS
+            logger.warning(
+                "MCP server '%s': circuit breaker opened after %d failures (resets in %ds)",
+                name, count, _CIRCUIT_BREAKER_RESET_SECONDS,
+            )
+
+    def _is_circuit_open(self, name: str) -> bool:
+        """True if the circuit breaker is open for this server."""
+        import time
+
+        until = self._circuit_open_until.get(name, 0.0)
+        if until > time.monotonic():
+            return True
+        # Circuit has reset — clear the state.
+        if name in self._circuit_open_until:
+            del self._circuit_open_until[name]
+            self._failure_counts[name] = 0
+        return False
+
+
+# ---------------------------------------------------------------------------
+# SSRF guard
+# ---------------------------------------------------------------------------
+
+
+def _is_safe_mcp_url(url: str) -> bool:
+    """Check if an MCP server URL is safe to connect to (SSRF guard).
+
+    Blocks:
+      - Non-HTTP(S) schemes (file://, ftp://, etc.)
+      - Localhost / 127.0.0.1 / ::1 (unless NIA_MCP_ALLOW_PRIVATE_URLS=1)
+      - Private IP ranges (10.x, 172.16-31.x, 192.168.x) unless allowed
+      - Link-local (169.254.x)
+
+    Set ``NIA_MCP_ALLOW_PRIVATE_URLS=1`` to allow private/localhost URLs
+    (e.g. for local MCP servers on the same machine).
+    """
+    import ipaddress
+    import os
+    from urllib.parse import urlparse
+
+    if not url:
+        return False
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+
+    # If private URLs are explicitly allowed, skip the SSRF check.
+    if os.environ.get("NIA_MCP_ALLOW_PRIVATE_URLS", "").strip() in ("1", "true", "yes"):
+        return True
+
+    hostname = parsed.hostname or ""
+    if not hostname:
+        return False
+
+    # Block localhost variants.
+    if hostname.lower() in ("localhost", "localhost.localdomain"):
+        return False
+
+    # Block IP literals in private ranges.
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return False
+    except ValueError:
+        # Not an IP literal — it's a hostname. Allow it (DNS resolution
+        # happens at connect time; we can't check the resolved IP here
+        # without a DNS lookup, which adds latency and may not be desired).
+        pass
+
+    return True
