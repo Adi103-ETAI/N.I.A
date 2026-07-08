@@ -35,8 +35,12 @@ def get_bundled_skills() -> list[SkillDefinition]:
     if not _BUNDLED_DIR.exists():
         return skills
 
-    # Recursively find all SKILL.md files.
+    # Recursively find all SKILL.md files, excluding the optional/ directory
+    # (optional skills are managed by the skill hub, not loaded by default).
     for skill_md in sorted(_BUNDLED_DIR.rglob("SKILL.md")):
+        # Skip skills in the optional/ directory.
+        if "optional" in skill_md.parts:
+            continue
         try:
             content = skill_md.read_text(encoding="utf-8")
             name, description = _parse_frontmatter(skill_md.parent.name, content)

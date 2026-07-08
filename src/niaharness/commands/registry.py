@@ -720,19 +720,73 @@ def create_default_command_registry() -> CommandRegistry:
         return CommandResult(message="\n".join(lines))
 
     async def _skills_handler(args: str, context: CommandContext) -> CommandResult:
-        skill_registry = load_skill_registry(context.cwd)
+        del context
+        # Subcommands: browse, search, install, uninstall
+        parts = args.split(maxsplit=1) if args else []
+        subcommand = parts[0].lower() if parts else ""
+        sub_args = parts[1] if len(parts) > 1 else ""
+
+        if subcommand == "browse":
+            from niaharness.skills.hub import list_optional_skills
+
+            skills = list_optional_skills()
+            if not skills:
+                return CommandResult(message="No optional skills available.")
+            installed = sum(1 for s in skills if s.installed)
+            lines = [f"Optional skills ({len(skills)} total, {installed} installed):", ""]
+            for s in sorted(skills, key=lambda x: (x.category, x.name)):
+                status = "✓" if s.installed else " "
+                lines.append(f"  [{status}] {s.category}/{s.name}: {s.description[:60]}")
+            lines.append("")
+            lines.append("Use: /skills install <name> to install.")
+            return CommandResult(message="\n".join(lines))
+
+        if subcommand == "search":
+            from niaharness.skills.hub import search_optional_skills
+
+            if not sub_args:
+                return CommandResult(message="Usage: /skills search <query>")
+            results = search_optional_skills(sub_args)
+            if not results:
+                return CommandResult(message=f"No skills found matching '{sub_args}'.")
+            lines = [f"Found {len(results)} skill(s):", ""]
+            for s in results:
+                status = "✓" if s.installed else " "
+                lines.append(f"  [{status}] {s.category}/{s.name}: {s.description[:60]}")
+            return CommandResult(message="\n".join(lines))
+
+        if subcommand == "install":
+            from niaharness.skills.hub import install_skill
+
+            if not sub_args:
+                return CommandResult(message="Usage: /skills install <name>")
+            success, message = install_skill(sub_args.strip())
+            return CommandResult(message=message)
+
+        if subcommand == "uninstall":
+            from niaharness.skills.hub import uninstall_skill
+
+            if not sub_args:
+                return CommandResult(message="Usage: /skills uninstall <name>")
+            success, message = uninstall_skill(sub_args.strip())
+            return CommandResult(message=message)
+
+        # Default: list installed skills (or show a specific skill).
+        skill_registry = load_skill_registry()
         if args:
-            skill = skill_registry.get(args)
+            skill = skill_registry.get(args) or skill_registry.get(args.lower())
             if skill is None:
                 return CommandResult(message=f"Skill not found: {args}")
             return CommandResult(message=skill.content)
         skills = skill_registry.list_skills()
         if not skills:
-            return CommandResult(message="No skills available.")
+            return CommandResult(message="No skills available. Use /skills browse to see optional skills.")
         lines = ["Available skills:"]
         for skill in skills:
             source = f" [{skill.source}]"
             lines.append(f"- {skill.name}{source}: {skill.description}")
+        lines.append("")
+        lines.append("Use /skills browse to see optional skills, /skills install <name> to add.")
         return CommandResult(message="\n".join(lines))
 
     async def _config_handler(args: str, context: CommandContext) -> CommandResult:

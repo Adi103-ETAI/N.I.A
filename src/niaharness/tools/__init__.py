@@ -37,6 +37,7 @@ from niaharness.tools.run_code_tool import RunCodeTool
 from niaharness.tools.send_message_tool import SendMessageTool
 from niaharness.tools.session_search_tool import SessionSearchTool
 from niaharness.tools.skill_tool import SkillTool
+from niaharness.tools.skill_hub_tool import SkillHubTool
 from niaharness.tools.skill_manage_tool import SkillManageTool
 from niaharness.tools.sleep_tool import SleepTool
 from niaharness.tools.speak_tool import SpeakTool
@@ -76,6 +77,7 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         ImageGenerateTool(),
         SkillTool(),
         SkillManageTool(),
+        SkillHubTool(),
         SessionSearchTool(),
         ToolSearchTool(),
         VisionAnalyzeTool(),
