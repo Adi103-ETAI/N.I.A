@@ -193,35 +193,10 @@ def main(
             finally:
                 await nia.shutdown()
         else:
-            # Interactive REPL.
-            print(greeting)
-            print("\nType your message. Type 'exit' or '/exit' to quit.\n")
-            while True:
-                try:
-                    user_input = input("\n> ").strip()
-                except (KeyboardInterrupt, EOFError):
-                    print("\nGoodbye.")
-                    break
-                if not user_input:
-                    continue
-                if user_input.lower() in ("exit", "quit", "/exit", "/quit"):
-                    break
-                try:
-                    async for event in nia.chat(user_input):
-                        if isinstance(event, AssistantTextDelta):
-                            sys.stdout.write(event.text)
-                            sys.stdout.flush()
-                        elif isinstance(event, ToolExecutionStarted):
-                            print(f"\n[tool: {event.tool_name}]", end="", flush=True)
-                        elif isinstance(event, ToolExecutionCompleted):
-                            status = "✓" if not event.is_error else "✗"
-                            print(f" {status}", end="", flush=True)
-                        elif isinstance(event, AssistantTurnComplete):
-                            print("\n")
-                except KeyboardInterrupt:
-                    print("\n[interrupted]")
-                except Exception as exc:
-                    print(f"\n[error: {exc}]", file=sys.stderr)
+            # Interactive REPL with the new NIA UI.
+            from agents.nia.cli_ui import run_interactive
+
+            await run_interactive(nia)
             await nia.shutdown()
             return 0
 
