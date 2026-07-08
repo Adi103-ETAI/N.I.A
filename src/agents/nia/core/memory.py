@@ -219,3 +219,64 @@ class Memory:
             "long_term_count": len(self._long_term),
             "total_memories": len(self._short_term) + len(self._long_term),
         }
+
+    def get_summary_for_prompt(self, max_entries: int = 10) -> str:
+        """Return a markdown summary of long-term memory for the system prompt.
+
+        P2 fix: unifies the two memory systems. The system prompt builder
+        can call this to inject NIA's memory (preferences, facts, patterns)
+        into the prompt, alongside the project-scoped markdown memory files
+        from ``niaharness/memory/``. This gives the model a single coherent
+        view of both global (user-level) and local (project-level) memory.
+
+        Args:
+            max_entries: Maximum number of entries to include (most recent first).
+
+        Returns:
+            A markdown-formatted string suitable for the system prompt.
+        """
+        if not self._long_term:
+            return ""
+
+        # Group by category.
+        by_category: dict[str, list[MemoryEntry]] = {}
+        for entry in self._long_term:
+            by_category.setdefault(entry.category, []).append(entry)
+
+        lines: list[str] = ["## NIA Memory (global)"]
+
+        if "preference" in by_category:
+            lines.append("\n### Preferences")
+            for entry in by_category["preference"][-5:]:  # Last 5 prefs
+                lines.append(f"- {entry.content}")
+
+        if "fact" in by_category:
+            lines.append("\n### Facts")
+            for entry in by_category["fact"][-5:]:
+                lines.append(f"- {entry.content}")
+
+        if "pattern" in by_category:
+            lines.append("\n### Patterns")
+            for entry in by_category["pattern"][-3:]:
+                lines.append(f"- {entry.content}")
+
+        return "\n".join(lines)
+
+    def export_to_markdown(self, output_path: Path) -> Path:
+        """Export long-term memory to a markdown file.
+
+        P2 fix: bridges the JSON-based Memory system to the markdown-based
+        niaharness/memory/ system. Writes a ``nia-memory.md`` file in the
+        project memory directory so both systems can be read from a single
+        location by the system prompt.
+
+        Args:
+            output_path: The path to write the markdown file to.
+
+        Returns:
+            The path that was written to.
+        """
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        content = self.get_summary_for_prompt()
+        output_path.write_text(content + "\n", encoding="utf-8")
+        return output_path

@@ -258,6 +258,20 @@ class SandboxExecutor:
         tool_calls: List[Dict[str, Any]] = []
         sandbox_globals["__tool_calls__"] = tool_calls
 
+        # P2 fix: AST-based safety validation before execution.
+        # Blocks dunder-attribute access (e.g. ().__class__.__subclasses__())
+        # that would allow sandbox escape via the classic Python introspection walk.
+        safety_error = self._validate_code_safety(code)
+        if safety_error is not None:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            return ExecutionResult(
+                success=False,
+                output="",
+                error=f"Code safety check failed: {safety_error}",
+                duration_ms=duration_ms,
+                tool_calls=tool_calls,
+            )
+
         try:
             with redirect_stdout(stdout), redirect_stderr(stderr):
                 # P0 fix: wrap user code in a function so `return` works.
@@ -335,6 +349,88 @@ class SandboxExecutor:
         dedented = textwrap.dedent(code)
         indented = textwrap.indent(dedented, "    ")
         return f"def __ptc_main__():\n{indented}\n"
+
+    def _validate_code_safety(self, code: str) -> Optional[str]:
+        """AST-based validation to block sandbox escape vectors.
+
+        P2 fix: the old sandbox blocked ``__import__``/``eval``/``exec``
+        by name, but a determined model could escape via the classic
+        ``().__class__.__bases__[0].__subclasses__()`` walk to reach
+        ``subprocess.Popen`` or ``os.system``.
+
+        This validator uses ``ast.parse`` + ``ast.NodeVisitor`` to reject:
+          - Attribute access on dunder attributes (``__class__``, ``__bases__``,
+            ``__subclasses__``, ``__globals__``, ``__builtins__``, etc.)
+          - Access to ``__import__`` even via attribute chains
+          - Subscript access on dunder attributes (``obj.__dict__["key"]``)
+
+        Returns an error message string if the code is unsafe, or None if safe.
+        """
+        import ast
+
+        # Dunder attributes that enable sandbox escape or introspection.
+        _DANGEROUS_DUNDERS = frozenset({
+            "__class__",
+            "__bases__",
+            "__subclasses__",
+            "__mro__",
+            "__globals__",
+            "__builtins__",
+            "__dict__",
+            "__import__",
+            "__loader__",
+            "__spec__",
+            "__code__",
+            "__func__",
+            "__self__",
+            "__module__",
+            "__qualname__",
+            "__wrapped__",
+            "__defaults__",
+            "__closure__",
+        })
+
+        class SafetyVisitor(ast.NodeVisitor):
+            def __init__(self) -> None:
+                self.violations: list[str] = []
+
+            def visit_Attribute(self, node: ast.Attribute) -> None:
+                # Check if the attribute name is a dangerous dunder.
+                if node.attr in _DANGEROUS_DUNDERS:
+                    self.violations.append(
+                        f"Access to '{node.attr}' is blocked — sandbox escape vector"
+                    )
+                self.generic_visit(node)
+
+            def visit_Subscript(self, node: ast.Subscript) -> None:
+                # Block subscript access on dunder attributes:
+                #   obj.__dict__["key"], obj.__class__["..."], etc.
+                if isinstance(node.value, ast.Attribute):
+                    if node.value.attr in _DANGEROUS_DUNDERS:
+                        self.violations.append(
+                            f"Subscript access on '{node.value.attr}' is blocked"
+                        )
+                self.generic_visit(node)
+
+            def visit_Name(self, node: ast.Name) -> None:
+                # Block direct references to __import__ or other dangerous names.
+                if node.id in _DANGEROUS_DUNDERS:
+                    self.violations.append(
+                        f"Reference to '{node.id}' is blocked — sandbox escape vector"
+                    )
+                self.generic_visit(node)
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as exc:
+            return f"SyntaxError: {exc.msg}" + (f" (line {exc.lineno})" if exc.lineno else "")
+
+        visitor = SafetyVisitor()
+        visitor.visit(tree)
+
+        if visitor.violations:
+            return "; ".join(visitor.violations[:3])  # Report first 3 violations
+        return None
 
     def _build_namespace(self, context: ToolExecutionContext) -> Dict[str, Any]:
         """Build the sandbox namespace with allowed tools injected."""

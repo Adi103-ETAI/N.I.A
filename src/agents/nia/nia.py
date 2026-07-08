@@ -374,13 +374,22 @@ class NIA:
         )
 
         # Memory block (slot 3 — continuity).
+        # P2 fix: unify the two memory systems. We now inject the actual
+        # memory content (preferences, facts, patterns) into the prompt,
+        # not just a count. The project-scoped markdown memory files from
+        # niaharness/memory/ are loaded separately by the context builder.
         try:
             stats = self._memory.get_stats()
             if stats.get("total_memories", 0) > 0:
-                parts.append(
-                    f"# Memory\nYou have {stats['total_memories']} stored memories. "
-                    "Use the nia_memory tool to search and recall them."
-                )
+                # Inject the actual memory summary (not just a count).
+                memory_summary = self._memory.get_summary_for_prompt()
+                if memory_summary:
+                    parts.append(memory_summary)
+                else:
+                    parts.append(
+                        f"# Memory\nYou have {stats['total_memories']} stored memories. "
+                        "Use the nia_memory tool to search and recall them."
+                    )
         except Exception:
             pass
 

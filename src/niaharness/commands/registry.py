@@ -864,6 +864,46 @@ def create_default_command_registry() -> CommandRegistry:
         save_settings(settings)
         return CommandResult(message="Cleared stored API key.")
 
+    async def _oauth_handler(args: str, context: CommandContext) -> CommandResult:
+        """Run the Anthropic PKCE OAuth login flow (Claude Pro/Max)."""
+        del context
+        try:
+            from niaharness.providers.anthropic import OAuthTokenManager
+
+            manager = OAuthTokenManager()
+
+            if args.strip() == "status":
+                token = manager.get_valid_token()
+                if token:
+                    return CommandResult(
+                        message="OAuth: valid token found.\n"
+                        f"Token file: {manager._token_path}"
+                    )
+                return CommandResult(message="OAuth: no valid token. Run /oauth login.")
+
+            if args.strip() == "logout":
+                manager.clear()
+                return CommandResult(message="OAuth tokens cleared.")
+
+            if args.strip() in ("login", ""):
+                # Run the interactive PKCE OAuth flow.
+                tokens = manager.login()
+                if tokens:
+                    return CommandResult(
+                        message="OAuth login successful! Tokens saved.\n"
+                        "You can now use Claude Pro/Max with NIA."
+                    )
+                return CommandResult(message="OAuth login failed.")
+
+            return CommandResult(
+                message="Usage:\n"
+                "  /oauth login    Run PKCE OAuth flow (Claude Pro/Max)\n"
+                "  /oauth status   Check if OAuth tokens are configured\n"
+                "  /oauth logout   Clear stored OAuth tokens"
+            )
+        except Exception as exc:
+            return CommandResult(message=f"OAuth error: {exc}")
+
     async def _feedback_handler(args: str, context: CommandContext) -> CommandResult:
         del context
         path = get_feedback_log_path()
@@ -1615,6 +1655,7 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(SlashCommand("bridge", "Inspect bridge helpers and spawn bridge sessions", _bridge_handler))
     registry.register(SlashCommand("login", "Show auth status or store an API key", _login_handler))
     registry.register(SlashCommand("logout", "Clear the stored API key", _logout_handler))
+    registry.register(SlashCommand("oauth", "Anthropic PKCE OAuth login (Claude Pro/Max)", _oauth_handler))
     registry.register(SlashCommand("feedback", "Save CLI feedback to the local feedback log", _feedback_handler))
     registry.register(SlashCommand("onboarding", "Show the quickstart guide", _onboarding_handler))
     registry.register(SlashCommand("skills", "List or show available skills", _skills_handler))

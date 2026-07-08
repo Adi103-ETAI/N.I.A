@@ -96,40 +96,200 @@ class OAuthTokens:
 class OAuthTokenManager:
     """Manages OAuth tokens for Anthropic API access.
 
+    P2 fix: ported from Hermes Agent's agent/anthropic_adapter.py — real
+    PKCE OAuth flow for Claude Pro/Max subscriptions, real token refresh,
+    token persistence to ~/.nia/anthropic-oauth.json.
+
     Supports:
-    - Token refresh via refresh_token grant
+    - PKCE OAuth login (browser flow + code paste)
+    - Token refresh via refresh_token grant (real HTTP call)
     - Token persistence to disk
     - Automatic expiry detection
+    - Cross-process token file sync (re-reads on each get_valid_token)
     """
 
+    # OAuth constants (ported from Hermes — same client ID Claude Code uses)
+    _OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    _OAUTH_TOKEN_URLS = [
+        "https://platform.claude.com/v1/oauth/token",
+        "https://console.anthropic.com/v1/oauth/token",
+    ]
+    _OAUTH_TOKEN_USER_AGENT = "axios/1.7.9"  # Non-claude-code UA to avoid 429
+    _OAUTH_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback"
+    _OAUTH_SCOPES = "org:create_api_key user:profile user:inference"
+
     def __init__(self, token_path: str | None = None) -> None:
-        self._token_path = token_path or os.path.expanduser(
-            "~/.config/niaharness/anthropic-oauth.json"
-        )
+        # P2 fix: store under ~/.nia/ (NIA's home) for profile-scoped access.
+        if token_path is None:
+            try:
+                from niaharness.prompts.soul import get_nia_home
+
+                token_path = str(get_nia_home() / "anthropic-oauth.json")
+            except Exception:
+                token_path = os.path.expanduser("~/.nia/anthropic-oauth.json")
+        self._token_path = token_path
         self._tokens: OAuthTokens | None = None
 
     def get_valid_token(self) -> str | None:
-        """Get a valid access token, refreshing if necessary."""
+        """Get a valid access token, refreshing if necessary.
+
+        Re-reads the token file on every call so another process (or the
+        CLI's own login command) can refresh tokens and this process picks
+        them up without a restart.
+        """
         import time
 
+        # P2 fix: always re-read from disk (another process may have refreshed).
+        self._tokens = None
         tokens = self._load_tokens()
         if tokens is None:
             return None
 
-        # Check expiry
-        if tokens.expires_at and tokens.expires_at < time.time():
+        # Check expiry (5-minute skew to avoid using a token that's about to expire)
+        if tokens.expires_at and tokens.expires_at < time.time() + 300:
             if tokens.refresh_token:
-                tokens = self._refresh_token(tokens.refresh_token)
+                refreshed = self._refresh_token(tokens.refresh_token)
+                if refreshed is not None:
+                    tokens = refreshed
+                    self.save_tokens(tokens)
+                else:
+                    return None
             else:
                 return None
 
         return tokens.access_token if tokens else None
 
+    def login(self) -> OAuthTokens | None:
+        """Run the PKCE OAuth login flow (browser + code paste).
+
+        Ported from Hermes's run_hermes_oauth_login_pure(). Opens the
+        Anthropic authorization URL in the browser, prompts for the
+        authorization code, exchanges it for tokens.
+
+        Returns OAuthTokens on success, None on failure.
+        """
+        import base64
+        import hashlib
+        import json
+        import secrets
+        import time
+        import urllib.request
+        from urllib.parse import urlencode
+
+        # Generate PKCE verifier + challenge (S256).
+        verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+        challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(verifier.encode()).digest()
+        ).rstrip(b"=").decode()
+        oauth_state = secrets.token_urlsafe(32)
+
+        # Build the authorization URL.
+        params = {
+            "code": "true",
+            "client_id": self._OAUTH_CLIENT_ID,
+            "response_type": "code",
+            "redirect_uri": self._OAUTH_REDIRECT_URI,
+            "scope": self._OAUTH_SCOPES,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": oauth_state,
+        }
+        auth_url = f"https://claude.ai/oauth/authorize?{urlencode(params)}"
+
+        print()
+        print("Authorize N.I.A with your Claude Pro/Max subscription.")
+        print()
+        print("Open this link in your browser:")
+        print()
+        print(f"  {auth_url}")
+        print()
+
+        # Try to open the browser automatically.
+        try:
+            import webbrowser
+
+            webbrowser.open(auth_url)
+            print("(Browser opened automatically)")
+        except Exception:
+            pass
+
+        print()
+        print("After authorizing, you'll see a code. Paste it below.")
+        print()
+        try:
+            auth_code = input("Authorization code: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+
+        if not auth_code:
+            print("No code entered.")
+            return None
+
+        # Parse code + state (Anthropic returns code#state).
+        splits = auth_code.split("#")
+        code = splits[0]
+        received_state = splits[1] if len(splits) > 1 else ""
+
+        # Validate state to prevent CSRF (RFC 6749 §10.12).
+        if received_state != oauth_state:
+            print("OAuth state mismatch — possible CSRF, aborting")
+            return None
+
+        # Exchange the authorization code for tokens.
+        exchange_data = json.dumps({
+            "grant_type": "authorization_code",
+            "client_id": self._OAUTH_CLIENT_ID,
+            "code": code,
+            "state": received_state,
+            "redirect_uri": self._OAUTH_REDIRECT_URI,
+            "code_verifier": verifier,
+        }).encode()
+
+        result = None
+        last_error = None
+        for endpoint in self._OAUTH_TOKEN_URLS:
+            req = urllib.request.Request(
+                endpoint,
+                data=exchange_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": self._OAUTH_TOKEN_USER_AGENT,
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    result = json.loads(resp.read().decode())
+                break
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        if result is None:
+            print(f"Token exchange failed: {last_error}")
+            return None
+
+        access_token = result.get("access_token", "")
+        refresh_token = result.get("refresh_token", "")
+        expires_in = result.get("expires_in", 3600)
+
+        if not access_token:
+            print("No access token in response.")
+            return None
+
+        tokens = OAuthTokens(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_at=time.time() + expires_in,
+        )
+        self.save_tokens(tokens)
+        return tokens
+
     def save_tokens(self, tokens: OAuthTokens) -> None:
         """Persist tokens to disk."""
         import json
 
-        os.makedirs(os.path.dirname(self._token_path), exist_ok=True)
+        os.makedirs(os.path.dirname(self._token_path) or ".", exist_ok=True)
         data = {
             "access_token": tokens.access_token,
             "refresh_token": tokens.refresh_token,
@@ -142,7 +302,6 @@ class OAuthTokenManager:
     def _load_tokens(self) -> OAuthTokens | None:
         """Load tokens from disk."""
         import json
-        import time
 
         if self._tokens:
             return self._tokens
@@ -165,11 +324,54 @@ class OAuthTokenManager:
     def _refresh_token(self, refresh_token: str) -> OAuthTokens | None:
         """Refresh the access token using a refresh token.
 
-        In production, this would call the Anthropic OAuth token endpoint.
-        Returns None if refresh fails.
+        P2 fix: real HTTP call to the Anthropic OAuth token endpoint.
+        Ported from Hermes's refresh_anthropic_oauth_pure().
         """
-        # Placeholder: In production, POST to https://api.anthropic.com/oauth/token
-        # with grant_type=refresh_token
+        import json
+        import time
+        import urllib.parse
+        import urllib.request
+
+        if not refresh_token:
+            return None
+
+        data = urllib.parse.urlencode({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": self._OAUTH_CLIENT_ID,
+        }).encode()
+
+        last_error = None
+        for endpoint in self._OAUTH_TOKEN_URLS:
+            req = urllib.request.Request(
+                endpoint,
+                data=data,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": self._OAUTH_TOKEN_USER_AGENT,
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    result = json.loads(resp.read().decode())
+            except Exception as exc:
+                last_error = exc
+                continue
+
+            access_token = result.get("access_token", "")
+            if not access_token:
+                continue
+
+            next_refresh = result.get("refresh_token", refresh_token)
+            expires_in = result.get("expires_in", 3600)
+            return OAuthTokens(
+                access_token=access_token,
+                refresh_token=next_refresh,
+                expires_at=time.time() + expires_in,
+            )
+
+        # Refresh failed — could be revoked, expired, or network error.
         return None
 
     def clear(self) -> None:
