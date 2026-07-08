@@ -56,10 +56,10 @@ logger = logging.getLogger(__name__)
 
 
 def _get_data_dir() -> Path:
-    """Return the data dir, honoring the legacy ``OPENHARNESS_DATA_DIR`` env var."""
-    legacy = os.environ.get("OPENHARNESS_DATA_DIR")
-    if legacy:
-        return Path(legacy)
+    """Return the data dir, honoring ``NIAHARNESS_DATA_DIR`` env var."""
+    data_dir_env = os.environ.get("NIAHARNESS_DATA_DIR")
+    if data_dir_env:
+        return Path(data_dir_env)
     from niaharness.config.paths import get_data_dir
 
     return get_data_dir()

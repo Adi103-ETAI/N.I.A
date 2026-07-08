@@ -37,7 +37,7 @@ def test_load_claude_md_prompt(tmp_path: Path):
 
 
 def test_build_runtime_system_prompt_combines_sections(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "CLAUDE.md").write_text("repo rules", encoding="utf-8")
@@ -51,7 +51,7 @@ def test_build_runtime_system_prompt_combines_sections(tmp_path: Path, monkeypat
 
 
 def test_build_runtime_system_prompt_includes_project_context_and_fast_mode(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     repo = tmp_path / "repo"
     repo.mkdir()
     get_project_issue_file(repo).write_text("# Bug\nNeed to fix flaky test.\n", encoding="utf-8")

@@ -35,12 +35,12 @@ from typing import Any
 def get_cron_registry_path() -> Path:
     """Return the cron registry file path.
 
-    Honors the legacy ``OPENHARNESS_DATA_DIR`` env var for backward compat
+    Honors ``NIAHARNESS_DATA_DIR`` env var
     with tests and scripts that still set it.
     """
-    legacy = os.environ.get("OPENHARNESS_DATA_DIR")
-    if legacy:
-        return Path(legacy) / "cron_jobs.json"
+    data_dir_env = os.environ.get("NIAHARNESS_DATA_DIR")
+    if data_dir_env:
+        return Path(data_dir_env) / "cron_jobs.json"
     from niaharness.config.paths import get_cron_registry_path as _impl
 
     return _impl()

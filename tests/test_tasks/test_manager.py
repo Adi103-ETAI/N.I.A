@@ -12,7 +12,7 @@ from niaharness.tasks.manager import BackgroundTaskManager
 
 @pytest.mark.asyncio
 async def test_create_shell_task_and_read_output(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
 
     task = await manager.create_shell_task(
@@ -30,7 +30,7 @@ async def test_create_shell_task_and_read_output(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_agent_task_with_command_override_and_write(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
 
     task = await manager.create_agent_task(
@@ -46,7 +46,7 @@ async def test_create_agent_task_with_command_override_and_write(tmp_path: Path,
 
 @pytest.mark.asyncio
 async def test_write_to_stopped_agent_task_restarts_process(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
 
     task = await manager.create_agent_task(
@@ -70,7 +70,7 @@ async def test_write_to_stopped_agent_task_restarts_process(tmp_path: Path, monk
 
 @pytest.mark.asyncio
 async def test_stop_task(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
 
     task = await manager.create_shell_task(

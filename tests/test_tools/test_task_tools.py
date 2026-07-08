@@ -18,7 +18,7 @@ from niaharness.tools.team_create_tool import TeamCreateTool, TeamCreateToolInpu
 
 @pytest.mark.asyncio
 async def test_task_create_and_output_tool(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     context = ToolExecutionContext(cwd=tmp_path)
 
     create_result = await TaskCreateTool().execute(
@@ -56,7 +56,7 @@ async def test_team_create_tool(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_task_update_tool_updates_metadata(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     context = ToolExecutionContext(cwd=tmp_path)
 
     create_result = await TaskCreateTool().execute(
@@ -89,7 +89,7 @@ async def test_task_update_tool_updates_metadata(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_agent_tool_supports_remote_and_teammate_modes(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     context = ToolExecutionContext(cwd=tmp_path)
 
     for i, mode in enumerate(("remote_agent", "in_process_teammate")):

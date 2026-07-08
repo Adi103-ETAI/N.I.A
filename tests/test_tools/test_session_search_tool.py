@@ -24,7 +24,7 @@ def isolated_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect all data dirs to a temp directory and reset the index singleton."""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(data_dir))
 
     # Reset the index singleton and schema cache so they pick up the new data dir.
     import niaharness.services.session_search as ss

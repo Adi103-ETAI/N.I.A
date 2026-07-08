@@ -1,4 +1,4 @@
-"""Comprehensive integration tests for all previously untested OpenHarness features.
+"""Comprehensive integration tests for all previously untested NIA features.
 
 Run with: python -m pytest tests/test_untested_features.py -v --tb=short -x
 Or standalone: python tests/test_untested_features.py
@@ -349,7 +349,7 @@ async def test_memory_lifecycle():
 
         # Add entries
         p1 = add_memory_entry(tmpdir, "user-preference", "User prefers Python over JavaScript")
-        p2 = add_memory_entry(tmpdir, "project-goal", "Building an AI agent framework called OpenHarness")
+        p2 = add_memory_entry(tmpdir, "project-goal", "Building an AI agent framework called NIA")
         print(f"  Added: {p1.name}, {p2.name}")
 
         # List

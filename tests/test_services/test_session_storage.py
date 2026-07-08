@@ -14,7 +14,7 @@ from niaharness.services.session_storage import (
 
 
 def test_save_and_load_session_snapshot(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     project = tmp_path / "repo"
     project.mkdir()
 
@@ -34,7 +34,7 @@ def test_save_and_load_session_snapshot(tmp_path: Path, monkeypatch):
 
 
 def test_export_session_markdown(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     project = tmp_path / "repo"
     project.mkdir()
 
@@ -48,6 +48,6 @@ def test_export_session_markdown(tmp_path: Path, monkeypatch):
 
     assert path.exists()
     content = path.read_text(encoding="utf-8")
-    assert "OpenHarness Session Transcript" in content
+    assert "NIA Session Transcript" in content
     assert "hello" in content
     assert "world" in content

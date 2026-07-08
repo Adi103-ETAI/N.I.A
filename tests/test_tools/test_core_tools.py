@@ -116,7 +116,7 @@ async def test_tool_search_and_brief_tools(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_skill_todo_and_config_tools(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     skills_dir = tmp_path / "config" / "skills"
     skills_dir.mkdir(parents=True)
     (skills_dir / "pytest.md").write_text("# Pytest\nHelpful pytest notes.\n", encoding="utf-8")
@@ -194,14 +194,14 @@ async def test_lsp_tool(tmp_path: Path):
 async def test_worktree_tools(tmp_path: Path):
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
     subprocess.run(
-        ["git", "config", "user.email", "openharness@example.com"],
+        ["git", "config", "user.email", "nia@example.com"],
         cwd=tmp_path,
         check=True,
         capture_output=True,
         text=True,
     )
     subprocess.run(
-        ["git", "config", "user.name", "OpenHarness Tests"],
+        ["git", "config", "user.name", "NIA Tests"],
         cwd=tmp_path,
         check=True,
         capture_output=True,
@@ -235,7 +235,7 @@ async def test_worktree_tools(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_cron_and_remote_trigger_tools(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     context = ToolExecutionContext(cwd=tmp_path)
 
     create_result = await CronCreateTool().execute(

@@ -31,7 +31,7 @@ def _spawn_oh(prompt: str | None = None, *, env: dict[str, str] | None = None) -
         timeout=180,
     )
     child.delaybeforesend = 0.1
-    if os.environ.get("OPENHARNESS_E2E_DEBUG") == "1":
+    if os.environ.get("NIAHARNESS_E2E_DEBUG") == "1":
         child.logfile_read = sys.stdout
     return child
 
@@ -56,9 +56,9 @@ def _isolated_env(permission_mode: str = "full_auto") -> tuple[tempfile.Temporar
     payload["permission"]["mode"] = permission_mode
     (config_dir / "settings.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     env = os.environ.copy()
-    env["OPENHARNESS_CONFIG_DIR"] = str(config_dir)
-    env["OPENHARNESS_DATA_DIR"] = str(data_dir)
-    env["OPENHARNESS_FRONTEND_RAW_RETURN"] = "1"
+    env["NIAHARNESS_CONFIG_DIR"] = str(config_dir)
+    env["NIAHARNESS_DATA_DIR"] = str(data_dir)
+    env["NIAHARNESS_FRONTEND_RAW_RETURN"] = "1"
     return temp_dir, env
 
 
@@ -75,7 +75,7 @@ def _run_permission_file_io() -> None:
     )
     try:
         print("[react_tui_permission_file_io] waiting for app shell")
-        child.expect("OpenHarness React TUI")
+        child.expect("NIA React TUI")
         child.expect("model=kimi-k2.5")
         print("[react_tui_permission_file_io] waiting for final marker")
         child.expect(r"(?s)assistant>.*FINAL_OK_REACT_TUI")
@@ -100,7 +100,7 @@ def _run_question_flow() -> None:
         env=env,
     )
     try:
-        child.expect("OpenHarness React TUI")
+        child.expect("NIA React TUI")
         child.expect("model=kimi-k2.5")
         print("[react_tui_question_flow] waiting for question modal")
         child.expect("Question")
@@ -118,7 +118,7 @@ def _run_question_flow() -> None:
 
 def _run_command_flow() -> None:
     temp_dir, env = _isolated_env()
-    env["OPENHARNESS_FRONTEND_SCRIPT"] = json.dumps(
+    env["NIAHARNESS_FRONTEND_SCRIPT"] = json.dumps(
         [
             "/permissions set full_auto",
             "/effort high",
@@ -130,7 +130,7 @@ def _run_command_flow() -> None:
     child = _spawn_oh(env=env)
     try:
         print("[react_tui_command_flow] waiting for app shell")
-        child.expect("OpenHarness React TUI")
+        child.expect("NIA React TUI")
         child.expect("model=kimi-k2.5")
         child.expect("Permission mode set to full_auto")
         print("[react_tui_command_flow] waiting for effort confirmation")

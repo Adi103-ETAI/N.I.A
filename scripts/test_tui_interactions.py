@@ -33,14 +33,14 @@ def test_command_picker_shows() -> tuple[bool, str]:
         return False, "pexpect not installed (pip install pexpect)"
 
     env = _env()
-    env["OPENHARNESS_FRONTEND_RAW_RETURN"] = "1"
+    env["NIAHARNESS_FRONTEND_RAW_RETURN"] = "1"
     # Script: type /help then /exit
-    env["OPENHARNESS_FRONTEND_SCRIPT"] = json.dumps(["/help", "/exit"])
+    env["NIAHARNESS_FRONTEND_SCRIPT"] = json.dumps(["/help", "/exit"])
 
     model_name = env.get("ANTHROPIC_MODEL", "kimi-k2.5")
     backend_cmd = [sys.executable, "-m", "niaharness", "--backend-only",
                    "--model", model_name]
-    env["OPENHARNESS_FRONTEND_CONFIG"] = json.dumps({
+    env["NIAHARNESS_FRONTEND_CONFIG"] = json.dumps({
         "backend_command": backend_cmd,
         "initial_prompt": None,
     })
@@ -74,16 +74,16 @@ def test_permission_flow() -> tuple[bool, str]:
         return False, "pexpect not installed"
 
     env = _env()
-    env["OPENHARNESS_FRONTEND_RAW_RETURN"] = "1"
+    env["NIAHARNESS_FRONTEND_RAW_RETURN"] = "1"
     # Ask agent to create a file — should trigger permission
-    env["OPENHARNESS_FRONTEND_SCRIPT"] = json.dumps([
+    env["NIAHARNESS_FRONTEND_SCRIPT"] = json.dumps([
         "Create a file called /tmp/oh_permission_test.txt with content 'test'",
     ])
 
     model_name = env.get("ANTHROPIC_MODEL", "kimi-k2.5")
     backend_cmd = [sys.executable, "-m", "niaharness", "--backend-only",
                    "--model", model_name]
-    env["OPENHARNESS_FRONTEND_CONFIG"] = json.dumps({
+    env["NIAHARNESS_FRONTEND_CONFIG"] = json.dumps({
         "backend_command": backend_cmd,
         "initial_prompt": None,
     })
@@ -123,11 +123,11 @@ def test_shortcut_hints_visible() -> tuple[bool, str]:
         return False, "pexpect not installed"
 
     env = _env()
-    env["OPENHARNESS_FRONTEND_RAW_RETURN"] = "1"
-    env["OPENHARNESS_FRONTEND_SCRIPT"] = json.dumps(["/exit"])
+    env["NIAHARNESS_FRONTEND_RAW_RETURN"] = "1"
+    env["NIAHARNESS_FRONTEND_SCRIPT"] = json.dumps(["/exit"])
 
     backend_cmd = [sys.executable, "-m", "niaharness", "--backend-only"]
-    env["OPENHARNESS_FRONTEND_CONFIG"] = json.dumps({
+    env["NIAHARNESS_FRONTEND_CONFIG"] = json.dumps({
         "backend_command": backend_cmd,
         "initial_prompt": None,
     })

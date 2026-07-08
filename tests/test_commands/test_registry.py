@@ -63,7 +63,7 @@ def _make_context(tmp_path: Path) -> CommandContext:
 
 @pytest.mark.asyncio
 async def test_permissions_command_persists(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     registry = create_default_command_registry()
     command, args = registry.lookup("/permissions set full_auto")
     assert command is not None
@@ -76,7 +76,7 @@ async def test_permissions_command_persists(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_model_command_persists(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     registry = create_default_command_registry()
     command, args = registry.lookup("/model set claude-opus-test")
     assert command is not None
@@ -89,7 +89,7 @@ async def test_model_command_persists(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_doctor_command_reports_context(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     registry = create_default_command_registry()
     command, args = registry.lookup("/doctor")
     assert command is not None
@@ -110,8 +110,8 @@ async def test_doctor_command_reports_context(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_memory_command_manages_entries(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_command_registry()
     context = _make_context(tmp_path)
 
@@ -134,7 +134,7 @@ async def test_memory_command_manages_entries(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_compact_summary_and_usage_commands(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     registry = create_default_command_registry()
     context = _make_context(tmp_path)
     context.engine.load_messages(
@@ -166,7 +166,7 @@ async def test_compact_summary_and_usage_commands(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ui_mode_commands_persist_and_update_state(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     registry = create_default_command_registry()
     context = _make_context(tmp_path)
 
@@ -219,8 +219,8 @@ async def test_ui_mode_commands_persist_and_update_state(tmp_path: Path, monkeyp
 
 @pytest.mark.asyncio
 async def test_version_context_and_share_commands(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_command_registry()
     context = _make_context(tmp_path)
 
@@ -239,8 +239,8 @@ async def test_version_context_and_share_commands(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_auth_feedback_and_project_context_commands(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_command_registry()
     context = _make_context(tmp_path)
 
@@ -272,8 +272,8 @@ async def test_auth_feedback_and_project_context_commands(tmp_path: Path, monkey
 
 @pytest.mark.asyncio
 async def test_agents_session_files_and_reload_plugins_commands(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_command_registry()
     context = _make_context(tmp_path)
     (tmp_path / "src").mkdir()
@@ -333,8 +333,8 @@ async def test_agents_session_files_and_reload_plugins_commands(tmp_path: Path, 
 
 @pytest.mark.asyncio
 async def test_init_and_bridge_commands(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_command_registry()
     context = _make_context(tmp_path)
 
@@ -380,8 +380,8 @@ async def test_init_and_bridge_commands(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_copy_rewind_and_meta_commands(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_command_registry()
     context = _make_context(tmp_path)
     context.engine.load_messages(
@@ -429,8 +429,8 @@ async def test_copy_rewind_and_meta_commands(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_mcp_and_voice_commands_report_richer_state(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     settings = Settings(
         mcp_servers={
             "http-demo": McpHttpServerConfig(url="https://example.com/mcp"),
@@ -461,7 +461,7 @@ async def test_mcp_and_voice_commands_report_richer_state(tmp_path: Path, monkey
 
 @pytest.mark.asyncio
 async def test_git_commands_report_repository_state(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
     subprocess.run(
         ["git", "config", "user.email", "niaharness@example.com"],
@@ -471,7 +471,7 @@ async def test_git_commands_report_repository_state(tmp_path: Path, monkeypatch)
         text=True,
     )
     subprocess.run(
-        ["git", "config", "user.name", "OpenHarness Tests"],
+        ["git", "config", "user.name", "NIA Tests"],
         cwd=tmp_path,
         check=True,
         capture_output=True,

@@ -223,11 +223,11 @@ async def main() -> int:
     with tempfile.TemporaryDirectory(prefix="niaharness-local-system-") as temp_dir:
         temp_root = Path(temp_dir)
         previous = {
-            "OPENHARNESS_CONFIG_DIR": os.environ.get("OPENHARNESS_CONFIG_DIR"),
-            "OPENHARNESS_DATA_DIR": os.environ.get("OPENHARNESS_DATA_DIR"),
+            "NIAHARNESS_CONFIG_DIR": os.environ.get("NIAHARNESS_CONFIG_DIR"),
+            "NIAHARNESS_DATA_DIR": os.environ.get("NIAHARNESS_DATA_DIR"),
         }
-        os.environ["OPENHARNESS_CONFIG_DIR"] = str(temp_root / "config")
-        os.environ["OPENHARNESS_DATA_DIR"] = str(temp_root / "data")
+        os.environ["NIAHARNESS_CONFIG_DIR"] = str(temp_root / "config")
+        os.environ["NIAHARNESS_DATA_DIR"] = str(temp_root / "data")
         try:
             await _run_mcp_flow(temp_root)
             await _run_plugin_flow(temp_root)

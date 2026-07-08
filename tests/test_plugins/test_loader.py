@@ -51,7 +51,7 @@ def _write_plugin(root: Path) -> None:
 
 
 def test_load_plugins_from_project_dir(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
     plugins_root = project / ".niaharness" / "plugins"
     plugins_root.mkdir(parents=True)
@@ -68,7 +68,7 @@ def test_load_plugins_from_project_dir(tmp_path: Path, monkeypatch):
 
 
 def test_plugin_skills_and_hooks_are_merged(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
     plugins_root = project / ".niaharness" / "plugins"
     plugins_root.mkdir(parents=True)

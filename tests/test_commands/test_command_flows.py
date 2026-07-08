@@ -71,8 +71,8 @@ def _write_fixture_plugin(root: Path) -> Path:
 
 @pytest.mark.asyncio
 async def test_command_flow_for_memory_modes_and_tasks(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_command_registry()
     context = _build_context(tmp_path)
 
@@ -128,7 +128,7 @@ async def test_command_flow_for_memory_modes_and_tasks(tmp_path: Path, monkeypat
 
 @pytest.mark.asyncio
 async def test_plugin_command_lifecycle_flow(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     registry = create_default_command_registry()
     context = _build_context(tmp_path)
     plugin_source = _write_fixture_plugin(tmp_path / "plugin-source")

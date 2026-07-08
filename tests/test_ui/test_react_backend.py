@@ -29,8 +29,8 @@ class StaticApiClient:
 @pytest.mark.asyncio
 async def test_backend_host_processes_command(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
 
     host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("unused")))
     host._bundle = await build_runtime(api_client=StaticApiClient("unused"))
@@ -52,7 +52,7 @@ async def test_backend_host_processes_command(tmp_path, monkeypatch):
         event.type == "transcript_item"
         and event.item
         and event.item.role == "system"
-        and "OpenHarness" in event.item.text
+        and "NIA" in event.item.text
         for event in events
     )
     assert any(event.type == "state_snapshot" for event in events)
@@ -61,8 +61,8 @@ async def test_backend_host_processes_command(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_backend_host_processes_model_turn(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NIAHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIAHARNESS_DATA_DIR", str(tmp_path / "data"))
 
     host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("hello from react backend")))
     host._bundle = await build_runtime(api_client=StaticApiClient("hello from react backend"))

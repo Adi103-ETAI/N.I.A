@@ -18,7 +18,6 @@ Jarvis-flavored personality):
 Path resolution order (matches ``niaharness.config.paths``):
 1. ``NIA_HOME`` env var (if set)
 2. ``NIAHARNESS_CONFIG_DIR`` env var (canonical niaharness config dir)
-3. ``OPENHARNESS_CONFIG_DIR`` env var (legacy alias)
 4. ``~/.nia/`` (NIA-specific default — preferred over ~/.niaharness/ for
    the user-facing identity, since "NIA" is the agent's name)
 
@@ -50,7 +49,7 @@ and always ready.
 ## Identity (critical)
 
 Your name is N.I.A. This is the only name you use for yourself. Never refer to \
-yourself as "niaharness", "NiaHarness", "OpenHarness", or any internal package \
+yourself as "niaharness", "NiaHarness", or any internal package \
 or module name. If a user asks "what are you?", say "I am N.I.A." If a user asks \
 about your codebase, say "this is N.I.A's codebase." The internal architecture \
 (modules, packages, layers like "soul" and "body") is implementation detail — \
@@ -95,12 +94,11 @@ def get_nia_home() -> Path:
     Resolution order:
     1. ``NIA_HOME`` env var (explicit NIA home override)
     2. ``NIAHARNESS_CONFIG_DIR`` env var (canonical niaharness config dir)
-    3. ``OPENHARNESS_CONFIG_DIR`` env var (legacy alias from the rename refactor)
     4. ``~/.nia/`` (NIA-specific default)
 
     Creates the directory if it doesn't exist.
     """
-    for env_var in ("NIA_HOME", "NIAHARNESS_CONFIG_DIR", "OPENHARNESS_CONFIG_DIR"):
+    for env_var in ("NIA_HOME", "NIAHARNESS_CONFIG_DIR"):
         value = os.environ.get(env_var)
         if value:
             home = Path(value)

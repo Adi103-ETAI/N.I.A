@@ -2,16 +2,15 @@
 
 Follows XDG-like conventions with ~/.niaharness/ as the default base directory.
 
-Environment variable compatibility
------------------------------------
-Both naming conventions are supported for every directory:
+Environment variables
+---------------------
+Every directory can be overridden via an environment variable:
 
-    NIAHARNESS_DATA_DIR    (current canonical name)
-    OPENHARNESS_DATA_DIR   (legacy alias from before the rename refactor)
+    NIAHARNESS_CONFIG_DIR   — configuration directory
+    NIAHARNESS_DATA_DIR     — data directory (caches, sessions, tasks)
+    NIAHARNESS_LOGS_DIR     — logs directory
 
-The legacy alias takes precedence so existing scripts and tests that still
-set ``OPENHARNESS_*`` continue to work without modification.  New code
-should prefer the ``NIAHARNESS_*`` names.
+If the env var is not set, the default is ``~/.niaharness/``.
 """
 
 from __future__ import annotations
@@ -37,10 +36,9 @@ def get_config_dir() -> Path:
 
     Resolution order:
     1. ``NIAHARNESS_CONFIG_DIR`` environment variable
-    2. ``OPENHARNESS_CONFIG_DIR`` environment variable (legacy alias)
-    3. ``~/.niaharness/``
+    2. ``~/.niaharness/``
     """
-    env_dir = _env_first("NIAHARNESS_CONFIG_DIR", "OPENHARNESS_CONFIG_DIR")
+    env_dir = _env_first("NIAHARNESS_CONFIG_DIR")
     if env_dir:
         config_dir = Path(env_dir)
     else:
@@ -60,10 +58,9 @@ def get_data_dir() -> Path:
 
     Resolution order:
     1. ``NIAHARNESS_DATA_DIR`` environment variable
-    2. ``OPENHARNESS_DATA_DIR`` environment variable (legacy alias)
-    3. ``~/.niaharness/data/``
+    2. ``~/.niaharness/data/``
     """
-    env_dir = _env_first("NIAHARNESS_DATA_DIR", "OPENHARNESS_DATA_DIR")
+    env_dir = _env_first("NIAHARNESS_DATA_DIR")
     if env_dir:
         data_dir = Path(env_dir)
     else:
@@ -78,10 +75,9 @@ def get_logs_dir() -> Path:
 
     Resolution order:
     1. ``NIAHARNESS_LOGS_DIR`` environment variable
-    2. ``OPENHARNESS_LOGS_DIR`` environment variable (legacy alias)
-    3. ``~/.niaharness/logs/``
+    2. ``~/.niaharness/logs/``
     """
-    env_dir = _env_first("NIAHARNESS_LOGS_DIR", "OPENHARNESS_LOGS_DIR")
+    env_dir = _env_first("NIAHARNESS_LOGS_DIR")
     if env_dir:
         logs_dir = Path(env_dir)
     else:

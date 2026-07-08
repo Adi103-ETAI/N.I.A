@@ -31,16 +31,14 @@ from niaharness.engine.messages import ConversationMessage
 
 
 def _get_data_dir() -> Path:
-    """Return the data dir, honoring legacy ``OPENHARNESS_DATA_DIR`` env var.
+    """Return the data dir, honoring ``NIAHARNESS_DATA_DIR`` env var.
 
     Imported lazily so test monkeypatching of ``niaharness.config.paths`` is
     always honoured.
     """
-    # Legacy alias takes precedence for backward compat with tests/scripts
-    # that still set OPENHARNESS_DATA_DIR.
-    legacy = os.environ.get("OPENHARNESS_DATA_DIR")
-    if legacy:
-        return Path(legacy)
+    data_dir_env = os.environ.get("NIAHARNESS_DATA_DIR")
+    if data_dir_env:
+        return Path(data_dir_env)
     from niaharness.config.paths import get_data_dir
 
     return get_data_dir()
@@ -221,7 +219,7 @@ def export_session_markdown(
     path = session_dir / f"{session_id}.md"
 
     lines: list[str] = [
-        "# OpenHarness Session Transcript",
+        "# NIA Session Transcript",
         "",
         f"- Session ID: `{session_id}`",
     ]

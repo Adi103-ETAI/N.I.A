@@ -123,9 +123,9 @@ class TestLoadSaveSettings:
         path = tmp_path / "settings.json"
         path.write_text(json.dumps({"model": "from-file"}))
         monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
-        monkeypatch.delenv("OPENHARNESS_MODEL", raising=False)
+        monkeypatch.delenv("NIAHARNESS_MODEL", raising=False)
         monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
-        monkeypatch.delenv("OPENHARNESS_BASE_URL", raising=False)
+        monkeypatch.delenv("NIAHARNESS_BASE_URL", raising=False)
         monkeypatch.setenv("NVIDIA_MODEL", "meta/llama-3.1-70b-instruct")
         monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-override")
 

@@ -21,12 +21,12 @@ class _Handler(BaseHTTPRequestHandler):
         if query:
             body = (
                 "<html><body>"
-                '<a class="result__a" href="https://example.com/docs">OpenHarness Docs</a>'
+                '<a class="result__a" href="https://example.com/docs">NIA Docs</a>'
                 '<div class="result__snippet">Search query was %s and docs were found.</div>'
                 "</body></html>"
             ) % query
         else:
-            body = "<html><body><h1>OpenHarness Test</h1><p>web fetch works</p></body></html>"
+            body = "<html><body><h1>NIA Test</h1><p>web fetch works</p></body></html>"
         encoded = body.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -56,7 +56,7 @@ async def test_web_fetch_tool_reads_html(tmp_path):
         thread.join(timeout=1)
 
     assert result.is_error is False
-    assert "OpenHarness Test" in result.output
+    assert "NIA Test" in result.output
     assert "web fetch works" in result.output
 
 
@@ -81,6 +81,6 @@ async def test_web_search_tool_reads_results(tmp_path):
         thread.join(timeout=1)
 
     assert result.is_error is False
-    assert "OpenHarness Docs" in result.output
+    assert "NIA Docs" in result.output
     assert "https://example.com/docs" in result.output
     assert "niaharness docs" in result.output
