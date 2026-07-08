@@ -4,7 +4,7 @@ import {Box, Text} from 'ink';
 const VERSION = '0.1.0';
 const BUILT_BY = 'Aditya';
 
-// Hermes caduceus (ported from hermes_cli/banner.py HERMES_CADUCEUS)
+// NIA caduceus (ported from banner.py CADUCEUS)
 // Uses braille art for a cleaner look. Colors: gold (#FFD700) → orange (#FFBF00) → bronze (#CD7F32) → dark gold (#B8860B)
 const CADUCEUS_LINES: {text: string; color: string}[] = [
 	{text: '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⡀⠀⣀⣀⠀⢀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀', color: '#CD7F32'},
@@ -24,7 +24,7 @@ const CADUCEUS_LINES: {text: string; color: string}[] = [
 	{text: '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀', color: '#B8860B'},
 ];
 
-// NIA in block letters (same style as Hermes logo)
+// NIA in block letters (same style as NIA logo)
 const NIA_LOGO: {text: string; color: string}[] = [
 	{text: '██╗  ██╗███████╗██████╗ ███╗   ███╗███████╗███████╗', color: '#FFD700'},
 	{text: '██║  ██║██╔════╝██╔══██╗████╗ ████║██╔════╝██╔════╝', color: '#FFD700'},
@@ -55,7 +55,7 @@ export function WelcomeBanner({
 	tools = [],
 	skills = [],
 }: WelcomeBannerProps): React.JSX.Element {
-	// Group skills by category (like Hermes does)
+	// Group skills by category (like NIA does)
 	const skillsByCategory: Record<string, string[]> = {};
 	for (const skill of skills.slice(0, 30)) {
 		if (!skillsByCategory[skill.category]) {

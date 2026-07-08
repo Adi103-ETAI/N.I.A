@@ -716,3 +716,7 @@ def main(
             api_format=resolved_api_format,
         )
     )
+
+
+if __name__ == "__main__":
+    app()

@@ -1,11 +1,11 @@
-"""N.I.A CLI UI — medical-themed terminal interface with Hermes caduceus.
+"""N.I.A CLI UI — medical-themed terminal interface with NIA caduceus.
 
-Layout (ported from Hermes Agent's hermes_cli/banner.py):
+Layout (ported from NIA's banner.py):
   - Left column: golden caduceus (braille art)
   - Right column: NIA block letters + model + built by + tools/skills
 
 Features:
-  - Hermes-style caduceus (braille art, gold/orange/bronze gradient)
+  - NIA-style caduceus (braille art, gold/orange/bronze gradient)
   - NIA name in block letters
   - Two-column layout: caduceus on left, info on right
   - Flicker-free streaming output (buffered rendering)
@@ -49,7 +49,7 @@ NIA_THEME = Theme({
 console = Console(theme=NIA_THEME, force_terminal=True)
 
 # ---------------------------------------------------------------------------
-# ASCII Art — Hermes caduceus (braille art, ported from hermes_cli/banner.py)
+# ASCII Art — NIA caduceus (braille art, ported from banner.py)
 # ---------------------------------------------------------------------------
 
 # Each line has a color. Gradient: bronze → orange → gold → orange → bronze → dark gold
@@ -71,7 +71,7 @@ CADUCEUS_LINES = [
     ("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀", "#B8860B"),
 ]
 
-# NIA in block letters (same style as Hermes HERMES_AGENT_LOGO)
+# NIA in block letters (same style as NIA logo)
 NIA_LOGO_LINES = [
     ("██╗  ██╗███████╗██████╗ ███╗   ███╗███████╗███████╗", "#FFD700"),
     ("██║  ██║██╔════╝██╔══██╗████╗ ████║██╔════╝██╔════╝", "#FFD700"),
@@ -94,9 +94,9 @@ def render_banner(
 ) -> Table:
     """Render the two-column banner: caduceus on left, NIA + info on right.
 
-    Ported from Hermes Agent's build_welcome_banner() layout.
+    Ported from NIA's build_welcome_banner() layout.
     """
-    # Build the two-column grid layout (like Hermes Table.grid)
+    # Build the two-column grid layout (like NIA Table.grid)
     layout = Table.grid(padding=(0, 3))
     layout.add_column(justify="center", vertical="middle")  # Left: caduceus
     layout.add_column(justify="left", vertical="top")       # Right: NIA + info

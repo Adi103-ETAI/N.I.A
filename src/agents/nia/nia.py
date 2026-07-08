@@ -6,7 +6,7 @@ NIA owns: identity (SOUL.md), memory, personality, proactive review.
 niaharness owns: tool execution (57 tools), permissions, hooks, MCP, cost tracking.
 
 There is ONE LLM call per turn — the QueryEngine's. NIA does not make a
-separate "thinking" LLM call. The LLM IS the brain. This mirrors Hermes's
+separate "thinking" LLM call. The LLM IS the brain. This mirrors the reference project's
 AIAgent architecture (one class, no separate brain).
 
 Architecture:

@@ -10,7 +10,7 @@ owns identity (SOUL.md), memory, and personality, and uses niaharness
 as its runtime (tools, permissions, hooks, MCP).
 
 NIA tries to launch the React+Ink terminal frontend (same tech stack
-as Hermes Agent) for the best UI experience. If the frontend isn't
+as the reference project) for the best UI experience. If the frontend isn't
 available (no Node.js, no node_modules), it falls back to the Python
 CLI with the caduceus banner.
 
