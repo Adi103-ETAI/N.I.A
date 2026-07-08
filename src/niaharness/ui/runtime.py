@@ -128,6 +128,15 @@ async def build_runtime(
     tool_registry = create_default_tool_registry(mcp_manager)
     provider = detect_provider(settings)
     bridge_manager = get_bridge_manager()
+
+    # Count tools and skills for the startup banner.
+    tool_count = len(tool_registry._tools) if hasattr(tool_registry, "_tools") else 0
+    try:
+        from niaharness.tools.skills_loader import load_skill_registry
+        skill_count = len(load_skill_registry().list_skills())
+    except Exception:
+        skill_count = 0
+
     app_state = AppStateStore(
         AppState(
             model=settings.model,
@@ -149,6 +158,8 @@ async def build_runtime(
             bridge_sessions=len(bridge_manager.list_sessions()),
             output_style=settings.output_style,
             keybindings=load_keybindings(),
+            tool_count=tool_count,
+            skill_count=skill_count,
         )
     )
     hook_reloader = HookReloader(get_config_file_path())

@@ -28,3 +28,6 @@ class AppState:
     bridge_sessions: int = 0
     output_style: str = "default"
     keybindings: dict[str, str] = field(default_factory=dict)
+    session_id: str = ""
+    tool_count: int = 0
+    skill_count: int = 0
