@@ -16,7 +16,7 @@ def isolated_skills_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir(parents=True)
     monkeypatch.setattr(
-        "niaharness.skills.loader.get_user_skills_dir",
+        "niaharness.tools.skills_loader.get_user_skills_dir",
         lambda: skills_dir,
     )
     return skills_dir

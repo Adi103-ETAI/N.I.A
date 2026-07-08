@@ -48,7 +48,7 @@ from niaharness.services import (
     summarize_messages,
 )
 from niaharness.services.session_storage import get_project_session_dir, load_session_snapshot
-from niaharness.skills import load_skill_registry
+from niaharness.tools.skills_loader import load_skill_registry
 from niaharness.tasks import get_task_manager
 
 if TYPE_CHECKING:
@@ -136,7 +136,7 @@ class CommandRegistry:
 
         # Scan skills.
         try:
-            from niaharness.skills import load_skill_registry
+            from niaharness.tools.skills_loader import load_skill_registry
 
             registry = load_skill_registry()
             # Try exact, normalized, and title-case matches.
@@ -727,7 +727,7 @@ def create_default_command_registry() -> CommandRegistry:
         sub_args = parts[1] if len(parts) > 1 else ""
 
         if subcommand == "browse":
-            from niaharness.skills.hub import list_optional_skills
+            from niaharness.tools.skills_hub import list_optional_skills
 
             skills = list_optional_skills()
             if not skills:
@@ -742,7 +742,7 @@ def create_default_command_registry() -> CommandRegistry:
             return CommandResult(message="\n".join(lines))
 
         if subcommand == "search":
-            from niaharness.skills.hub import search_optional_skills
+            from niaharness.tools.skills_hub import search_optional_skills
 
             if not sub_args:
                 return CommandResult(message="Usage: /skills search <query>")
@@ -756,7 +756,7 @@ def create_default_command_registry() -> CommandRegistry:
             return CommandResult(message="\n".join(lines))
 
         if subcommand == "install":
-            from niaharness.skills.hub import install_skill
+            from niaharness.tools.skills_hub import install_skill
 
             if not sub_args:
                 return CommandResult(message="Usage: /skills install <name>")
@@ -764,7 +764,7 @@ def create_default_command_registry() -> CommandRegistry:
             return CommandResult(message=message)
 
         if subcommand == "uninstall":
-            from niaharness.skills.hub import uninstall_skill
+            from niaharness.tools.skills_hub import uninstall_skill
 
             if not sub_args:
                 return CommandResult(message="Usage: /skills uninstall <name>")

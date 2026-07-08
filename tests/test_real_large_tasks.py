@@ -296,8 +296,8 @@ async def task_migration_plan_with_memory():
     saves session for later resume."""
 
     from niaharness.coordinator.agent_definitions import get_agent_definition
-    from niaharness.skills.registry import SkillRegistry
-    from niaharness.skills.types import SkillDefinition
+    from niaharness.tools.skills_registry import SkillRegistry
+    from niaharness.tools.skills_types import SkillDefinition
     from niaharness.memory.manager import add_memory_entry, list_memory_files, remove_memory_entry
     from niaharness.services.session_storage import save_session_snapshot, export_session_markdown
     import niaharness.memory.paths as mp

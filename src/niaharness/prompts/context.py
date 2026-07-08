@@ -9,7 +9,7 @@ from niaharness.config.settings import Settings
 from niaharness.memory import find_relevant_memories, load_memory_prompt
 from niaharness.prompts.claudemd import load_claude_md_prompt
 from niaharness.prompts.system_prompt import build_system_prompt
-from niaharness.skills.loader import load_skill_registry
+from niaharness.tools.skills_loader import load_skill_registry
 
 
 def _build_skills_section(cwd: str | Path) -> str | None:

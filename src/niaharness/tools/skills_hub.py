@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Optional, Union
 
-from niaharness.skills.loader import get_user_skills_dir, _parse_skill_markdown
+from niaharness.tools.skills_loader import get_user_skills_dir, _parse_skill_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # Paths
 # ---------------------------------------------------------------------------
 
-_OPTIONAL_DIR = Path(__file__).parent / "bundled" / "optional"
+_OPTIONAL_DIR = Path(__file__).parent.parent / "skills" / "bundled" / "optional"
 
 
 def get_optional_skills_dir() -> Path:
@@ -290,7 +290,7 @@ class OptionalSkillSource(SkillSource):
             return []
 
         # Load installed skill names to check status.
-        from niaharness.skills import load_skill_registry
+        from niaharness.tools.skills_loader import load_skill_registry
 
         registry = load_skill_registry()
         installed_names = {s.name for s in registry.list_skills()}
@@ -522,7 +522,7 @@ def install_skill(skill_name: str) -> tuple[bool, str]:
     source = OptionalSkillSource()
 
     # Check if already installed.
-    from niaharness.skills import load_skill_registry
+    from niaharness.tools.skills_loader import load_skill_registry
 
     registry = load_skill_registry()
     existing = registry.get(skill_name) or registry.get(skill_name.lower())

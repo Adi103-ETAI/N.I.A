@@ -8,7 +8,7 @@ from pathlib import Path
 from niaharness.config.settings import Settings
 from niaharness.hooks.loader import load_hook_registry
 from niaharness.plugins import load_plugins
-from niaharness.skills import load_skill_registry
+from niaharness.tools.skills_loader import load_skill_registry
 
 
 def _write_plugin(root: Path) -> None:

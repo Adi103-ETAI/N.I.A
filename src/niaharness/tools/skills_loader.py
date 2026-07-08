@@ -7,8 +7,8 @@ from pathlib import Path
 from niaharness.config.paths import get_config_dir
 from niaharness.config.settings import load_settings
 from niaharness.skills.bundled import get_bundled_skills
-from niaharness.skills.registry import SkillRegistry
-from niaharness.skills.types import SkillDefinition
+from niaharness.tools.skills_registry import SkillRegistry
+from niaharness.tools.skills_types import SkillDefinition
 
 
 def get_user_skills_dir() -> Path:

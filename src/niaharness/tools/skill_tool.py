@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from niaharness.skills import load_skill_registry
+from niaharness.tools.skills_loader import load_skill_registry
 from niaharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 
 

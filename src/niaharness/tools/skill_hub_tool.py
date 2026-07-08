@@ -13,7 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from niaharness.skills.hub import (
+from niaharness.tools.skills_hub import (
     install_skill,
     list_optional_skills,
     search_optional_skills,

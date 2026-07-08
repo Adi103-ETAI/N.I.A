@@ -7,7 +7,7 @@ from pathlib import Path
 
 from niaharness.mcp.types import McpServerConfig
 from niaharness.plugins.schemas import PluginManifest
-from niaharness.skills.types import SkillDefinition
+from niaharness.tools.skills_types import SkillDefinition
 
 
 @dataclass(frozen=True)

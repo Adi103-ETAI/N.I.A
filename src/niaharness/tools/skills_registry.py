@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from niaharness.skills.types import SkillDefinition
+from niaharness.tools.skills_types import SkillDefinition
 
 
 class SkillRegistry:

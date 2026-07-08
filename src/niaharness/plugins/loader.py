@@ -8,8 +8,8 @@ from pathlib import Path
 from niaharness.config.paths import get_config_dir
 from niaharness.plugins.schemas import PluginManifest
 from niaharness.plugins.types import LoadedPlugin
-from niaharness.skills.loader import _parse_skill_markdown
-from niaharness.skills.types import SkillDefinition
+from niaharness.tools.skills_loader import _parse_skill_markdown
+from niaharness.tools.skills_types import SkillDefinition
 
 
 def get_user_plugins_dir() -> Path:

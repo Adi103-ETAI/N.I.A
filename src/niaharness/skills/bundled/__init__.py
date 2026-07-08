@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from niaharness.skills.types import SkillDefinition
+from niaharness.tools.skills_types import SkillDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,6 @@ def get_bundled_skills_dir() -> Path:
 
 def _parse_frontmatter(default_name: str, content: str) -> tuple[str, str]:
     """Extract name and description from a skill markdown file."""
-    from niaharness.skills.loader import _parse_skill_markdown
+    from niaharness.tools.skills_loader import _parse_skill_markdown
 
     return _parse_skill_markdown(default_name, content)

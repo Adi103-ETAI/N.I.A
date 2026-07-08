@@ -238,8 +238,8 @@ async def test_hooks_in_agent_loop():
 # ====================================================================
 async def test_skills_load():
     """Create skill files, load them, verify registry."""
-    from niaharness.skills.registry import SkillRegistry
-    from niaharness.skills.loader import load_user_skills
+    from niaharness.tools.skills_registry import SkillRegistry
+    from niaharness.tools.skills_loader import load_user_skills
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Create skill files
@@ -257,7 +257,7 @@ Fetch the PR diff, review for bugs, style issues, and security problems.
 """)
 
         # Monkey-patch skills dir
-        import niaharness.skills.loader as sl
+        import niaharness.tools.skills_loader as sl
         orig = sl.get_user_skills_dir
         sl.get_user_skills_dir = lambda: Path(tmpdir)
 
@@ -640,8 +640,8 @@ async def test_config_paths():
 @pytest.mark.skipif(_SKIP_REAL_API, reason="Needs real API + AutoAgent")
 async def test_combined_hooks_skills_agent():
     """Combined test: load skills, register hooks, run agent on AutoAgent."""
-    from niaharness.skills.registry import SkillRegistry
-    from niaharness.skills.types import SkillDefinition
+    from niaharness.tools.skills_registry import SkillRegistry
+    from niaharness.tools.skills_types import SkillDefinition
     from niaharness.hooks.events import HookEvent
     from niaharness.hooks.loader import HookRegistry
     from niaharness.hooks.schemas import CommandHookDefinition

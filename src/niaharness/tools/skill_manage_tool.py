@@ -36,8 +36,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from niaharness.skills import load_skill_registry
-from niaharness.skills import loader as skills_loader
+from niaharness.tools.skills_loader import load_skill_registry
+from niaharness.tools import skills_loader
 from niaharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 
 
