@@ -28,10 +28,12 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from niaharness.config import get_bundled_skills_dir, get_nia_home, get_optional_skills_dir
-from agent.skill_utils import is_excluded_skill_path
+from niaharness.skills.bundled import get_bundled_skills_dir
+from niaharness.prompts.soul import get_nia_home
+from niaharness.tools.skills_hub import get_optional_skills_dir
+from niaharness.tools.skill_utils import is_excluded_skill_path
 from typing import Dict, List, Optional, Set, Tuple
-from utils import atomic_replace
+from niaharness.utils import atomic_replace
 
 logger = logging.getLogger(__name__)
 

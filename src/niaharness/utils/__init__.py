@@ -286,3 +286,24 @@ __all__ = [
     "get_release_tag_url",
     "get_public_build_version",
 ]
+
+def atomic_replace(path, content, *, encoding='utf-8'):
+    """Atomically write content to a file via temp file + rename."""
+    import os, tempfile
+    from pathlib import Path
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding=encoding) as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+

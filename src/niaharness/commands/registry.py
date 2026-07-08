@@ -156,13 +156,36 @@ class CommandRegistry:
                     "The full skill content is loaded below.]"
                 )
                 user_instruction = f"\n\nUser instruction: {_args}" if _args else ""
+
+                # Enumerate supporting files (adapted from reference _build_skill_message).
+                support_files_hint = ""
+                if skill.path:
+                    from pathlib import Path
+                    from niaharness.tools.skill_utils import SKILL_SUPPORT_DIRS
+
+                    skill_dir = Path(skill.path).parent
+                    linked = []
+                    for support_dir_name in sorted(SKILL_SUPPORT_DIRS):
+                        support_dir = skill_dir / support_dir_name
+                        if support_dir.is_dir():
+                            for f in sorted(support_dir.rglob("*")):
+                                if f.is_file() and not f.name.startswith(".") and f.suffix != ".pyc":
+                                    rel = f.relative_to(skill_dir)
+                                    linked.append(str(rel))
+                    if linked:
+                        support_files_hint = "\n\n[This skill has supporting files. Use skill(action=\"view\", name=\"" + skill.name + "\", file_path=\"<path>\") to read them:]\n"
+                        for lf in linked:
+                            support_files_hint += f"  {lf}\n"
+                    if skill_dir.exists():
+                        support_files_hint += f"\n[Skill directory: {skill_dir}]"
+
                 # Inject as a user message (preserves prompt cache).
                 from niaharness.engine.messages import ConversationMessage, TextBlock
 
                 context.engine._messages.append(
                     ConversationMessage(
                         role="user",
-                        content=[TextBlock(text=f"{activation_note}\n\n{skill.content}{user_instruction}")],
+                        content=[TextBlock(text=f"{activation_note}\n\n{skill.content}{support_files_hint}{user_instruction}")],
                     )
                 )
                 return CommandResult(

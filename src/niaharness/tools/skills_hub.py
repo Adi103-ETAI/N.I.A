@@ -517,7 +517,8 @@ def search_optional_skills(query: str, limit: int = 20) -> list[SkillMeta]:
 def install_skill(skill_name: str) -> tuple[bool, str]:
     """Install an optional skill by name.
 
-    Flow: fetch → quarantine → scan (basic) → install → lock.
+    Flow: fetch → quarantine → scan → install → lock + audit.
+    Adapted from the reference project's install flow.
     """
     source = OptionalSkillSource()
 
@@ -540,9 +541,39 @@ def install_skill(skill_name: str) -> tuple[bool, str]:
     except ValueError as exc:
         return False, f"Quarantine failed: {exc}"
 
+    # Security scan (adapted from reference — scan_skill + should_allow_install).
+    scan_verdict = "allowed"
+    scan_report = ""
+    try:
+        from niaharness.tools.skills_guard import scan_skill, should_allow_install, format_scan_report
+
+        scan_result = scan_skill(quarantine_path)
+        scan_report = format_scan_report(scan_result)
+        if not should_allow_install(scan_result, trust_level=bundle.trust_level):
+            # Block installation — clean up quarantine.
+            shutil.rmtree(quarantine_path, ignore_errors=True)
+            return False, f"Security scan blocked installation of '{skill_name}':\n{scan_report}"
+        scan_verdict = scan_result.verdict
+    except ImportError:
+        logger.debug("skills_guard not available — skipping scan")
+    except Exception as exc:
+        logger.warning("Skill scan failed (non-fatal): %s", exc)
+
     # Install (with symlink rejection + lock file recording).
     try:
         install_dir = install_from_quarantine(quarantine_path, skill_name, bundle)
+
+        # Record scan verdict in lock file.
+        lock = HubLockFile()
+        lock_entry = lock.get_installed(skill_name)
+        if lock_entry:
+            lock_entry["scan_verdict"] = scan_verdict
+            lock_entry["scan_report"] = scan_report[:500] if scan_report else ""
+            lock.save({"version": 1, "installed": {**lock.load().get("installed", {}), skill_name: lock_entry}})
+
+        # Append audit log.
+        _append_audit_log(f"install {skill_name} from {bundle.source} verdict={scan_verdict}")
+
         return True, f"Installed skill '{skill_name}' to {install_dir}"
     except ValueError as exc:
         return False, f"Install failed: {exc}"
@@ -550,19 +581,54 @@ def install_skill(skill_name: str) -> tuple[bool, str]:
         return False, f"Install failed: {exc}"
 
 
+def _append_audit_log(message: str) -> None:
+    """Append a line to the hub audit log (adapted from reference append_audit_log)."""
+    try:
+        audit_path = _hub_dir() / "audit.log"
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime, timezone
+
+        ts = datetime.now(timezone.utc).isoformat()
+        with open(audit_path, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {message}\n")
+    except Exception as exc:
+        logger.debug("Failed to write audit log: %s", exc)
+
+
 def uninstall_skill(skill_name: str) -> tuple[bool, str]:
-    """Uninstall a user-installed skill by name."""
+    """Uninstall a user-installed skill by name.
+
+    Refuses to uninstall bundled skills (adapted from reference uninstall_skill).
+    Validates via lock file before rmtree. Appends audit log.
+    """
     safe_name = _validate_skill_name(skill_name)
     user_dir = get_user_skills_dir()
     skill_dir = user_dir / safe_name
+
     if not skill_dir.exists():
         return False, f"Skill '{safe_name}' is not installed in the user directory."
 
+    # Refuse to uninstall bundled skills (adapted from reference).
+    from niaharness.tools.skills_loader import load_skill_registry
+
+    registry = load_skill_registry()
+    existing = registry.get(safe_name) or registry.get(safe_name.lower())
+    if existing is not None and existing.source == "bundled":
+        return False, f"Cannot uninstall bundled skill '{safe_name}'. Only user-installed skills can be removed."
+
+    # Check lock file for install_path validation (adapted from reference).
+    lock = HubLockFile()
+    lock_entry = lock.get_installed(safe_name)
+    if lock_entry:
+        install_path = lock_entry.get("install_path", "")
+        # Validate the install_path matches the skill name (rmtree-escape defense).
+        if install_path and safe_name not in install_path:
+            return False, f"Lock file install_path mismatch for '{safe_name}'. Refusing to uninstall."
+
     try:
         shutil.rmtree(skill_dir)
-        # Remove from lock file.
-        lock = HubLockFile()
         lock.record_uninstall(safe_name)
+        _append_audit_log(f"uninstall {safe_name}")
         return True, f"Uninstalled skill '{safe_name}'"
     except Exception as exc:
         return False, f"Failed to uninstall skill '{safe_name}': {exc}"

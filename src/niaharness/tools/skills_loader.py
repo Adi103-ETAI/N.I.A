@@ -98,41 +98,37 @@ def load_user_skills() -> list[SkillDefinition]:
 
 
 def _parse_skill_markdown(default_name: str, content: str) -> tuple[str, str]:
-    """Parse name and description from a skill markdown file with YAML frontmatter support."""
-    name = default_name
+    """Parse name and description from a skill markdown file.
+
+    Uses proper YAML frontmatter parsing via skill_utils.parse_frontmatter.
+    Falls back to heading/first-paragraph extraction for legacy skills.
+    """
+    from niaharness.tools.skill_utils import parse_frontmatter, extract_skill_description
+
+    fm, body = parse_frontmatter(content)
+
+    name = fm.get("name", default_name) if fm else default_name
+    if not isinstance(name, str) or not name.strip():
+        name = default_name
+    name = name.strip()
+
     description = ""
-
-    lines = content.splitlines()
-
-    # Try YAML frontmatter first (--- ... ---)
-    if lines and lines[0].strip() == "---":
-        for i, line in enumerate(lines[1:], 1):
-            if line.strip() == "---":
-                # Parse frontmatter fields
-                for fm_line in lines[1:i]:
-                    fm_stripped = fm_line.strip()
-                    if fm_stripped.startswith("name:"):
-                        val = fm_stripped[5:].strip().strip("'\"")
-                        if val:
-                            name = val
-                    elif fm_stripped.startswith("description:"):
-                        val = fm_stripped[12:].strip().strip("'\"")
-                        if val:
-                            description = val
-                break
-
-    # Fallback: extract from headings and first paragraph
+    if fm and fm.get("description"):
+        description = str(fm["description"]).strip()
     if not description:
-        for line in lines:
+        # Check for # heading as name source (legacy skills without frontmatter).
+        for line in body.strip().splitlines():
             stripped = line.strip()
             if stripped.startswith("# "):
-                if not name or name == default_name:
-                    name = stripped[2:].strip() or default_name
+                heading_name = stripped[2:].strip()
+                if heading_name and name == default_name:
+                    name = heading_name
                 continue
             if stripped and not stripped.startswith("---") and not stripped.startswith("#"):
                 description = stripped[:200]
                 break
-
+    if not description:
+        description = extract_skill_description(content)
     if not description:
         description = f"Skill: {name}"
     return name, description

@@ -70,14 +70,21 @@ description: {description}
 
 
 class SkillManageToolInput(BaseModel):
-    """Arguments for the skill_manage tool."""
+    """Arguments for the skill_manage tool.
 
-    action: Literal["create", "update", "edit", "delete", "list", "info"] = Field(
-        description="The skill management operation to perform"
+    Supports 8 operations (adapted from reference skill_manager_tool):
+    create, update, edit, delete, list, info, write_file, remove_file.
+    """
+
+    action: Literal["create", "update", "edit", "delete", "list", "info", "write_file", "remove_file"] = Field(
+        description=(
+            "The skill management operation. write_file/remove_file manage "
+            "support files (references/, templates/, scripts/, assets/)."
+        )
     )
     name: str | None = Field(
         default=None,
-        description="Skill name (required for create/update/edit/delete/info). "
+        description="Skill name (required for create/update/edit/delete/info/write_file/remove_file). "
         "Must match ^[a-z0-9][a-z0-9._-]*$ — lowercase letters, digits, hyphens, dots, underscores.",
     )
     description: str | None = Field(
@@ -105,6 +112,18 @@ class SkillManageToolInput(BaseModel):
     replace_all: bool = Field(
         default=False,
         description="For edit: replace all occurrences of old_string (default false = first only)",
+    )
+    file_path: str | None = Field(
+        default=None,
+        description=(
+            "For write_file/remove_file: path relative to the skill directory "
+            "(e.g. 'references/notes.md', 'templates/pr-body.md', 'scripts/run.sh'). "
+            "Must be under references/, templates/, scripts/, or assets/."
+        ),
+    )
+    file_content: str | None = Field(
+        default=None,
+        description="For write_file: the content to write to the support file.",
     )
 
 
@@ -142,7 +161,11 @@ def _validate_content_size(content: str) -> str | None:
 
 
 def _validate_frontmatter(content: str) -> str | None:
-    """Validate that content has proper frontmatter with required fields."""
+    """Validate that content has proper frontmatter with required fields.
+
+    Uses proper YAML parsing via skill_utils.parse_frontmatter (adapted from
+    reference _validate_frontmatter which uses yaml.safe_load).
+    """
     if not content.strip():
         return "Content cannot be empty."
 
@@ -154,17 +177,14 @@ def _validate_frontmatter(content: str) -> str | None:
     if not end_match:
         return "Skill frontmatter is not closed. Ensure you have a closing '---' line."
 
-    yaml_content = content[3 : end_match.start() + 3]
+    body = content[end_match.end() + 3 :].strip()
+    if not body:
+        return "Skill must have content after the frontmatter (instructions, procedures, etc.)."
 
-    # Lightweight YAML parse (no pyyaml dependency for simple key: value pairs).
-    parsed: dict[str, str] = {}
-    for line in yaml_content.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if ":" in line:
-            key, _, val = line.partition(":")
-            parsed[key.strip()] = val.strip().strip("'\"")
+    # Use proper YAML parsing (adapted from reference).
+    from niaharness.tools.skill_utils import parse_frontmatter
+
+    parsed, _ = parse_frontmatter(content)
 
     if "name" not in parsed:
         return "Frontmatter must include 'name' field."
@@ -172,10 +192,6 @@ def _validate_frontmatter(content: str) -> str | None:
         return "Frontmatter must include 'description' field."
     if len(str(parsed.get("description", ""))) > MAX_DESCRIPTION_LENGTH:
         return f"Description exceeds {MAX_DESCRIPTION_LENGTH} characters."
-
-    body = content[end_match.end() + 3 :].strip()
-    if not body:
-        return "Skill must have content after the frontmatter (instructions, procedures, etc.)."
 
     return None
 
@@ -252,6 +268,10 @@ class SkillManageTool(BaseTool):
             return self._edit(name, arguments)
         if action == "delete":
             return self._delete(name)
+        if action == "write_file":
+            return self._write_file(name, arguments)
+        if action == "remove_file":
+            return self._remove_file(name, arguments)
 
         return ToolResult(output=f"Unknown action: {action}", is_error=True)
 
@@ -460,20 +480,145 @@ class SkillManageTool(BaseTool):
         )
 
     def _delete(self, name: str) -> ToolResult:
-        """Delete a user skill."""
+        """Delete a user skill (including its directory and support files)."""
         if not _is_user_skill(name):
             return ToolResult(
                 output=f"Skill not found in user dir: {name}. Only user skills can be deleted.",
                 is_error=True,
             )
 
+        skill_dir = _skill_dir_path(name)
         path = _skill_file_path(name)
         try:
+            # Remove the SKILL.md file.
             path.unlink()
+            # Remove the skill directory if it's now empty (or only has empty subdirs).
+            # Adapted from reference _delete_skill which does shutil.rmtree.
+            import shutil
+            # Only rmtree if the directory contains no other skills.
+            other_skills = list(skill_dir.rglob("SKILL.md"))
+            if not other_skills:
+                shutil.rmtree(skill_dir, ignore_errors=True)
         except OSError as exc:
             return ToolResult(output=f"Failed to delete skill: {exc}", is_error=True)
 
         return ToolResult(
             output=f"Deleted skill '{name}' ({path}).",
             metadata={"action": "delete", "name": name, "path": str(path)},
+        )
+
+    def _write_file(self, name: str, arguments: SkillManageToolInput) -> ToolResult:
+        """Add or overwrite a support file in a user skill directory.
+
+        Adapted from reference _write_file. The file must be under one of the
+        support directories: references/, templates/, scripts/, assets/.
+        """
+        if not arguments.file_path:
+            return ToolResult(output="write_file requires file_path", is_error=True)
+        if arguments.file_content is None:
+            return ToolResult(output="write_file requires file_content", is_error=True)
+
+        # Validate file_path (adapted from reference _validate_file_path).
+        from niaharness.tools.skill_utils import SKILL_SUPPORT_DIRS
+
+        safe_path = Path(arguments.file_path)
+        if safe_path.is_absolute() or ".." in safe_path.parts:
+            return ToolResult(output=f"Invalid file_path: {arguments.file_path}", is_error=True)
+
+        parts = safe_path.parts
+        if len(parts) < 2 or parts[0] not in SKILL_SUPPORT_DIRS:
+            return ToolResult(
+                output=(
+                    f"file_path must start with one of: {', '.join(sorted(SKILL_SUPPORT_DIRS))}. "
+                    f"Got: {arguments.file_path}"
+                ),
+                is_error=True,
+            )
+
+        # Check skill exists.
+        if not _is_user_skill(name):
+            return ToolResult(
+                output=f"Skill not found in user dir: {name}. write_file only works on user skills.",
+                is_error=True,
+            )
+
+        skill_dir = _skill_dir_path(name)
+        target = (skill_dir / safe_path).resolve()
+        try:
+            skill_root = skill_dir.resolve()
+            if not target.is_relative_to(skill_root):
+                return ToolResult(output=f"File path escapes skill directory: {arguments.file_path}", is_error=True)
+        except (ValueError, OSError):
+            return ToolResult(output=f"Invalid file path: {arguments.file_path}", is_error=True)
+
+        # Size check (1 MiB max per support file).
+        if len(arguments.file_content) > 1_048_576:
+            return ToolResult(
+                output=f"File content too large ({len(arguments.file_content):,} bytes, max 1 MiB).",
+                is_error=True,
+            )
+
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(arguments.file_content, encoding="utf-8")
+        except OSError as exc:
+            return ToolResult(output=f"Failed to write file: {exc}", is_error=True)
+
+        return ToolResult(
+            output=f"Wrote {target.relative_to(skill_dir)} in skill '{name}' ({len(arguments.file_content)} bytes).",
+            metadata={"action": "write_file", "name": name, "file_path": str(target)},
+        )
+
+    def _remove_file(self, name: str, arguments: SkillManageToolInput) -> ToolResult:
+        """Remove a support file from a user skill directory.
+
+        Adapted from reference _remove_file.
+        """
+        if not arguments.file_path:
+            return ToolResult(output="remove_file requires file_path", is_error=True)
+
+        from niaharness.tools.skill_utils import SKILL_SUPPORT_DIRS
+
+        safe_path = Path(arguments.file_path)
+        if safe_path.is_absolute() or ".." in safe_path.parts:
+            return ToolResult(output=f"Invalid file_path: {arguments.file_path}", is_error=True)
+
+        parts = safe_path.parts
+        if len(parts) < 2 or parts[0] not in SKILL_SUPPORT_DIRS:
+            return ToolResult(
+                output=f"file_path must start with one of: {', '.join(sorted(SKILL_SUPPORT_DIRS))}.",
+                is_error=True,
+            )
+
+        if not _is_user_skill(name):
+            return ToolResult(
+                output=f"Skill not found in user dir: {name}. remove_file only works on user skills.",
+                is_error=True,
+            )
+
+        skill_dir = _skill_dir_path(name)
+        target = (skill_dir / safe_path).resolve()
+        try:
+            skill_root = skill_dir.resolve()
+            if not target.is_relative_to(skill_root):
+                return ToolResult(output=f"File path escapes skill directory: {arguments.file_path}", is_error=True)
+        except (ValueError, OSError):
+            return ToolResult(output=f"Invalid file path: {arguments.file_path}", is_error=True)
+
+        if not target.exists():
+            return ToolResult(output=f"File not found: {arguments.file_path}", is_error=True)
+
+        try:
+            target.unlink()
+            # Clean up empty parent directories.
+            parent = target.parent
+            while parent != skill_dir and parent.exists() and not any(parent.iterdir()):
+                parent.rmdir()
+                parent = parent.parent
+        except OSError as exc:
+            return ToolResult(output=f"Failed to remove file: {exc}", is_error=True)
+
+        return ToolResult(
+            output=f"Removed {arguments.file_path} from skill '{name}'.",
+            metadata={"action": "remove_file", "name": name, "file_path": arguments.file_path},
         )
