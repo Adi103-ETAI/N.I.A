@@ -222,6 +222,42 @@ class LLMContextEngine(ContextEngine):
         from niaharness.engine.llm_compaction import LLMCompactor
 
         self._compactor = LLMCompactor()
+        # P1 fix: auto-wire the auxiliary client so LLM summarization
+        # actually works. Without this, _aux_client is always None and
+        # compact() falls back to text_flatten every time.
+        self._try_wire_aux_client()
+
+    def _try_wire_aux_client(self) -> None:
+        """Attempt to wire the auxiliary client into the compactor.
+
+        Best-effort: if the aux client isn't configured (no env vars, no
+        config), this is a no-op and the compactor falls back to text-flatten.
+        """
+        try:
+            import asyncio
+            from niaharness.auxiliary import get_aux_client
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop is not None:
+                # We're inside an event loop — schedule the wiring.
+                async def _wire():
+                    client = await get_aux_client()
+                    self._compactor.set_aux_client(client)
+                loop.create_task(_wire())
+            else:
+                # No event loop — try sync (may return None if not configured).
+                # We can't await get_aux_client() here, so just check config.
+                from niaharness.auxiliary import get_aux_config
+                config = get_aux_config()
+                if config is not None:
+                    from niaharness.auxiliary import AuxiliaryClient
+                    self._compactor.set_aux_client(AuxiliaryClient(config))
+        except Exception:
+            pass  # Best-effort — text-flatten fallback is fine.
 
     @property
     def name(self) -> str:

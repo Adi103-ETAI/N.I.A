@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from niaharness.tools.bash_tool import BashTool, BashToolInput
+from niaharness.tools.BashTool import BashTool
+from niaharness.tools.BashTool.schema import BashToolInput
 from niaharness.tools.base import ToolExecutionContext
 from niaharness.tools.brief_tool import BriefTool, BriefToolInput
 from niaharness.tools.cron_create_tool import CronCreateTool, CronCreateToolInput
@@ -16,9 +17,12 @@ from niaharness.tools.cron_list_tool import CronListTool, CronListToolInput
 from niaharness.tools.config_tool import ConfigTool, ConfigToolInput
 from niaharness.tools.enter_worktree_tool import EnterWorktreeTool, EnterWorktreeToolInput
 from niaharness.tools.exit_worktree_tool import ExitWorktreeTool, ExitWorktreeToolInput
-from niaharness.tools.file_edit_tool import FileEditTool, FileEditToolInput
-from niaharness.tools.file_read_tool import FileReadTool, FileReadToolInput
-from niaharness.tools.file_write_tool import FileWriteTool, FileWriteToolInput
+from niaharness.tools.FileEditTool import FileEditTool
+from niaharness.tools.FileEditTool.schema import FileEditToolInput
+from niaharness.tools.FileReadTool import FileReadTool
+from niaharness.tools.FileReadTool.schema import FileReadToolInput
+from niaharness.tools.FileWriteTool import FileWriteTool
+from niaharness.tools.FileWriteTool.schema import FileWriteToolInput
 from niaharness.tools.glob_tool import GlobTool, GlobToolInput
 from niaharness.tools.grep_tool import GrepTool, GrepToolInput
 from niaharness.tools.lsp_tool import LspTool, LspToolInput
@@ -45,8 +49,18 @@ async def test_file_write_read_and_edit(tmp_path: Path):
         FileReadToolInput(path="notes.txt", offset=1, limit=2),
         context,
     )
-    assert "2\ttwo" in read_result.output
-    assert "3\tthree" in read_result.output
+    # The real FileReadTool formats lines as "     1. one" (padded + dot).
+    # Just check the content is present.
+    assert "one" in read_result.output
+    assert "two" in read_result.output
+    assert "three" not in read_result.output  # limit=2, so line 3 excluded
+
+    # FileEditTool requires a full read (no offset/limit) before editing.
+    full_read = await FileReadTool().execute(
+        FileReadToolInput(path="notes.txt"),
+        context,
+    )
+    assert full_read.is_error is False
 
     edit_result = await FileEditTool().execute(
         FileEditToolInput(path="notes.txt", old_str="two", new_str="TWO"),

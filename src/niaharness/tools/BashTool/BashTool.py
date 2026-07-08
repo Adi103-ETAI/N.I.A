@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -28,6 +29,68 @@ from .utils import (
     strip_empty_lines,
     truncate_output,
 )
+
+
+# ---------------------------------------------------------------------------
+# P0 fix: Environment sanitization — strip API keys from subprocess env.
+# Without this, every bash command inherits OPENAI_API_KEY, ANTHROPIC_API_KEY,
+# etc. A prompt-injected command can exfiltrate them via curl.
+# ---------------------------------------------------------------------------
+
+# Env var patterns to strip from the subprocess environment.
+_SENSITIVE_ENV_PATTERNS = (
+    "API_KEY",
+    "API_TOKEN",
+    "ACCESS_TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "CREDENTIAL",
+    "AUTH",
+    "BEARER",
+    "PRIVATE_KEY",
+    "AWS_",
+    "AZURE_",
+    "GCP_",
+    "GOOGLE_",
+    "OPENAI_",
+    "ANTHROPIC_",
+    "GROQ_",
+    "DEEPSEEK_",
+    "MISTRAL_",
+    "OPENROUTER_",
+    "TOGETHER_",
+    "FIREWORKS_",
+    "CEREBRAS_",
+    "NVIDIA_",
+    "XAI_",
+    "PERPLEXITY_",
+    "DEEPINFRA_",
+    "HUGGINGFACE_",
+    "HF_",
+    "SUDO_PASSWORD",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "NIA_AUX_API_KEY",
+)
+
+
+def _sanitize_subprocess_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    """Strip sensitive environment variables before passing to a subprocess.
+
+    Ported from Hermes's ``environments/local.py:_sanitize_subprocess_env``.
+    Removes any env var whose name contains a sensitive pattern (API_KEY,
+    SECRET, TOKEN, etc.) to prevent credential exfiltration via shell commands.
+
+    Preserves PATH, HOME, SHELL, USER, LANG, TERM, and other non-sensitive vars.
+    """
+    base_env = env if env is not None else dict(os.environ)
+    sanitized: dict[str, str] = {}
+    for key, value in base_env.items():
+        key_upper = key.upper()
+        if any(pattern in key_upper for pattern in _SENSITIVE_ENV_PATTERNS):
+            continue  # Skip sensitive vars.
+        sanitized[key] = value
+    return sanitized
 
 
 class BashProgress(NamedTuple):
@@ -172,6 +235,7 @@ class BashTool(BaseTool):
             "-c",
             arguments.command,
             cwd=str(context.cwd),
+            env=_sanitize_subprocess_env(),  # P0 fix: strip API keys
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -248,6 +312,7 @@ class BashTool(BaseTool):
             "-c",
             arguments.command,
             cwd=str(context.cwd),
+            env=_sanitize_subprocess_env(),  # P0 fix: strip API keys
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )

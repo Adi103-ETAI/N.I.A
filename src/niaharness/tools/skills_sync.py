@@ -72,28 +72,15 @@ def _build_external_skill_index() -> Set[str]:
 
     Returns a set of skill names that are already provided by external dirs.
     Used to prevent sync_skills from shadowing externally-delegated skills.
+
+    NIA does not have an external_dirs config yet (Hermes feature), so this
+    always returns an empty set. The import was changed from
+    ``agent.skill_utils`` (Hermes module path — silently failed) to a
+    no-op stub.
     """
-    try:
-        from agent.skill_utils import get_external_skills_dirs, _external_dirs_cache_clear
-    except ImportError:
-        return set()
-
-    # Clear the external dirs cache so a config edit (or a test patch) is seen.
-    _external_dirs_cache_clear()
-
-    external_names: Set[str] = set()
-    for ext_dir in get_external_skills_dirs():
-        for skill_md in ext_dir.rglob("SKILL.md"):
-            if is_excluded_skill_path(skill_md):
-                continue
-            skill_dir = skill_md.parent
-            # Index by directory name (how _find_skill resolves skills)
-            external_names.add(skill_dir.name)
-            # Also index by frontmatter name (alternate identifier)
-            frontmatter_name = _read_skill_name(skill_md, "")
-            if frontmatter_name:
-                external_names.add(frontmatter_name)
-    return external_names
+    # NIA doesn't have external_dirs support yet. When it's added, this
+    # should import from ``niaharness.tools.skill_utils``.
+    return set()
 
 
 def _read_manifest() -> Dict[str, str]:

@@ -559,7 +559,65 @@ async def run_query(
 
         except Exception as exc:
             error_msg = str(exc)
-            # Detect prompt-too-long errors
+
+            # P1 fix: consult the recovery registry before giving up.
+            # The registry has 16 one-shot guards (prompt_too_long_compress,
+            # rate_limit_429_backoff, auth_401_rotate_credential, etc.)
+            # that can potentially recover from transient failures.
+            try:
+                from niaharness.engine.recovery import (
+                    get_default_registry,
+                    ErrorContext,
+                    ActionType,
+                )
+
+                registry = get_default_registry()
+                ctx = ErrorContext(
+                    exc=exc,
+                    attempt=turn_count,
+                    max_retries=context.max_turns,
+                    provider=getattr(context.api_client, "provider", ""),
+                    model=context.model,
+                )
+                action = registry.match(exc, ctx)
+            except Exception:
+                action = None
+
+            if action is not None:
+                if action.type == ActionType.COMPRESS and action.should_retry:
+                    # Trigger compaction and retry this turn.
+                    from niaharness.services.compact import auto_compact_if_needed
+                    messages[:] = auto_compact_if_needed(
+                        messages=messages,
+                        model=context.model,
+                        threshold=4000,
+                        state=compact_state,
+                    )
+                    yield MaxOutputTokensRecovery(
+                        message=f"Recovery: {action.description} — compacted and retrying",
+                    ), None
+                    continue  # retry the same turn
+
+                if action.type == ActionType.RETRY and action.should_retry:
+                    import asyncio as _asyncio
+                    yield MaxOutputTokensRecovery(
+                        message=f"Recovery: {action.description} — retrying in {action.delay_seconds:.1f}s",
+                    ), None
+                    await _asyncio.sleep(action.delay_seconds)
+                    continue  # retry the same turn
+
+                # For ABORT or unhandled action types, fall through to error.
+                if action.type == ActionType.ABORT:
+                    yield QueryResult(
+                        reason=TerminationReason.MODEL_ERROR,
+                        is_error=True,
+                        duration_ms=(time.monotonic() - _start_time) * 1000,
+                        num_turns=turn_count,
+                        errors=[f"{error_msg} (recovery: {action.description})"],
+                    ), None
+                    return
+
+            # Detect prompt-too-long errors (legacy path — recovery didn't handle it)
             if "prompt is too long" in error_msg.lower() or "invalid_request" in error_msg.lower():
                 yield QueryResult(
                     reason=TerminationReason.PROMPT_TOO_LONG,

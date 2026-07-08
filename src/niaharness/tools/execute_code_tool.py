@@ -260,11 +260,17 @@ class SandboxExecutor:
 
         try:
             with redirect_stdout(stdout), redirect_stderr(stderr):
-                # Execute the code.
-                exec(compile(code, "<ptc>", "exec"), sandbox_globals)
+                # P0 fix: wrap user code in a function so `return` works.
+                # The old `compile(code, "<ptc>", "exec")` rejected top-level
+                # `return` statements with SyntaxError, making the documented
+                # `return len(a)` example impossible. Now we wrap the code in
+                # `def __ptc_main():` and call it, capturing the return value.
+                wrapped_code = self._wrap_code_for_return(code)
+                exec(compile(wrapped_code, "<ptc>", "exec"), sandbox_globals)
 
-            # Extract return value (if the code used `return`).
-            return_value = sandbox_globals.get("__return_value__")
+                # Call the wrapper function and capture its return value.
+                main_fn = sandbox_globals.get("__ptc_main__")
+                return_value = main_fn() if callable(main_fn) else None
 
             output = stdout.getvalue()
             if stderr.getvalue():
@@ -282,6 +288,19 @@ class SandboxExecutor:
                 duration_ms=duration_ms,
                 tool_calls=tool_calls,
             )
+        except SyntaxError as exc:
+            # Syntax errors in the user's code (not the wrapper) — report cleanly.
+            duration_ms = int((time.monotonic() - start) * 1000)
+            error = f"SyntaxError: {exc.msg}"
+            if exc.lineno:
+                error += f" (line {exc.lineno})"
+            return ExecutionResult(
+                success=False,
+                output=stdout.getvalue(),
+                error=error,
+                duration_ms=duration_ms,
+                tool_calls=tool_calls,
+            )
         except Exception as exc:
             duration_ms = int((time.monotonic() - start) * 1000)
             error_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
@@ -296,6 +315,26 @@ class SandboxExecutor:
                 duration_ms=duration_ms,
                 tool_calls=tool_calls,
             )
+
+    def _wrap_code_for_return(self, code: str) -> str:
+        """Wrap user code in a function so `return` statements work.
+
+        P0 fix: ``compile(code, "<ptc>", "exec")`` rejects top-level
+        ``return`` statements with SyntaxError, making the documented
+        ``return len(a)`` example impossible. We wrap the user code in
+        ``def __ptc_main__():`` and call it, capturing the return value.
+
+        Indentation is handled by prepending 4 spaces to each non-empty line.
+        Empty lines and lines that are already indented (continuations) are
+        preserved as-is.
+        """
+        import textwrap
+
+        # Dedent the user code first (in case it's indented), then indent
+        # it uniformly to fit inside the wrapper function.
+        dedented = textwrap.dedent(code)
+        indented = textwrap.indent(dedented, "    ")
+        return f"def __ptc_main__():\n{indented}\n"
 
     def _build_namespace(self, context: ToolExecutionContext) -> Dict[str, Any]:
         """Build the sandbox namespace with allowed tools injected."""

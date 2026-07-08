@@ -360,6 +360,9 @@ class QueryEngine:
         self._abort_controller.reset()
         self._messages.append(ConversationMessage.from_user_text(prompt))
 
+        # P1 fix: persist the user message to the session DB (if enabled).
+        self._persist_message_to_session_db("user", prompt)
+
         context = QueryContext(
             api_client=self._api_client,
             tool_registry=self._tool_registry,
@@ -419,10 +422,63 @@ class QueryEngine:
                     except Exception:
                         # Review is best-effort — never break the turn.
                         pass
+
+                # P1 fix: persist the assistant's final message to the session DB.
+                # QueryResult has result_text, not message.
+                if event.result_text:
+                    self._persist_message_to_session_db("assistant", event.result_text)
                 continue
             yield event
 
     # -- Convenience -------------------------------------------------------
+
+    def _persist_message_to_session_db(self, role: str, text: str) -> None:
+        """Persist a message to the SQLite session DB (best-effort).
+
+        P1 fix: wires the session_db module into the QueryEngine. Every
+        user message and assistant response is written to the SQLite DB
+        at ~/.nia/sessions.db, enabling cross-session search (FTS5),
+        session lineage, and insights/analytics.
+
+        Best-effort: failures are logged at DEBUG and never break the turn.
+        The session DB is created on first use (lazy initialization).
+        """
+        try:
+            from niaharness.services.session_db import (
+                create_session,
+                add_message,
+                get_session,
+            )
+
+            # Ensure the session exists in the DB (create if needed).
+            existing = get_session(self._session_id)
+            if existing is None:
+                create_session(
+                    self._session_id,
+                    cwd=str(self._cwd),
+                    model=self._model,
+                    provider=getattr(self._api_client, "provider", None),
+                )
+
+            # Estimate token count for the message.
+            from niaharness.services.compact import estimate_tokens
+
+            token_count = estimate_tokens(text)
+
+            # Add the message.
+            add_message(
+                self._session_id,
+                role,
+                text,
+                token_count=token_count,
+            )
+        except Exception:
+            # Best-effort — never break the turn.
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "Session DB persist failed (non-fatal)", exc_info=True
+            )
 
     def get_read_file_state(self) -> FileStateCache:
         """Return the file state cache.

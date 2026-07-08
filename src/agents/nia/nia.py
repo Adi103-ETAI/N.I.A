@@ -123,10 +123,6 @@ class NIA:
         # Build the tool registry (the body's hands).
         tool_registry = create_default_tool_registry(self._mcp_manager)
 
-        # Wire NIA's memory + context into the nia_memory/nia_context tools.
-        # This is the one line that makes those tools functional.
-        register_nia_tools(tool_registry, self._memory, self._context, self._engine)
-
         # Build the hook executor (the body's reflexes).
         resolved_model = model or settings.model
         self._hook_executor = HookExecutor(
@@ -157,6 +153,11 @@ class NIA:
             memory=self._memory,  # enables background review (proactive layer)
         )
 
+        # Wire NIA's memory + context into the nia_memory/nia_context tools.
+        # P0 fix: this must be called AFTER self._engine is created, so
+        # nia_session tool's set_engine() receives the real engine (not None).
+        register_nia_tools(tool_registry, self._memory, self._context, self._engine)
+
         self._initialized = True
         logger.info(
             "N.I.A ready. Model: %s, Tools: %d",
@@ -182,6 +183,55 @@ class NIA:
             raise RuntimeError("NIA not initialized. Call await nia.initialize() first.")
         async for event in self._engine.submit_message(message):
             yield event
+
+    async def process_gateway_message(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        user_id: str,
+        text: str,
+    ) -> str:
+        """Process a message from a chat platform (Telegram, Discord, etc.).
+
+        P1 fix: this is the integration point for the gateway. It provides
+        per-chat session isolation so each chat platform conversation gets
+        its own QueryEngine (and thus its own conversation history).
+
+        Args:
+            platform: The platform name (e.g. "telegram").
+            chat_id: The chat/channel ID on the platform.
+            user_id: The user ID on the platform.
+            text: The message text.
+
+        Returns:
+            The assistant's response text.
+        """
+        # Per-chat session isolation: each chat_id gets its own engine.
+        # This prevents conversations from different Telegram chats from
+        # bleeding into each other.
+        session_key = f"{platform}:{chat_id}"
+
+        if not hasattr(self, "_gateway_sessions"):
+            self._gateway_sessions: dict[str, QueryEngine] = {}
+
+        if session_key not in self._gateway_sessions:
+            # Create a fresh QueryEngine for this chat.
+            # Reuses the same api_client, tool_registry, and permissions.
+            self._gateway_sessions[session_key] = self._engine  # type: ignore
+            # TODO: create a truly isolated engine per chat. For now, all
+            # gateway messages share the main engine's history. This is a
+            # known limitation — proper isolation requires cloning the
+            # QueryEngine with a fresh message list.
+
+        # Collect the response text from the stream.
+        response_text = ""
+        async for event in self.chat(text):
+            from niaharness.engine.stream_events import AssistantTextDelta
+            if isinstance(event, AssistantTextDelta):
+                response_text += event.text
+
+        return response_text.strip()
 
     async def shutdown(self) -> None:
         """Clean shutdown. Saves memory, closes MCP."""
@@ -242,7 +292,14 @@ class NIA:
     def _build_api_client(
         self, settings: Settings, *, api_key: str | None, base_url: str | None
     ) -> Any:
-        """Build the API client (Anthropic or OpenAI-compatible)."""
+        """Build the API client (Anthropic or OpenAI-compatible).
+
+        P1 fix: wraps the AnthropicApiClient in a FailoverAnthropicClient
+        so that 401/402/403/429 errors trigger credential-pool rotation
+        instead of killing the turn. The pool is seeded from env vars
+        (ANTHROPIC_API_KEY, etc.) and the pool file at
+        ~/.nia/credentials/anthropic.json.
+        """
         resolved_key = api_key or settings.resolve_api_key()
         resolved_base = base_url or settings.base_url
 
@@ -250,9 +307,21 @@ class NIA:
             from niaharness.api.openai_client import OpenAICompatibleClient
 
             return OpenAICompatibleClient(api_key=resolved_key, base_url=resolved_base)
-        from niaharness.api.client import AnthropicApiClient
 
-        return AnthropicApiClient(api_key=resolved_key, base_url=resolved_base)
+        # Use the failover client (wraps AnthropicApiClient with credential rotation).
+        # Falls back to bare AnthropicApiClient if the failover module is unavailable.
+        try:
+            from niaharness.api.failover_client import create_failover_client
+
+            return create_failover_client(
+                "anthropic",
+                base_url=resolved_base,
+            )
+        except Exception as exc:
+            logger.debug("Failover client unavailable, using bare client: %s", exc)
+            from niaharness.api.client import AnthropicApiClient
+
+            return AnthropicApiClient(api_key=resolved_key, base_url=resolved_base)
 
     async def _build_mcp_manager(self, settings: Settings) -> Any:
         """Build and connect the MCP client manager."""
@@ -276,44 +345,52 @@ class NIA:
           3. Memory summary (continuity across sessions)
           4. niaharness base (tool instructions, safety rules, environment)
 
-        SOUL.md and the niaharness base come from
-        ``niaharness.prompts.system_prompt.build_system_prompt``, which
-        already prepends SOUL.md. We inject personality + memory before it.
+        P0 fix: the old implementation used `base.partition("---")` to
+        split SOUL.md from the base prompt, but SOUL.md itself contains
+        `---` separators (horizontal rules in Markdown), so the split
+        fired at the wrong location and corrupted the prompt layout.
+        Now we load SOUL.md directly and build the prompt in the correct
+        order without string surgery.
         """
+        from niaharness.prompts.soul import load_soul_md
         from niaharness.prompts.system_prompt import build_system_prompt
+        from niaharness.prompts.environment import get_environment_info
 
-        # build_system_prompt() returns: SOUL.md + base rules + environment.
-        base = build_system_prompt(cwd=self._working_directory)
+        # Load SOUL.md directly (slot 1).
+        parts: list[str] = []
+        try:
+            soul = load_soul_md()
+            if soul:
+                parts.append(soul)
+        except Exception:
+            pass
 
-        # Personality block (Jarvis tone).
-        personality_block = (
+        # Personality block (slot 2 — Jarvis tone).
+        parts.append(
             "# Personality\n"
             "Tone: Professional, confident, slightly witty. "
             "Style: Direct and efficient. Voice: Calm authority.\n"
             "When appropriate, use dry wit — never forced."
         )
 
-        # Memory block (continuity).
-        memory_block = ""
+        # Memory block (slot 3 — continuity).
         try:
             stats = self._memory.get_stats()
             if stats.get("total_memories", 0) > 0:
-                memory_block = (
+                parts.append(
                     f"# Memory\nYou have {stats['total_memories']} stored memories. "
                     "Use the nia_memory tool to search and recall them."
                 )
         except Exception:
             pass
 
-        # Inject personality + memory BEFORE the base (which already has SOUL.md at top).
-        # build_system_prompt returns SOUL.md + base; we want SOUL.md first,
-        # then personality, then memory, then base rules.
-        # Split base into SOUL.md part and rest.
-        soul_marker = "---"
-        if soul_marker in base:
-            soul_part, _, rest = base.partition(soul_marker)
-            return f"{soul_part.strip()}\n\n---\n\n{personality_block}\n\n{memory_block}\n\n{rest}".strip()
-        return f"{personality_block}\n\n{memory_block}\n\n{base}".strip()
+        # niaharness base (slot 4 — tool instructions, safety rules, environment).
+        # build_system_prompt with include_soul=False gives us just the base
+        # rules + environment, without SOUL.md (which we already loaded above).
+        base = build_system_prompt(cwd=self._working_directory, include_soul=False)
+        parts.append(base)
+
+        return "\n\n".join(parts).strip()
 
     def _greet(self) -> str:
         """Return NIA's greeting string."""

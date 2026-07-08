@@ -1712,4 +1712,99 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(
         SlashCommand("soul", "Show or manage NIA's SOUL.md identity file", _soul_handler)
     )
+
+    # ── /insights — usage analytics + cost estimation ───────────────
+    async def _insights_handler(args: str, context: CommandContext) -> CommandResult:
+        del context
+        try:
+            from niaharness.insights import InsightsEngine, format_insights
+
+            engine = InsightsEngine()
+            # Parse days from args (default 7)
+            days = 7
+            if args.strip().isdigit():
+                days = max(1, min(int(args.strip()), 90))
+
+            report = engine.get_report(days=days)
+            return CommandResult(message=format_insights(report))
+        except Exception as exc:
+            return CommandResult(message=f"Failed to generate insights: {exc}")
+
+    registry.register(
+        SlashCommand("insights", "Show usage analytics and cost estimation (optional: days)", _insights_handler)
+    )
+
+    # ── /profile — profile management ───────────────────────────────
+    async def _profile_handler(args: str, context: CommandContext) -> CommandResult:
+        del context
+        from niaharness.profiles import (
+            get_active_profile,
+            list_profiles,
+            switch_profile,
+            create_profile,
+            delete_profile,
+        )
+
+        parts = args.strip().split(None, 1)
+        subcommand = parts[0] if parts else ""
+
+        if subcommand == "" or subcommand == "show":
+            active = get_active_profile()
+            profiles = list_profiles()
+            lines = [f"Active profile: {active.name}", "", "Available profiles:"]
+            for p in profiles:
+                marker = " *" if p.name == active.name else "  "
+                lines.append(f"{marker} {p.name}  ({p.home})")
+            lines.append("\nUsage:\n  /profile list           List profiles\n  /profile switch <name>  Switch active profile\n  /profile create <name>  Create a new profile\n  /profile delete <name>  Delete a profile")
+            return CommandResult(message="\n".join(lines))
+
+        if subcommand == "list":
+            profiles = list_profiles()
+            lines = [f"Profiles ({len(profiles)}):"]
+            for p in profiles:
+                lines.append(f"  {p.name}  ({p.home})")
+            return CommandResult(message="\n".join(lines))
+
+        if subcommand == "switch" and len(parts) > 1:
+            name = parts[1].strip()
+            try:
+                profile = switch_profile(name)
+                return CommandResult(
+                    message=f"Switched to profile '{profile.name}'.\nRestart NIA for the change to take full effect."
+                )
+            except ValueError as exc:
+                return CommandResult(message=f"Error: {exc}")
+
+        if subcommand == "create" and len(parts) > 1:
+            name = parts[1].strip()
+            try:
+                profile = create_profile(name)
+                return CommandResult(message=f"Created profile '{profile.name}' at {profile.home}")
+            except ValueError as exc:
+                return CommandResult(message=f"Error: {exc}")
+
+        if subcommand == "delete" and len(parts) > 1:
+            name = parts[1].strip()
+            try:
+                if delete_profile(name):
+                    return CommandResult(message=f"Deleted profile '{name}'.")
+                return CommandResult(message=f"Profile '{name}' not found.")
+            except ValueError as exc:
+                return CommandResult(message=f"Error: {exc}")
+
+        return CommandResult(
+            message=(
+                "Usage:\n"
+                "  /profile                 Show active profile + list\n"
+                "  /profile list            List all profiles\n"
+                "  /profile switch <name>   Switch active profile\n"
+                "  /profile create <name>   Create a new profile\n"
+                "  /profile delete <name>   Delete a profile"
+            )
+        )
+
+    registry.register(
+        SlashCommand("profile", "Manage NIA profiles (isolated identity/memory/sessions)", _profile_handler)
+    )
+
     return registry

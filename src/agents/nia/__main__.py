@@ -75,6 +75,14 @@ def main(
         "--list-providers",
         help="List all available LLM providers and exit.",
     ),
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help=(
+            "NIA profile name (e.g. 'work', 'personal'). Uses ~/.nia/profiles/<name>/. "
+            "Defaults to the active profile or 'default'."
+        ),
+    ),
     debug: bool = typer.Option(
         False,
         "--debug",
@@ -143,6 +151,18 @@ def main(
         ToolExecutionStarted,
         ToolExecutionCompleted,
     )
+
+    # P1 fix: set the active profile before NIA boots, so all path
+    # resolution (SOUL.md, memory, sessions.db, credentials, skills) uses
+    # the profile-scoped directory.
+    if profile:
+        from niaharness.profiles import switch_profile
+
+        try:
+            switch_profile(profile)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise typer.Exit(1)
 
     async def run() -> int:
         nia = NIA(working_directory=cwd)

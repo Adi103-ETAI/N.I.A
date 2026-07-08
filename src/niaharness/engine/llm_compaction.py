@@ -203,6 +203,21 @@ class LLMCompactor:
         self._failure_cooldown_until = 0.0
         self._last_summary_error = None
 
+    def set_aux_client(self, client: Optional[AuxClientProtocol]) -> None:
+        """Set or replace the auxiliary LLM client.
+
+        P1 fix: this method was documented but didn't exist. Without it,
+        callers had no way to wire the auxiliary client into the compactor,
+        so the LLM summarization path was always dead code.
+
+        Args:
+            client: The auxiliary client, or None to disable LLM summarization.
+        """
+        self._aux_client = client
+        # Reset failure state so a new client gets a fresh start.
+        self._consecutive_failures = 0
+        self._failure_cooldown_until = 0.0
+
     async def compact(self, request: CompactionRequest) -> CompactionResult:
         """Compact the conversation using LLM summarization.
 

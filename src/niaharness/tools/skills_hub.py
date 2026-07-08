@@ -615,15 +615,24 @@ def install_skill(skill_name: str) -> tuple[bool, str]:
 
         scan_result = scan_skill(quarantine_path)
         scan_report = format_scan_report(scan_result)
-        if not should_allow_install(scan_result, trust_level=bundle.trust_level):
+        # P0 fix: should_allow_install takes `force=`, not `trust_level=`.
+        # The old call raised TypeError, which was swallowed by the
+        # over-broad except below, silently bypassing the security scan.
+        allowed, reason = should_allow_install(scan_result, force=False)
+        if not allowed:
             # Block installation — clean up quarantine.
             shutil.rmtree(quarantine_path, ignore_errors=True)
             return False, f"Security scan blocked installation of '{skill_name}':\n{scan_report}"
         scan_verdict = scan_result.verdict
     except ImportError:
         logger.debug("skills_guard not available — skipping scan")
-    except Exception as exc:
-        logger.warning("Skill scan failed (non-fatal): %s", exc)
+    except (OSError, ValueError) as exc:
+        # Narrowed from bare `except Exception` — a real bug in the scan
+        # path (TypeError, AttributeError, etc.) should propagate and
+        # fail-closed, not silently install the skill.
+        logger.error("Skill scan failed (blocking install): %s", exc)
+        shutil.rmtree(quarantine_path, ignore_errors=True)
+        return False, f"Security scan failed for '{skill_name}' (install blocked): {exc}"
 
     # Install (with symlink rejection + lock file recording).
     try:

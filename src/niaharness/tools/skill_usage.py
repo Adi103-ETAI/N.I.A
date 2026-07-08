@@ -849,17 +849,14 @@ def _find_skill_dir(skill_name: str) -> Optional[Path]:
 
 
 def _find_external_skill_dir(skill_name: str) -> Optional[Path]:
-    """Locate a skill under configured external dirs by frontmatter name."""
-    from agent.skill_utils import get_all_skills_dirs
+    """Locate a skill under configured external dirs by frontmatter name.
 
-    for base in get_all_skills_dirs()[1:]:
-        if not base.exists():
-            continue
-        for skill_md in base.rglob("SKILL.md"):
-            if is_excluded_skill_path(skill_md):
-                continue
-            if _read_skill_name(skill_md, fallback=skill_md.parent.name) == skill_name:
-                return skill_md.parent
+    NIA does not have external_dirs support yet (Hermes feature), so this
+    always returns None. The import was changed from ``agent.skill_utils``
+    (Hermes module path — silently failed) to a no-op stub.
+    """
+    # NIA doesn't have external_dirs support yet. When it's added, this
+    # should import from ``niaharness.tools.skill_utils``.
     return None
 
 
