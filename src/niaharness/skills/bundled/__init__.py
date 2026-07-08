@@ -30,15 +30,11 @@ def get_bundled_skills() -> list[SkillDefinition]:
 
 
 def _parse_frontmatter(default_name: str, content: str) -> tuple[str, str]:
-    """Extract name and description from a skill markdown file."""
-    name = default_name
-    description = ""
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("# "):
-            name = stripped[2:].strip() or default_name
-            continue
-        if stripped and not stripped.startswith("#"):
-            description = stripped
-            break
-    return name, description or f"Bundled skill: {name}"
+    """Extract name and description from a skill markdown file.
+
+    Supports both YAML frontmatter (---) and simple # heading format.
+    Uses the loader's _parse_skill_markdown for frontmatter support.
+    """
+    from niaharness.skills.loader import _parse_skill_markdown
+
+    return _parse_skill_markdown(default_name, content)

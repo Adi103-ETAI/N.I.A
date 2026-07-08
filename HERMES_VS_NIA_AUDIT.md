@@ -521,8 +521,8 @@ which audit gap it closes.
 
 | # | Recommendation | Closes gap | Effort | Status |
 |---|---|---|---|---|
-| 15 | **Port the 6 GitHub skills** — github-auth, codebase-inspection, github-code-review, github-issues, github-pr-workflow, github-repo-management. All use `gh` CLI or REST. | #github row | 1 week | ⬜ Open |
-| 16 | **Port the 5 software-dev-process skills NIA is missing** — node-inspect-debugger, python-debugpy, requesting-code-review, spike, systematic-debugging, test-driven-development. | #software-development row | 1 week | ⬜ Open |
+| 15 | **Port the 6 GitHub skills** — github-auth, codebase-inspection, github-code-review, github-issues, github-pr-workflow, github-repo-management. All use `gh` CLI or REST. | #github row | 1 week | ✅ **Done** — adapted from Hermes skills/github/*/SKILL.md
+| 16 | **Port the 5 software-dev-process skills NIA is missing** — node-inspect-debugger, python-debugpy, requesting-code-review, spike, systematic-debugging, test-driven-development. | #software-development row | 1 week | ✅ **Done** — adapted from Hermes skills/software-development/*/SKILL.md
 | 17 | **Add 10–15 high-value skills from other categories** — pick the most useful: arxiv (research), obsidian (note-taking), google-workspace (productivity), docker-management (devops), 1password (security), stocks (finance), popular-web-designs (creative), etc. | many | 3 weeks | ⬜ Open |
 | 18 | **Build a skill hub** — `nia skills browse/install official/<cat>/<name>`. Mirror Hermes's `optional-skills/` pattern. | #27 | 1 week | ⬜ Open |
 
