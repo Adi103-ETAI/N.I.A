@@ -140,6 +140,9 @@ class NIA:
         )
 
         # Build the QueryEngine (the body — does the actual LLM + tool loop).
+        # The system prompt is built fresh each time _build_system_prompt is
+        # called, so background_review memory writes are reflected on the next
+        # turn. We store the builder and rebuild the prompt before each turn.
         self._engine = QueryEngine(
             api_client=resolved_api_client,
             tool_registry=tool_registry,
@@ -181,6 +184,9 @@ class NIA:
         QueryEngine handles the LLM call + tool execution loop + background
         review spawning. NIA does NOT make a separate "thinking" call.
 
+        Before each turn, the system prompt is refreshed so that memory
+        writes from background_review are visible to the model.
+
         Args:
             message: The user's message.
 
@@ -189,6 +195,12 @@ class NIA:
         """
         if not self._initialized or self._engine is None:
             raise RuntimeError("NIA not initialized. Call await nia.initialize() first.")
+
+        # Refresh the system prompt so background_review memory writes
+        # are reflected. The prompt includes SOUL.md + personality +
+        # memory summary — if memory changed, the prompt changes.
+        self._engine.set_system_prompt(self._build_system_prompt())
+
         async for event in self._engine.submit_message(message):
             yield event
 
@@ -202,9 +214,10 @@ class NIA:
     ) -> str:
         """Process a message from a chat platform (Telegram, Discord, etc.).
 
-        P1 fix: this is the integration point for the gateway. It provides
-        per-chat session isolation so each chat platform conversation gets
-        its own QueryEngine (and thus its own conversation history).
+        Each chat gets its own QueryEngine with a fresh message list,
+        so conversations from different chats don't bleed into each other.
+        The engines share the same api_client, tool_registry, and
+        permission_checker (cost-efficient), but have isolated histories.
 
         Args:
             platform: The platform name (e.g. "telegram").
@@ -215,27 +228,43 @@ class NIA:
         Returns:
             The assistant's response text.
         """
-        # Per-chat session isolation: each chat_id gets its own engine.
-        # This prevents conversations from different Telegram chats from
-        # bleeding into each other.
         session_key = f"{platform}:{chat_id}"
 
         if not hasattr(self, "_gateway_sessions"):
             self._gateway_sessions: dict[str, QueryEngine] = {}
 
-        if session_key not in self._gateway_sessions:
-            # Create a fresh QueryEngine for this chat.
-            # Reuses the same api_client, tool_registry, and permissions.
-            self._gateway_sessions[session_key] = self._engine  # type: ignore
-            # TODO: create a truly isolated engine per chat. For now, all
-            # gateway messages share the main engine's history. This is a
-            # known limitation — proper isolation requires cloning the
-            # QueryEngine with a fresh message list.
+        # Create a truly isolated QueryEngine per chat session.
+        # Each engine has its own message list but shares the api_client,
+        # tool_registry, permission_checker, and hook_executor.
+        if session_key not in self._gateway_sessions and self._engine is not None:
+            from niaharness.engine.query_engine import QueryEngine as _QE
+
+            isolated_engine = _QE(
+                api_client=self._engine._api_client,
+                tool_registry=self._engine._tool_registry,
+                permission_checker=self._engine._permission_checker,
+                cwd=self._engine._cwd,
+                model=self._engine._model,
+                system_prompt=self._engine._system_prompt,
+                max_tokens=self._engine._max_tokens,
+                max_turns=self._engine._max_turns,
+                max_budget_usd=self._engine._max_budget_usd,
+                token_budget=self._engine._token_budget,
+                hook_executor=self._engine._hook_executor,
+                tool_metadata=self._engine._tool_metadata,
+                memory=self._engine._memory,
+            )
+            self._gateway_sessions[session_key] = isolated_engine
+
+        engine = self._gateway_sessions.get(session_key, self._engine)
+        if engine is None:
+            return "Error: NIA not initialized."
 
         # Collect the response text from the stream.
+        from niaharness.engine.stream_events import AssistantTextDelta, AssistantTurnComplete
+
         response_text = ""
-        async for event in self.chat(text):
-            from niaharness.engine.stream_events import AssistantTextDelta
+        async for event in engine.submit_message(text):
             if isinstance(event, AssistantTextDelta):
                 response_text += event.text
 
@@ -302,11 +331,14 @@ class NIA:
     ) -> Any:
         """Build the API client (Anthropic or OpenAI-compatible).
 
-        P1 fix: wraps the AnthropicApiClient in a FailoverAnthropicClient
-        so that 401/402/403/429 errors trigger credential-pool rotation
-        instead of killing the turn. The pool is seeded from env vars
-        (ANTHROPIC_API_KEY, etc.) and the pool file at
-        ~/.nia/credentials/anthropic.json.
+        Resolution order:
+        1. If an explicit API key is provided, use it.
+        2. If no API key but OAuth tokens exist (from /oauth login), use
+           the OAuth access token as the API key.
+        3. If neither, fall back to settings.resolve_api_key().
+
+        Wraps the AnthropicApiClient in a FailoverAnthropicClient so
+        401/402/403/429 errors trigger credential-pool rotation.
         """
         resolved_key = api_key or settings.resolve_api_key()
         resolved_base = base_url or settings.base_url
@@ -315,6 +347,19 @@ class NIA:
             from niaharness.api.openai_client import OpenAICompatibleClient
 
             return OpenAICompatibleClient(api_key=resolved_key, base_url=resolved_base)
+
+        # If no API key found, try OAuth tokens (from /oauth login).
+        if not resolved_key:
+            try:
+                from niaharness.providers.anthropic import OAuthTokenManager
+
+                oauth_mgr = OAuthTokenManager()
+                oauth_token = oauth_mgr.get_valid_token()
+                if oauth_token:
+                    logger.info("Using Anthropic OAuth token for API access")
+                    resolved_key = oauth_token
+            except Exception:
+                pass
 
         # Use the failover client (wraps AnthropicApiClient with credential rotation).
         # Falls back to bare AnthropicApiClient if the failover module is unavailable.

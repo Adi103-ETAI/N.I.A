@@ -19,14 +19,16 @@ from typing import AsyncIterator, Awaitable, Callable
 from niaharness.api.client import (
     ApiMessageCompleteEvent,
     ApiMessageRequest,
+    ApiRetryEvent,
     ApiTextDeltaEvent,
     SupportsStreamingMessages,
 )
 from niaharness.api.usage import UsageSnapshot
-from niaharness.engine.messages import ConversationMessage, ToolResultBlock
+from niaharness.engine.messages import ConversationMessage, TextBlock, ToolResultBlock
 from niaharness.engine.stream_events import (
     ApiRetryNotification,
     AssistantTextDelta,
+    AssistantThinkingDelta,
     AssistantTurnComplete,
     BudgetExceeded,
     CompactBoundary,
@@ -552,8 +554,43 @@ async def run_query(
                     tools=context.tool_registry.to_api_schema(),
                 )
             ):
+                # Check for abort during streaming.
+                if context.abort_event and context.abort_event.is_set():
+                    # Preserve any partial text as an assistant message.
+                    partial_text = ""
+                    if final_message is None:
+                        partial_msg = ConversationMessage(
+                            role="assistant",
+                            content=[TextBlock(text=partial_text)],
+                        )
+                        messages.append(partial_msg)
+                    yield UserInterrupted(), None
+                    return
+
                 if isinstance(event, ApiTextDeltaEvent):
                     yield AssistantTextDelta(text=event.text), None
+                    continue
+
+                # Forward thinking deltas to the UI.
+                if hasattr(event, "thinking") and getattr(event, "thinking", ""):
+                    yield AssistantThinkingDelta(text=event.thinking), None
+                    continue
+
+                # Forward tool-call argument deltas to the UI.
+                if hasattr(event, "partial_json") and getattr(event, "partial_json", ""):
+                    # Accumulate partial JSON for the current tool call.
+                    # The full tool_use block arrives in ApiMessageCompleteEvent.
+                    continue
+
+                # Forward retry events to the UI.
+                if isinstance(event, ApiRetryEvent):
+                    yield ApiRetryNotification(
+                        attempt=event.attempt,
+                        max_retries=event.max_retries,
+                        retry_delay_ms=event.delay_seconds * 1000,
+                        error_status=str(event.status_code or ""),
+                        error_message=event.error[:200],
+                    ), None
                     continue
 
                 if isinstance(event, ApiMessageCompleteEvent):

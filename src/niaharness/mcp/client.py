@@ -160,6 +160,29 @@ class McpClientManager:
         return "\n".join(parts).strip()
 
     async def _connect_stdio(self, name: str, config: McpStdioServerConfig) -> None:
+        # Security check: validate the stdio command before spawning.
+        # Blocks shell interpreters with egress/persistence patterns
+        # and known IOC from the hermes-0day campaign.
+        from niaharness.mcp.security import validate_mcp_stdio_command
+
+        warnings = validate_mcp_stdio_command(
+            name=name,
+            command=config.command,
+            args=config.args,
+            env=config.env,
+        )
+        if warnings:
+            self._statuses[name] = McpConnectionStatus(
+                name=name,
+                state="failed",
+                transport=config.type,
+                auth_configured=bool(config.env),
+                detail="; ".join(warnings),
+            )
+            for w in warnings:
+                logger.error("MCP security: %s", w)
+            return
+
         stack = AsyncExitStack()
         try:
             read_stream, write_stream = await stack.enter_async_context(
