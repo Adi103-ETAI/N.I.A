@@ -303,11 +303,140 @@ def classify_http_error(status_code: int, body: str, url: Optional[str] = None) 
 
 
 # ---------------------------------------------------------------------------
+# FailoverReason enum (ported from Hermes agent/error_classifier.py)
+# ---------------------------------------------------------------------------
+
+class FailoverReason:
+    """Structured API-error taxonomy driving recovery decisions.
+
+    Ported from Hermes Agent's FailoverReason enum (14 values). Used by
+    the recovery registry to classify errors and select the right
+    recovery action.
+
+    Each value maps to a specific recovery strategy:
+    - rate_limit → RETRY with backoff
+    - auth → ROTATE_CREDENTIAL
+    - billing → ROTATE_CREDENTIAL
+    - forbidden → ABORT
+    - overloaded → RETRY with extended backoff
+    - server_error → RETRY with backoff
+    - context_overflow → COMPRESS
+    - payload_too_large → TRUNCATE_CONTEXT
+    - thinking_signature → STRIP_THINKING
+    - format_error → REBUILD_MESSAGES
+    - image_too_large → SHRINK_IMAGE (not yet implemented)
+    - multimodal_tool_content → REBUILD_MESSAGES
+    - content_policy_blocked → ABORT
+    - model_not_found → ABORT
+    """
+
+    RATE_LIMIT = "rate_limit"
+    UPSTREAM_RATE_LIMIT = "upstream_rate_limit"
+    AUTH = "auth"
+    BILLING = "billing"
+    FORBIDDEN = "forbidden"
+    OVERLOADED = "overloaded"
+    SERVER_ERROR = "server_error"
+    CONTEXT_OVERFLOW = "context_overflow"
+    PAYLOAD_TOO_LARGE = "payload_too_large"
+    THINKING_SIGNATURE = "thinking_signature"
+    FORMAT_ERROR = "format_error"
+    IMAGE_TOO_LARGE = "image_too_large"
+    MULTIMODAL_TOOL_CONTENT = "multimodal_tool_content"
+    CONTENT_POLICY_BLOCKED = "content_policy_blocked"
+    MODEL_NOT_FOUND = "model_not_found"
+    NETWORK_ERROR = "network_error"
+    UNKNOWN = "unknown"
+
+
+def classify_api_error(status_code: int | None, error_body: dict | str | None = None) -> str:
+    """Classify an API error into a FailoverReason.
+
+    Ported from Hermes Agent's classify_api_error(). This is the bridge
+    between HTTP status codes / error bodies and the recovery registry's
+    ActionType handlers.
+
+    Args:
+        status_code: HTTP status code (or None for network errors).
+        error_body: Parsed error body dict or raw error string.
+
+    Returns:
+        A FailoverReason.* string.
+    """
+    if status_code is None:
+        return FailoverReason.NETWORK_ERROR
+
+    # Parse error body for reason hints.
+    reason = ""
+    if isinstance(error_body, dict):
+        err = error_body.get("error", error_body)
+        reason = str(err.get("type", "") or err.get("reason", "") or err.get("code", ""))
+    elif isinstance(error_body, str):
+        reason = error_body.lower()
+
+    reason_lower = reason.lower() if reason else ""
+
+    if status_code == 429:
+        if "upstream" in reason_lower or "provider" in reason_lower:
+            return FailoverReason.UPSTREAM_RATE_LIMIT
+        return FailoverReason.RATE_LIMIT
+
+    if status_code == 401:
+        return FailoverReason.AUTH
+
+    if status_code == 402:
+        return FailoverReason.BILLING
+
+    if status_code == 403:
+        if "content" in reason_lower and "policy" in reason_lower:
+            return FailoverReason.CONTENT_POLICY_BLOCKED
+        if "entitlement" in reason_lower or "subscription" in reason_lower:
+            return FailoverReason.BILLING
+        return FailoverReason.FORBIDDEN
+
+    if status_code == 404:
+        return FailoverReason.MODEL_NOT_FOUND
+
+    if status_code == 400:
+        if "too many tokens" in reason_lower or "context length" in reason_lower or "prompt is too long" in reason_lower:
+            return FailoverReason.CONTEXT_OVERFLOW
+        if "thinking" in reason_lower and ("signature" in reason_lower or "invalid" in reason_lower):
+            return FailoverReason.THINKING_SIGNATURE
+        if "image" in reason_lower and ("large" in reason_lower or "size" in reason_lower):
+            return FailoverReason.IMAGE_TOO_LARGE
+        if "tool" in reason_lower and "content" in reason_lower:
+            return FailoverReason.MULTIMODAL_TOOL_CONTENT
+        if "payload" in reason_lower or "too large" in reason_lower:
+            return FailoverReason.PAYLOAD_TOO_LARGE
+        if "role" in reason_lower or "alternation" in reason_lower or "orphaned" in reason_lower:
+            return FailoverReason.FORMAT_ERROR
+        return FailoverReason.FORMAT_ERROR
+
+    if status_code == 413:
+        return FailoverReason.PAYLOAD_TOO_LARGE
+
+    if status_code == 422:
+        return FailoverReason.FORMAT_ERROR
+
+    if status_code == 529:
+        return FailoverReason.OVERLOADED
+
+    if status_code >= 500:
+        return FailoverReason.SERVER_ERROR
+
+    return FailoverReason.UNKNOWN
+
+
+# ---------------------------------------------------------------------------
 # Base error types
 # ---------------------------------------------------------------------------
 
 class NiaHarnessApiError(RuntimeError):
     """Base class for upstream API failures."""
+
+    def __init__(self, message: str, *, reason: str = FailoverReason.UNKNOWN) -> None:
+        super().__init__(message)
+        self.failover_reason = reason
 
 
 class AuthenticationFailure(NiaHarnessApiError):
