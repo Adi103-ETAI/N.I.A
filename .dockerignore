@@ -1,19 +1,78 @@
-node_modules/
-__pycache__/
-*.pyc
-.git/
-.github/
-.venv/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+# ─────────────────────────────────────────────────────────────────────────────
+# .dockerignore for N.I.A — ported from Hermes Agent's .dockerignore
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Git
+.git
+.gitignore
+.gitmodules
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
 *.egg-info/
 dist/
 build/
-docs/
-*.md
-!README.md
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+**/.venv
+
+# Dependencies (regenerated inside the image)
+node_modules
+**/node_modules
+
+# CI/CD
+.github
+
+# Environment files (secrets — must not leak into build context)
 .env
 .env.*
 !.env.example
- frontend/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# Documentation (not needed at runtime)
+*.md
+!README.md
+
+# Runtime data (bind-mounted at /opt/data; must not leak into build context)
+data/
+.nia/
+
+# Nix / packaging metadata
+nix/
+flake.nix
+flake.lock
+
+# Design and planning documents
+docs/
+
+# Docker files themselves (not needed inside the image)
+Dockerfile
+docker-compose.yml
+docker-compose.windows.yml
+.dockerignore
+.hadolint.yaml
+
+# Repo-level dotfiles that are git-only or dev-tooling config
+.envrc
+.gitattributes
+.mailmap

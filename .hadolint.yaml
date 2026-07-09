@@ -1,0 +1,28 @@
+# hadolint configuration for the N.I.A Dockerfile.
+# Ported from Hermes Agent's .hadolint.yaml.
+# See https://github.com/hadolint/hadolint#configure for rules.
+failure-threshold: warning
+
+ignored:
+  # Pin versions in apt get install. We intentionally don't pin common
+  # tools (curl, git, openssh-client, etc.) — security updates flow in
+  # via the periodic base-image rebuild, and pinning would lock us to
+  # superseded patch releases.
+  - DL3008
+  # Use WORKDIR to switch to a directory. The image uses `(cd ... && ...)`
+  # inline subshells for one-off build steps because they don't affect
+  # later RUN commands.
+  - DL3003
+  # Multiple consecutive RUN instructions. The `touch README.md` + `uv
+  # sync` split is intentional — `touch` is cheap, `uv sync` is the
+  # expensive layer-cached step we want isolated.
+  - DL3059
+  # Last USER should not be root. tini runs as root so the entrypoint
+  # can usermod/groupmod and chown the data volume per NIA_UID at
+  # runtime; the main process then drops to the nia user.
+  - DL3002
+
+# Require explicit base-image pins.
+trustedRegistries:
+  - docker.io
+  - ghcr.io
