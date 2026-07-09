@@ -70,14 +70,33 @@ class AuxConfig:
     temperature: float = 0.0
 
 
-def get_aux_config() -> Optional[AuxConfig]:
+def get_aux_config(task: Optional[str] = None) -> Optional[AuxConfig]:
     """Return the auxiliary model configuration, or None if not configured.
 
     Resolution order:
-      1. ``NIA_AUX_MODEL`` + ``NIA_AUX_API_KEY`` env vars
-      2. ``auxiliary.model`` + ``auxiliary.api_key`` in config.yaml
-      3. None (aux model disabled — primary model will be used)
+      1. Per-task override: ``NIA_AUX_<TASK>_MODEL`` + ``NIA_AUX_<TASK>_API_KEY``
+         env vars or ``auxiliary.<task>.model`` in config.yaml
+      2. ``NIA_AUX_MODEL`` + ``NIA_AUX_API_KEY`` env vars
+      3. ``auxiliary.model`` + ``auxiliary.api_key`` in config.yaml
+      4. None (aux model disabled — primary model will be used)
+
+    Args:
+        task: Optional task name for per-task overrides (e.g. "compression",
+              "vision", "title_generation", "permission").
     """
+    # 0. Per-task override.
+    if task:
+        from niaharness.auxiliary.chain import get_task_config
+        task_config = get_task_config(task)
+        if task_config is not None:
+            model, api_key, base_url, provider = task_config
+            return AuxConfig(
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                provider=provider,
+            )
+
     # 1. Environment variables.
     model = os.environ.get("NIA_AUX_MODEL", "").strip()
     api_key = os.environ.get("NIA_AUX_API_KEY", "").strip()
@@ -268,24 +287,33 @@ _aux_client: Optional[AuxiliaryClient] = None
 _aux_client_lock = asyncio.Lock()
 
 
-async def get_aux_client() -> Optional[AuxiliaryClient]:
+async def get_aux_client(task: Optional[str] = None) -> Optional[AuxiliaryClient]:
     """Return the process-wide AuxiliaryClient, or None if not configured.
 
-    The client is lazily initialized on first call. If no aux model is
-    configured (no env vars, no config), returns None — callers should
-    fall back to the primary model or a no-op.
+    The client is lazily initialized on first call. If a task name is
+    provided, per-task config overrides are checked first.
+
+    Args:
+        task: Optional task name for per-task overrides (e.g. "compression").
+
+    Returns:
+        The AuxiliaryClient, or None if no aux model is configured.
     """
     global _aux_client
-    if _aux_client is not None:
+    if _aux_client is not None and task is None:
         return _aux_client
     async with _aux_client_lock:
-        if _aux_client is not None:
+        if _aux_client is not None and task is None:
             return _aux_client
-        config = get_aux_config()
+        config = get_aux_config(task)
         if config is None:
             return None
-        _aux_client = AuxiliaryClient(config)
-        return _aux_client
+        if task is None:
+            _aux_client = AuxiliaryClient(config)
+            return _aux_client
+        else:
+            # Return a per-task client (not cached)
+            return AuxiliaryClient(config)
 
 
 def reset_aux_client() -> None:
@@ -294,10 +322,36 @@ def reset_aux_client() -> None:
     _aux_client = None
 
 
+# Re-export chain functions for convenience
+from niaharness.auxiliary.chain import (  # noqa: E402
+    call_with_fallback,
+    is_auth_error,
+    is_connection_error,
+    is_model_not_found_error,
+    is_payment_error,
+    is_provider_unhealthy,
+    is_rate_limit_error,
+    is_transient_transport_error,
+    mark_provider_unhealthy,
+    reset_unhealthy_cache,
+    try_payment_fallback,
+)
+
+
 __all__ = [
     "AuxConfig",
     "AuxiliaryClient",
     "get_aux_client",
     "get_aux_config",
     "reset_aux_client",
+    # Re-export chain functions for convenience
+    "call_with_fallback",
+    "is_payment_error",
+    "is_auth_error",
+    "is_rate_limit_error",
+    "is_connection_error",
+    "mark_provider_unhealthy",
+    "is_provider_unhealthy",
+    "try_payment_fallback",
+    "reset_unhealthy_cache",
 ]
