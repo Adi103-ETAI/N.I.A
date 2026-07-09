@@ -97,7 +97,7 @@ def test_session_db_basic():
         create_session, add_message, get_messages, search_messages, get_session,
     )
     s = create_session("audit-test-sess", "/tmp/test", title="Test", model="claude-3-opus")
-    assert s.id == "audit-test-sess"
+    assert s["id"] == "audit-test-sess"
     add_message("audit-test-sess", "user", "Hello Python world")
     add_message("audit-test-sess", "assistant", "Hi! Python is great.")
     msgs = get_messages("audit-test-sess")
@@ -105,7 +105,7 @@ def test_session_db_basic():
     results = search_messages("Python")
     assert len(results) >= 1
     fetched = get_session("audit-test-sess")
-    assert fetched.message_count == 2
+    assert fetched["message_count"] == 2
 
 
 def test_profiles_basic():
