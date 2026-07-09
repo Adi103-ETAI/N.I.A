@@ -169,11 +169,31 @@ class GatewayRouter:
     The router maintains a registry of platform adapters and routes
     incoming messages to the NIA engine. Responses are sent back via
     the originating adapter.
+
+    Session persistence is handled by :class:`SessionStore` (backed by
+    SQLite). Each incoming message is mapped to a session_key →
+    session_id, and the response is persisted to the session transcript.
+    The session context prompt (platform, user, delivery options) is
+    injected into the system prompt so the agent knows where the
+    message came from.
     """
 
-    def __init__(self, engine: Any = None) -> None:
+    def __init__(self, engine: Any = None, *, session_store: Any = None) -> None:
         self._engine = engine
         self._adapters: Dict[str, PlatformAdapter] = {}
+        # Session store for persistent conversations (Task 9).
+        self._session_store = session_store
+
+    def _get_session_store(self) -> Any:
+        """Lazily construct the SessionStore if not provided."""
+        if self._session_store is None:
+            try:
+                from niaharness.gateway.session import SessionStore
+
+                self._session_store = SessionStore()
+            except Exception as exc:
+                logger.debug("Could not construct SessionStore: %s", exc)
+        return self._session_store
 
     def register_adapter(self, adapter: PlatformAdapter) -> None:
         """Register a platform adapter."""
@@ -215,16 +235,65 @@ class GatewayRouter:
         """Handle an incoming message from a platform adapter.
 
         Routes the message to the NIA engine, then sends the response back
-        via the originating adapter.
+        via the originating adapter. If a SessionStore is configured, the
+        message is mapped to a persistent session (session_key → session_id),
+        the session context prompt is injected, and the response is persisted
+        to the session transcript.
         """
         adapter = self._adapters.get(message.platform)
         if adapter is None:
             logger.warning("No adapter for platform '%s'", message.platform)
             return
 
+        # Resolve session via SessionStore (Task 9 — persistent conversations).
+        session_entry = None
+        session_context_prompt = None
+        store = self._get_session_store()
+        if store is not None:
+            try:
+                from niaharness.gateway.session import (
+                    SessionSource,
+                    build_session_context_prompt,
+                )
+
+                source = SessionSource(
+                    platform=message.platform,
+                    chat_id=message.platform_chat_id,
+                    user_id=message.platform_user_id,
+                    user_name=message.platform_username,
+                )
+                session_entry = store.get_or_create_session(source)
+                # Build the context prompt for the system message.
+                session_context_prompt = build_session_context_prompt(
+                    source,
+                    redact_pii=True,
+                )
+                # Persist the incoming user message.
+                store.append_to_transcript(
+                    session_entry.session_id,
+                    {"role": "user", "content": message.text},
+                )
+            except Exception as exc:
+                logger.debug("Session store handling failed (non-fatal): %s", exc)
+
         try:
-            response_text = await self._route_to_engine(message)
+            response_text = await self._route_to_engine(
+                message,
+                session_id=session_entry.session_id if session_entry else None,
+                session_context_prompt=session_context_prompt,
+            )
             if response_text:
+                # Persist the response to the transcript.
+                if store is not None and session_entry is not None:
+                    try:
+                        store.append_to_transcript(
+                            session_entry.session_id,
+                            {"role": "assistant", "content": response_text},
+                        )
+                        store.update_session(session_entry.session_key)
+                    except Exception:
+                        pass
+
                 outgoing = OutgoingMessage(
                     platform_chat_id=message.platform_chat_id,
                     text=response_text,
@@ -234,7 +303,6 @@ class GatewayRouter:
                 await adapter.send_message(outgoing)
         except Exception as exc:
             logger.error("Error handling incoming message: %s", exc)
-            # Send error message to user.
             try:
                 await adapter.send_message(OutgoingMessage(
                     platform_chat_id=message.platform_chat_id,
@@ -244,11 +312,23 @@ class GatewayRouter:
             except Exception:
                 pass
 
-    async def _route_to_engine(self, message: IncomingMessage) -> Optional[str]:
+    async def _route_to_engine(
+        self,
+        message: IncomingMessage,
+        *,
+        session_id: Optional[str] = None,
+        session_context_prompt: Optional[str] = None,
+    ) -> Optional[str]:
         """Route an incoming message to the NIA engine and return the response.
 
         Override this method to integrate with the actual NIA engine.
         The default implementation returns a stub response.
+
+        Args:
+            message: The incoming message.
+            session_id: The persistent session ID (from SessionStore), if available.
+            session_context_prompt: The session context prompt to inject into
+                the system message (platform, user, delivery options).
         """
         if self._engine is None:
             return f"[NIA Gateway] Received your message: {message.text[:100]}"
@@ -259,6 +339,8 @@ class GatewayRouter:
                 chat_id=message.platform_chat_id,
                 user_id=message.platform_user_id,
                 text=message.text,
+                session_id=session_id,
+                session_context_prompt=session_context_prompt,
             )
         return None
 
