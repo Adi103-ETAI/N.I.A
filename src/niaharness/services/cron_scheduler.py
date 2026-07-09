@@ -219,9 +219,83 @@ def _jobs_due(
 _DEFAULT_JOB_TIMEOUT_SECONDS = 300
 
 
-async def execute_job(job: dict[str, Any]) -> dict[str, Any]:
-    """Execute a single cron job and return a history entry dict."""
+async def _execute_agent_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Execute a cron job via the LLM agent path (Task 11).
+
+    Delegates to ``cron_agent.run_job`` for the agent execution, then
+    delivers the result via ``cron_agent.deliver_cron_result`` and
+    persists the output for ``context_from`` chaining.
+    """
+    from niaharness.services.cron_agent import (
+        deliver_cron_result,
+        run_job,
+        save_job_output,
+        SILENT_MARKER,
+    )
+
     name = job.get("name", "<unnamed>")
+    job_id = job.get("id", "unknown")
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    entry: dict[str, Any] = {
+        "name": name,
+        "prompt": job.get("prompt", ""),
+        "started_at": now_iso,
+        "mode": "agent",
+    }
+
+    try:
+        result = await run_job(job)
+
+        # Save output for context_from chaining (even on failure — the error doc is useful).
+        if result.output_doc:
+            try:
+                save_job_output(str(job_id), result.output_doc)
+            except Exception:
+                pass  # Best-effort.
+
+        # Deliver (skip if silent).
+        delivery_error = None
+        if result.success and result.response and not result.silent:
+            try:
+                delivery_error = await deliver_cron_result(job, result.response)
+            except Exception as exc:
+                delivery_error = str(exc)
+
+        entry.update({
+            "status": "success" if result.success else "failed",
+            "returncode": 0 if result.success else -1,
+            "stdout": result.response or (SILENT_MARKER if result.silent else ""),
+            "stderr": result.error or delivery_error or "",
+            "silent": result.silent,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as exc:
+        entry.update({
+            "status": "failed",
+            "returncode": -1,
+            "stdout": "",
+            "stderr": str(exc),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    return entry
+
+
+async def execute_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Execute a single cron job and return a history entry dict.
+
+    Dispatches on the job type:
+      - If ``job["prompt"]`` is set → LLM agent path (``cron_agent.run_job``).
+      - Otherwise → shell command path (existing behavior).
+    """
+    name = job.get("name", "<unnamed>")
+
+    # ── LLM agent path (Task 11) ──────────────────────────────────────
+    if job.get("prompt"):
+        return await _execute_agent_job(job)
+
+    # ── Shell command path (existing) ─────────────────────────────────
     command = job.get("command", "")
     cwd = job.get("cwd") or None
     timeout = float(job.get("timeout", _DEFAULT_JOB_TIMEOUT_SECONDS))
