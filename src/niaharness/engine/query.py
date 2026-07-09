@@ -520,6 +520,13 @@ async def run_query(
         if was_compacted:
             messages[:] = compacted_messages
 
+        # --- sanitize messages before API call -----------------------------
+        # Strips surrogate pairs, null bytes, control chars; repairs malformed
+        # tool_use blocks; fixes role-alternation violations. Prevents HTTP 400
+        # crashes from Unicode edge cases and weak-model output.
+        from niaharness.engine.messages import sanitize_messages
+        sanitize_messages(messages)
+
         # --- token budget continuation check -------------------------------
         if context.token_budget is not None:
             budget_decision = check_token_budget(
