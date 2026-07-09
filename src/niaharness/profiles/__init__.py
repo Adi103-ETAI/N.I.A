@@ -120,6 +120,11 @@ class Profile:
         return self.home / "credentials"
 
     @property
+    def mcp_tokens_dir(self) -> Path:
+        """Directory for MCP OAuth token storage (profile-isolated)."""
+        return self.home / "mcp-tokens"
+
+    @property
     def config_path(self) -> Path:
         return self.home / "config.yaml"
 

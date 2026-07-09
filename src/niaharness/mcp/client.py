@@ -270,27 +270,57 @@ class McpClientManager:
 
         stack = AsyncExitStack()
         try:
+            # Resolve auth: OAuth (config.auth == "oauth") or static headers.
+            auth_provider = None
+            effective_headers = dict(config.headers or {})
+            auth_configured = bool(effective_headers)
+
+            if getattr(config, "auth", "bearer") == "oauth" and config.oauth is not None:
+                # Build the OAuth provider via the manager (caches per-server).
+                try:
+                    from niaharness.mcp.oauth_manager import get_manager
+
+                    manager = get_manager()
+                    oauth_cfg = config.oauth.model_dump() if hasattr(config.oauth, "model_dump") else dict(config.oauth)
+                    auth_provider = manager.get_or_build_provider(
+                        server_name=name,
+                        server_url=config.url,
+                        oauth_config=oauth_cfg,
+                    )
+                    auth_configured = auth_provider is not None
+                except Exception as exc:
+                    logger.warning(
+                        "MCP server '%s': OAuth provider build failed: %s. "
+                        "Falling back to static headers if present.",
+                        name, exc,
+                    )
+
             # Try Streamable HTTP transport first (MCP SDK >= 1.2).
             try:
                 from mcp.client.streamable_http import streamablehttp_client
 
+                client_kwargs: dict[str, Any] = {
+                    "url": config.url,
+                    "headers": effective_headers or None,
+                    "timeout": 30.0,
+                }
+                if auth_provider is not None:
+                    client_kwargs["auth"] = auth_provider
                 read_stream, write_stream, _ = await stack.enter_async_context(
-                    streamablehttp_client(
-                        url=config.url,
-                        headers=config.headers or None,
-                        timeout=30.0,
-                    )
+                    streamablehttp_client(**client_kwargs)
                 )
             except ImportError:
                 # Fall back to SSE transport for older MCP SDK versions.
                 from mcp.client.sse import sse_client
 
+                client_kwargs = {
+                    "url": config.url,
+                    "headers": effective_headers or None,
+                    "timeout": 30.0,
+                }
+                # SSE client may not support `auth=` — fall back to headers only.
                 read_stream, write_stream = await stack.enter_async_context(
-                    sse_client(
-                        url=config.url,
-                        headers=config.headers or None,
-                        timeout=30.0,
-                    )
+                    sse_client(**client_kwargs)
                 )
 
             session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
@@ -322,7 +352,7 @@ class McpClientManager:
                 name=name,
                 state="connected",
                 transport=config.type,
-                auth_configured=bool(config.headers),
+                auth_configured=auth_configured,
                 tools=tools,
                 resources=resources,
             )
