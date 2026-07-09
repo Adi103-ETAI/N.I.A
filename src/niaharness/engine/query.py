@@ -25,9 +25,11 @@ from niaharness.api.client import (
 from niaharness.api.usage import UsageSnapshot
 from niaharness.engine.messages import ConversationMessage, ToolResultBlock
 from niaharness.engine.stream_events import (
+    ApiRetryNotification,
     AssistantTextDelta,
     AssistantTurnComplete,
     BudgetExceeded,
+    CompactBoundary,
     ContinuationNudge,
     MaxOutputTokensRecovery,
     MaxTurnsReached,
@@ -466,6 +468,7 @@ async def run_query(
     from niaharness.services.compact import (
         AutoCompactState,
         auto_compact_if_needed,
+        estimate_conversation_tokens,
     )
 
     compact_state = AutoCompactState()
@@ -585,26 +588,128 @@ async def run_query(
 
             if action is not None:
                 if action.type == ActionType.COMPRESS and action.should_retry:
-                    # Trigger compaction and retry this turn.
-                    from niaharness.services.compact import auto_compact_if_needed
-                    messages[:] = auto_compact_if_needed(
-                        messages=messages,
+                    # Context overflow — compact and retry this turn.
+                    # Fixed: was missing 'await', had bogus 'threshold=' kwarg,
+                    # and assigned 3-tuple to messages[:] slice instead of unpacking.
+                    # Now matches the normal compaction path (line 510-516).
+                    pre_compact_tokens = estimate_conversation_tokens(messages)
+                    new_messages, was_compacted, compact_state = await auto_compact_if_needed(
+                        messages,
                         model=context.model,
-                        threshold=4000,
                         state=compact_state,
+                        current_turn=turn_count,
                     )
+                    if was_compacted:
+                        messages[:] = new_messages
+                        post_compact_tokens = estimate_conversation_tokens(messages)
+                        # Yield a CompactBoundary so the UI can show a
+                        # "compacted from X to Y tokens" notification.
+                        yield CompactBoundary(
+                            pre_compact_token_count=pre_compact_tokens,
+                            post_compact_token_count=post_compact_tokens,
+                            summary_preview=f"Recovery: {action.description}",
+                        ), None
                     yield MaxOutputTokensRecovery(
                         message=f"Recovery: {action.description} — compacted and retrying",
                     ), None
                     continue  # retry the same turn
 
                 if action.type == ActionType.RETRY and action.should_retry:
+                    # Transient error (429, 500, 502, 503, 529) — back off and retry.
                     import asyncio as _asyncio
+                    yield ApiRetryNotification(
+                        attempt=turn_count,
+                        max_retries=context.max_turns,
+                        retry_delay_ms=action.delay_seconds * 1000,
+                        error_status=str(getattr(exc, "status_code", None) or ""),
+                        error_message=error_msg[:200],
+                    ), None
                     yield MaxOutputTokensRecovery(
                         message=f"Recovery: {action.description} — retrying in {action.delay_seconds:.1f}s",
                     ), None
                     await _asyncio.sleep(action.delay_seconds)
                     continue  # retry the same turn
+
+                if action.type == ActionType.ROTATE_CREDENTIAL and action.should_retry:
+                    # Auth/billing failure (401/402/403) — the FailoverAnthropicClient
+                    # already rotates credentials internally. Just retry the turn.
+                    yield ApiRetryNotification(
+                        attempt=turn_count,
+                        max_retries=context.max_turns,
+                        retry_delay_ms=0,
+                        error_status=str(getattr(exc, "status_code", None) or ""),
+                        error_message=f"Credential rotated: {action.description}",
+                    ), None
+                    continue  # retry with the new credential
+
+                if action.type == ActionType.STRIP_THINKING and action.should_retry:
+                    # Invalid thinking signature — strip thinking-only assistant
+                    # turns and retry. Ported from Hermes's thinking_signature
+                    # recovery (conversation_loop.py:2833).
+                    stripped = 0
+                    new_msgs: list[ConversationMessage] = []
+                    for msg in messages:
+                        # Drop assistant messages that contain ONLY thinking blocks
+                        # (no text, no tool_use). These are the ones that cause
+                        # "invalid signature" errors after compaction.
+                        if msg.role == "assistant":
+                            has_text = any(
+                                hasattr(b, "text") and getattr(b, "text", "").strip()
+                                for b in msg.content
+                            )
+                            has_tool_use = any(
+                                hasattr(b, "type") and getattr(b, "type", "") == "tool_use"
+                                for b in msg.content
+                            )
+                            if not has_text and not has_tool_use:
+                                stripped += 1
+                                continue
+                        new_msgs.append(msg)
+                    if stripped > 0:
+                        messages[:] = new_msgs
+                        yield MaxOutputTokensRecovery(
+                            message=f"Recovery: {action.description} — stripped {stripped} thinking-only turn(s)",
+                        ), None
+                        continue
+
+                if action.type == ActionType.TRUNCATE_CONTEXT and action.should_retry:
+                    # Context window exceeded — drop the oldest messages (after
+                    # head protection) and retry. Ported from Hermes's
+                    # payload_too_large recovery.
+                    if len(messages) > 4:
+                        # Keep the first 2 (head) + last 2 (tail), drop the middle.
+                        head = messages[:2]
+                        tail = messages[-2:]
+                        dropped = len(messages) - 4
+                        messages[:] = head + tail
+                        yield MaxOutputTokensRecovery(
+                            message=f"Recovery: {action.description} — truncated {dropped} message(s)",
+                        ), None
+                        continue
+
+                if action.type == ActionType.REBUILD_MESSAGES and action.should_retry:
+                    # Message structure error — rebuild by dropping orphaned
+                    # thinking blocks and merging adjacent user messages.
+                    # Ported from Hermes's format_error recovery.
+                    rebuilt: list[ConversationMessage] = []
+                    for msg in messages:
+                        if msg.role == "assistant":
+                            # Keep only messages with text or tool_use content.
+                            has_content = any(
+                                (hasattr(b, "text") and getattr(b, "text", "").strip())
+                                or (hasattr(b, "type") and getattr(b, "type", "") == "tool_use")
+                                for b in msg.content
+                            )
+                            if not has_content:
+                                continue
+                        rebuilt.append(msg)
+                    if len(rebuilt) < len(messages):
+                        dropped = len(messages) - len(rebuilt)
+                        messages[:] = rebuilt
+                        yield MaxOutputTokensRecovery(
+                            message=f"Recovery: {action.description} — rebuilt, dropped {dropped} empty turn(s)",
+                        ), None
+                        continue
 
                 # For ABORT or unhandled action types, fall through to error.
                 if action.type == ActionType.ABORT:
