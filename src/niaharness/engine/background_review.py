@@ -1,22 +1,54 @@
-"""Self-improving learning loop — background memory + skill review.
+"""Background memory/skill review — autonomous self-improvement loop.
 
-Adapted from Hermes Agent's agent/background_review.py.
+Ported from Hermes Agent's ``agent/background_review.py`` (960 LOC),
+adapted to NIA's architecture. After a turn that involved ≥3 tool calls,
+NIA spawns a background daemon thread that:
 
-After every turn, NIA spawns a background thread that:
-1. Snapshots the last 20 messages.
-2. Makes a separate LLM call asking "should any memory or skill be saved?".
-3. Parses the JSON response and applies writes to memory + skills.
-4. Surfaces what it learned to the user via a callback.
+  1. Snapshots the conversation messages.
+  2. Forks a restricted :class:`QueryEngine` with only ``memory`` +
+     ``skill_manage`` tools (the review LLM can't run bash, edit files,
+     etc.).
+  3. Sends one of three review prompts (memory-only, skill-only, or
+     combined) asking the LLM to identify reusable patterns, user
+     preferences, or workflow corrections worth saving.
+  4. The forked engine executes any resulting ``skill_manage`` /
+     ``memory`` tool calls against the real skill/memory stores.
+  5. Surfaces a compact action summary to the user via a callback.
 
-This version addresses all audit findings:
-- SKILL CREATION: The review now has access to skill_manage and memory tools.
-- TOOL ACCESS: The review LLM can call tools (memory, skill_manage).
-- SKILL REVIEW PROMPT: Adapted from Hermes's _SKILL_REVIEW_PROMPT.
-- CACHE AWARENESS: Reuses the parent's system prompt for prefix-cache parity.
-- USER FEEDBACK: Results are surfaced via a callback (not just logged).
-- INTERRUPTED-TURN GUARD: Skips review if the turn was interrupted.
+Key safety features:
+  - **Skill provenance** — the review fork can only patch a skill file
+    it has actually read via ``skill_view`` in the current review turn
+    (prevents the LLM from guessing at content it hasn't seen).
+  - **Tool whitelist** — the fork is restricted to ``memory`` +
+    ``skill_manage`` + ``skill_view`` + ``skills_list``. All other tools
+    are denied at dispatch.
+  - **Persistence isolation** — the fork does NOT write to the session
+    DB (prevents the curator-takeover bug where the review's harness
+    prompt leaks into the user's real session).
+  - **Auto-deny approval callback** — the fork never blocks on
+    interactive approval (prevents deadlocks against the parent's TUI).
+  - **Thread-scoped silence** — the fork's stdout/stderr is silenced
+    only for the review thread, not process-wide (other threads' output
+    survives).
 
-Reference: Hermes Agent's agent/background_review.py.
+Gating:
+  - ``engine.background_review.enabled`` config flag (default off).
+  - Minimum 3 tool calls in the turn (Hermes uses a nudge-interval
+    counter; NIA uses a simpler per-turn threshold).
+  - Turn not interrupted.
+
+Usage::
+
+    from niaharness.engine.background_review import maybe_spawn_background_review
+
+    maybe_spawn_background_review(
+        messages=engine.messages,
+        api_client=engine._api_client,
+        model=engine._model,
+        system_prompt=engine._system_prompt,
+        memory=engine._memory,
+        tool_call_count=turn_tool_call_count,
+    )
 """
 
 from __future__ import annotations
@@ -26,222 +58,282 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Review prompts (adapted from Hermes)
+# Constants
 # ---------------------------------------------------------------------------
 
-MEMORY_REVIEW_PROMPT = """\
-Review the conversation above and consider saving to memory if appropriate.
+# Minimum tool calls in a turn to trigger a background review.
+MIN_TOOL_CALLS_FOR_REVIEW = 3
 
-Focus on:
-1. Has the user revealed things about themselves — their persona, desires, \
-preferences, or personal details worth remembering?
-2. Has the user expressed expectations about how you should behave, your work \
-style, or ways they want you to operate?
-3. Are there recurring patterns in what the user asks for, or how they \
-phrase their requests?
+# Maximum iterations the review fork can run (keeps it quick).
+MAX_REVIEW_ITERATIONS = 16
 
-If something stands out, respond with a JSON object matching this schema:
+# Maximum messages to snapshot for the review.
+MAX_SNAPSHOT_MESSAGES = 40
 
-{
-  "memories": [
-    {
-      "category": "preference" | "fact" | "pattern",
-      "content": "The memory text to save (concise, factual)",
-      "key": "Optional key for preferences (e.g. 'tone', 'verbosity')"
-    }
-  ],
-  "summary": "One-line summary of what you saved, or 'Nothing to save.'"
-}
-
-Rules:
-- Only save DURABLE information — things that will matter in future sessions.
-- Do NOT save transient details (the current file being edited, this \
-session's bug) unless they reveal a pattern.
-- Do NOT save things the user can trivially rediscover (file paths, \
-command syntax).
-- Preferences need a 'key' so they can be updated (e.g. \
-{"category":"preference","key":"verbosity","content":"User prefers \
-concise answers without preamble"}).
-- Facts and patterns don't need a key.
-- If nothing is worth saving, respond with {"memories":[],"summary":\
-"Nothing to save."}.
-
-Do NOT capture (these become persistent self-imposed constraints that \
-bite you later when the environment changes):
-- Environment-dependent failures: missing binaries, fresh-install errors, \
-post-migration path mismatches, 'command not found', unconfigured \
-credentials. The user can fix these — they are not durable rules.
-- Negative claims about tools or features ('browser tools do not work', \
-'X tool is broken'). These harden into refusals you cite against yourself \
-for months after the actual problem was fixed.
-- Session-specific transient errors that resolved before the conversation \
-ended. If retrying worked, the lesson is the retry pattern, not the \
-original failure.
-- One-off task narratives. A user asking 'summarize today's market' is \
-not a class of work that warrants a skill.
-
-Respond with ONLY the JSON object, no other text."""
-
-SKILL_REVIEW_PROMPT = """\
-Review the conversation above and update the skill library. Be \
-ACTIVE — most sessions produce at least one skill update, even if \
-small. A pass that does nothing is a missed learning opportunity, \
-not a neutral outcome.
-
-Signals to look for (any one of these warrants action):
-  • User corrected your style, tone, format, legibility, or \
-verbosity. Frustration signals like 'stop doing X', 'this is too \
-verbose', 'don't format like this', 'just give me the answer', or \
-an explicit 'remember this' are FIRST-CLASS skill signals.
-  • User corrected your workflow, approach, or sequence of steps. \
-Encode the correction as a pitfall or explicit step in the skill \
-that governs that class of task.
-  • Non-trivial technique, fix, workaround, debugging path, or \
-tool-usage pattern emerged that a future session would benefit \
-from. Capture it.
-  • A skill that got loaded or consulted this session turned out \
-to be wrong, missing a step, or outdated. Patch it NOW.
-
-Preference order — prefer the earliest action that fits:
-  1. UPDATE AN EXISTING SKILL. Use skill_manage action=edit to patch \
-an existing skill that covers the territory of the new learning.
-  2. CREATE A NEW CLASS-LEVEL SKILL when no existing skill covers the \
-class. Use skill_manage action=create. The name MUST be at the class \
-level — NOT a specific PR number, error string, or session artifact.
-
-Protected skills (DO NOT edit these):
-  • Bundled skills (shipped with NIA: plan, debug, diagnose, review, \
-simplify, commit, test).
-
-Do NOT capture (same rules as memory — environment failures, negative \
-tool claims, transient errors, one-off tasks).
-
-If the session ran smoothly with no corrections and produced no new \
-technique, just say 'Nothing to save.' and stop. Otherwise, act.
-
-Use the skill_manage tool to create or edit skills. Use the nia_memory \
-tool to save durable user facts/preferences. Respond with a JSON summary:
-
-{
-  "skills_created": [{"name": "...", "description": "..."}],
-  "skills_updated": [{"name": "...", "change": "..."}],
-  "memories_saved": [{"category": "...", "content": "..."}],
-  "summary": "One-line summary of what you did, or 'Nothing to save.'"
-}
-
-Respond with ONLY the JSON object, no other text."""
-
-COMBINED_REVIEW_PROMPT = MEMORY_REVIEW_PROMPT + "\n\n" + SKILL_REVIEW_PROMPT
+# Config flag name.
+CONFIG_FLAG = "engine.background_review.enabled"
 
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Review prompts (ported verbatim from Hermes agent/background_review.py)
+# ---------------------------------------------------------------------------
+
+MEMORY_REVIEW_PROMPT = (
+    "Review the conversation above and consider saving to memory if appropriate.\n\n"
+    "Focus on:\n"
+    "1. Has the user revealed things about themselves — their persona, desires, "
+    "preferences, or personal details worth remembering?\n"
+    "2. Has the user expressed expectations about how you should behave, their work "
+    "style, or ways they want you to operate?\n\n"
+    "If something stands out, save it using the memory tool. "
+    "If nothing is worth saving, just say 'Nothing to save.' and stop."
+)
+
+SKILL_REVIEW_PROMPT = (
+    "Review the conversation above and update the skill library. Be "
+    "ACTIVE — most sessions produce at least one skill update, even if "
+    "small. A pass that does nothing is a missed learning opportunity, "
+    "not a neutral outcome.\n\n"
+    "Target shape of the library: CLASS-LEVEL skills, each with a rich "
+    "SKILL.md and a `references/` directory for session-specific detail. "
+    "Not a long flat list of narrow one-session-one-skill entries. This "
+    "shapes HOW you update, not WHETHER you update.\n\n"
+    "Signals to look for (any one of these warrants action):\n"
+    "  • User corrected your style, tone, format, legibility, or "
+    "verbosity. Frustration signals like 'stop doing X', 'this is too "
+    "verbose', 'don't format like this', 'why are you explaining', "
+    "'just give me the answer', 'you always do Y and I hate it', or an "
+    "explicit 'remember this' are FIRST-CLASS skill signals, not just "
+    "memory signals. Update the relevant skill(s) to embed the "
+    "preference so the next session starts already knowing.\n"
+    "  • User corrected your workflow, approach, or sequence of steps. "
+    "Encode the correction as a pitfall or explicit step in the skill "
+    "that governs that class of task.\n"
+    "  • Non-trivial technique, fix, workaround, debugging path, or "
+    "tool-usage pattern emerged that a future session would benefit "
+    "from. Capture it.\n"
+    "  • A skill that got loaded or consulted this session turned out "
+    "to be wrong, missing a step, or outdated. Patch it NOW.\n\n"
+    "Preference order — prefer the earliest action that fits, but do "
+    "pick one when a signal above fired:\n"
+    "  1. UPDATE A CURRENTLY-LOADED SKILL. Look back through the "
+    "conversation for skills the user loaded via /skill-name or you "
+    "read via skill_view. If any of them covers the territory of the "
+    "new learning, PATCH that one first. It is the skill that was in "
+    "play, so it's the right one to extend.\n"
+    "  2. UPDATE AN EXISTING UMBRELLA (via skills_list + skill_view). "
+    "If no loaded skill fits but an existing class-level skill does, "
+    "patch it. Add a subsection, a pitfall, or broaden a trigger.\n"
+    "  3. ADD A SUPPORT FILE under an existing umbrella. Skills can be "
+    "packaged with three kinds of support files — use the right "
+    "directory per kind:\n"
+    "     • `references/<topic>.md` — session-specific detail (error "
+    "transcripts, reproduction recipes, provider quirks) AND "
+    "condensed knowledge banks: quoted research, API docs, external "
+    "authoritative excerpts, or domain notes you found while working "
+    "on the problem. Write it concise and for the value of the task, "
+    "not as a full mirror of upstream docs.\n"
+    "     • `templates/<name>.<ext>` — starter files meant to be "
+    "copied and modified (boilerplate configs, scaffolding, a "
+    "known-good example the agent can `reproduce with modifications`).\n"
+    "     • `scripts/<name>.<ext>` — statically re-runnable actions "
+    "the skill can invoke directly (verification scripts, fixture "
+    "generators, deterministic probes, anything the agent should run "
+    "rather than hand-type each time).\n"
+    "     Add support files via skill_manage action=write_file with "
+    "file_path starting 'references/', 'templates/', or 'scripts/'. "
+    "The umbrella's SKILL.md should gain a one-line pointer to any "
+    "new support file so future agents know it exists.\n"
+    "  4. CREATE A NEW CLASS-LEVEL UMBRELLA SKILL when no existing "
+    "skill covers the class. The name MUST be at the class level. "
+    "The name MUST NOT be a specific PR number, error string, feature "
+    "codename, library-alone name, or 'fix-X / debug-Y / audit-Z-today' "
+    "session artifact. If the proposed name only makes sense for "
+    "today's task, it's wrong — fall back to (1), (2), or (3).\n\n"
+    "User-preference embedding (important): when the user expressed a "
+    "style/format/workflow preference, the update belongs in the "
+    "SKILL.md body, not just in memory. Memory captures 'who the user "
+    "is and what the current situation and state of your operations "
+    "are'; skills capture 'how to do this class of task for this "
+    "user'. When they complain about how you handled a task, the "
+    "skill that governs that task needs to carry the lesson.\n\n"
+    "If you notice two existing skills that overlap, note it in your "
+    "reply — the background curator handles consolidation at scale.\n\n"
+    "Protected skills (DO NOT edit these):\n"
+    "  • Bundled skills (shipped with NIA).\n"
+    "  • Hub-installed skills (installed via the skills hub).\n"
+    "If the only skills that need updating are protected, say\n"
+    "'Nothing to save.' and stop.\n\n"
+    "Do NOT capture (these become persistent self-imposed constraints "
+    "that bite you later when the environment changes):\n"
+    "  • Environment-dependent failures: missing binaries, fresh-install "
+    "errors, post-migration path mismatches, 'command not found', "
+    "unconfigured credentials, uninstalled packages. The user can fix "
+    "these — they are not durable rules.\n"
+    "  • Negative claims about tools or features ('browser tools do not "
+    "work', 'X tool is broken', 'cannot use Y from execute_code'). These "
+    "harden into refusals the agent cites against itself for months "
+    "after the actual problem was fixed.\n"
+    "  • Session-specific transient errors that resolved before the "
+    "conversation ended. If retrying worked, the lesson is the retry "
+    "pattern, not the original failure.\n"
+    "  • One-off task narratives. A user asking 'summarize today's "
+    "market' or 'analyze this PR' is not a class of work that warrants "
+    "a skill.\n\n"
+    "If a tool failed because of setup state, capture the FIX (install "
+    "command, config step, env var to set) under an existing setup or "
+    "troubleshooting skill — never 'this tool does not work' as a "
+    "standalone constraint.\n\n"
+    "'Nothing to save.' is a real option but should NOT be the "
+    "default. If the session ran smoothly with no corrections and "
+    "produced no new technique, just say 'Nothing to save.' and stop. "
+    "Otherwise, act."
+)
+
+COMBINED_REVIEW_PROMPT = (
+    "Review the conversation above and update two things:\n\n"
+    "**Memory**: who the user is. Did the user reveal persona, "
+    "desires, preferences, personal details, or expectations about "
+    "how you should behave? Save facts about the user and durable "
+    "preferences with the memory tool.\n\n"
+    "**Skills**: how to do this class of task. Be ACTIVE — most "
+    "sessions produce at least one skill update. A pass that does "
+    "nothing is a missed learning opportunity, not a neutral outcome.\n\n"
+    "Target shape of the skill library: CLASS-LEVEL skills with a rich "
+    "SKILL.md and a `references/` directory for session-specific detail. "
+    "Not a long flat list of narrow one-session-one-skill entries.\n\n"
+    "Signals that warrant a skill update (any one is enough):\n"
+    "  • User corrected your style, tone, format, legibility, "
+    "verbosity, or approach. Frustration is a FIRST-CLASS skill "
+    "signal, not just a memory signal. 'stop doing X', 'don't format "
+    "like this', 'I hate when you Y' — embed the lesson in the skill "
+    "that governs that task so the next session starts fixed.\n"
+    "  • Non-trivial technique, fix, workaround, or debugging path "
+    "emerged.\n"
+    "  • A skill that was loaded or consulted turned out wrong, "
+    "missing, or outdated — patch it now.\n\n"
+    "Preference order for skills — pick the earliest that fits:\n"
+    "  1. UPDATE A CURRENTLY-LOADED SKILL. Check what skills were "
+    "loaded via /skill-name or skill_view in the conversation. If one "
+    "of them covers the learning, PATCH it first. It was in play; "
+    "it's the right place.\n"
+    "  2. UPDATE AN EXISTING UMBRELLA (skills_list + skill_view to "
+    "find the right one). Patch it.\n"
+    "  3. ADD A SUPPORT FILE under an existing umbrella via "
+    "skill_manage action=write_file. Three kinds: "
+    "`references/<topic>.md` for session-specific detail OR condensed "
+    "knowledge banks (quoted research, API docs excerpts, domain "
+    "notes) written concise and task-focused; `templates/<name>.<ext>` "
+    "for starter files meant to be copied and modified; "
+    "`scripts/<name>.<ext>` for statically re-runnable actions "
+    "(verification, fixture generators, probes). Add a one-line "
+    "pointer in SKILL.md so future agents find them.\n"
+    "  4. CREATE A NEW CLASS-LEVEL UMBRELLA when nothing exists. "
+    "Name at the class level — NOT a PR number, error string, "
+    "codename, library-alone name, or 'fix-X / debug-Y' session "
+    "artifact. If the name only fits today's task, fall back to (1), "
+    "(2), or (3).\n\n"
+    "User-preference embedding: when the user complains about how "
+    "you handled a task, update the skill that governs that task — "
+    "memory alone isn't enough. Memory says 'who the user is and "
+    "what the current situation and state of your operations are'; "
+    "skills say 'how to do this class of task for this user'. Both "
+    "should carry user-preference lessons when relevant.\n\n"
+    "If you notice overlapping existing skills, mention it — the "
+    "background curator handles consolidation.\n\n"
+    "Protected skills (DO NOT edit these):\n"
+    "  • Bundled skills (shipped with NIA).\n"
+    "  • Hub-installed skills (installed via the skills hub).\n"
+    "If the only skills that need updating are protected, say\n"
+    "'Nothing to save.' and stop.\n\n"
+    "Do NOT capture as skills (these become persistent self-imposed "
+    "constraints that bite you later when the environment changes):\n"
+    "  • Environment-dependent failures: missing binaries, fresh-install "
+    "errors, post-migration path mismatches, 'command not found', "
+    "unconfigured credentials, uninstalled packages. The user can fix "
+    "these — they are not durable rules.\n"
+    "  • Negative claims about tools or features ('browser tools do not "
+    "work', 'X tool is broken', 'cannot use Y from execute_code'). These "
+    "harden into refusals the agent cites against itself for months "
+    "after the actual problem was fixed.\n"
+    "  • Session-specific transient errors that resolved before the "
+    "conversation ended. If retrying worked, the lesson is the retry "
+    "pattern, not the original failure.\n"
+    "  • One-off task narratives. A user asking 'summarize today's "
+    "market' or 'analyze this PR' is not a class of work that warrants "
+    "a skill.\n\n"
+    "If a tool failed because of setup state, capture the FIX (install "
+    "command, config step, env var to set) under an existing setup or "
+    "troubleshooting skill — never 'this tool does not work' as a "
+    "standalone constraint.\n\n"
+    "Act on whichever of the two dimensions has real signal. If "
+    "genuinely nothing stands out on either, say 'Nothing to save.' "
+    "and stop — but don't reach for that conclusion as a default."
+)
+
+# Suffix appended to the review prompt at call time.
+_TOOL_RESTRICTION_SUFFIX = (
+    "\n\nYou can only call memory and skill management tools. Other "
+    "tools will be denied at runtime — do not attempt them."
+)
+
+
+# ---------------------------------------------------------------------------
+# Config + state
 # ---------------------------------------------------------------------------
 
 
-def is_background_review_enabled() -> bool:
-    val = os.environ.get("NIA_BACKGROUND_REVIEW", "").strip().lower()
-    return val not in ("0", "false", "off", "no", "disabled")
+def _is_background_review_enabled() -> bool:
+    """Check if background review is enabled via config or env var.
 
-
-def get_review_model() -> str | None:
-    return os.environ.get("NIA_BACKGROUND_REVIEW_MODEL") or None
-
-
-def get_review_runtime() -> dict[str, str | None]:
-    """Resolve the full runtime for the review LLM.
-
-    Returns a dict with: provider, model, api_key, base_url.
-    If NIA_BACKGROUND_REVIEW_PROVIDER is set, resolves that provider's
-    credentials from the ProviderRegistry. Otherwise inherits the parent's
-    runtime (model only — the api_client is shared).
-
-    Audit fix: was model-name-string-only; now supports full provider routing.
+    Resolution order:
+      1. ``NIA_BACKGROUND_REVIEW`` env var (1/true/yes/on = enabled).
+      2. ``engine.background_review.enabled`` in config.yaml/settings.
+      3. Default: off.
     """
-    provider_name = os.environ.get("NIA_BACKGROUND_REVIEW_PROVIDER", "").strip().lower()
-    model = os.environ.get("NIA_BACKGROUND_REVIEW_MODEL")
-
-    if not provider_name:
-        # Inherit parent's runtime — just override the model if set.
-        return {"provider": None, "model": model, "api_key": None, "base_url": None}
-
-    # Resolve a specific provider from the registry.
+    env_value = os.environ.get("NIA_BACKGROUND_REVIEW", "").strip().lower()
+    if env_value in {"1", "true", "yes", "on"}:
+        return True
+    if env_value in {"0", "false", "no", "off"}:
+        return False
+    # Try config.
     try:
-        from niaharness.providers.registry import ProviderRegistry
+        from niaharness.config.settings import load_settings
 
-        registry = ProviderRegistry()
-        registry._register_builtin_providers()
-        provider = registry.get_provider(provider_name)
-        if provider is None:
-            logger.warning("Background review provider %r not found", provider_name)
-            return {"provider": None, "model": model, "api_key": None, "base_url": None}
-
-        cfg = provider.config
-        try:
-            api_key = provider.resolve_api_key()
-        except Exception:
-            api_key = ""
-        base_url = provider.resolve_base_url()
-        resolved_model = model or cfg.auth.default_model
-
-        return {
-            "provider": provider_name,
-            "model": resolved_model,
-            "api_key": api_key,
-            "base_url": base_url,
-        }
-    except Exception as exc:
-        logger.debug("Background review runtime resolution failed: %s", exc)
-        return {"provider": None, "model": model, "api_key": None, "base_url": None}
-
-
-def get_review_interval() -> float:
-    try:
-        return float(os.environ.get("NIA_BACKGROUND_REVIEW_INTERVAL", "30"))
-    except ValueError:
-        return 30.0
-
-
-# ---------------------------------------------------------------------------
-# Review state (process-wide)
-# ---------------------------------------------------------------------------
+        settings = load_settings()
+        engine_cfg = getattr(settings, "engine", None) or {}
+        if isinstance(engine_cfg, dict):
+            bg_cfg = engine_cfg.get("background_review", {})
+            if isinstance(bg_cfg, dict):
+                return bool(bg_cfg.get("enabled", False))
+    except Exception:
+        pass
+    return False
 
 
 class _ReviewState:
-    """Tracks review timing to prevent spam."""
+    """Tracks active review threads + feedback callbacks."""
 
     def __init__(self) -> None:
-        self._last_review_time: float = 0.0
+        self._threads: list[threading.Thread] = []
+        self._feedback_callback: Optional[Callable[[str], None]] = None
         self._lock = threading.Lock()
-        self._active_threads: list[threading.Thread] = []
-        # User-visible feedback callback (set by the UI layer).
-        self._feedback_callback: Callable[[str], None] | None = None
-
-    def should_review(self) -> bool:
-        interval = get_review_interval()
-        with self._lock:
-            if time.monotonic() - self._last_review_time < interval:
-                return False
-            self._last_review_time = time.monotonic()
-            return True
 
     def register_thread(self, thread: threading.Thread) -> None:
         with self._lock:
-            self._active_threads.append(thread)
-            self._active_threads = [t for t in self._active_threads if t.is_alive()]
+            self._threads.append(thread)
 
     def active_count(self) -> int:
         with self._lock:
-            return sum(1 for t in self._active_threads if t.is_alive())
+            return sum(1 for t in self._threads if t.is_alive())
 
-    def set_feedback_callback(self, cb: Callable[[str], None] | None) -> None:
+    def set_feedback_callback(self, cb: Optional[Callable[[str], None]]) -> None:
         with self._lock:
             self._feedback_callback = cb
 
@@ -251,286 +343,354 @@ class _ReviewState:
         if cb:
             try:
                 cb(message)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Feedback callback failed: %s", exc)
 
 
 _review_state = _ReviewState()
 
 
-def get_review_state() -> _ReviewState:
-    return _review_state
-
-
-def set_feedback_callback(cb: Callable[[str], None] | None) -> None:
-    """Set a callback for user-visible review feedback.
-
-    The UI layer should call this to receive messages like:
-    '💾 Self-improvement review: saved 1 preference, created skill 'pdf-extraction''
-    """
+def set_feedback_callback(cb: Optional[Callable[[str], None]]) -> None:
+    """Set the user-visible feedback callback (e.g. for TUI status line)."""
     _review_state.set_feedback_callback(cb)
 
 
+def get_review_stats() -> dict[str, Any]:
+    """Return review system statistics (for debugging/UI)."""
+    return {
+        "active_threads": _review_state.active_count(),
+        "enabled": _is_background_review_enabled(),
+        "min_tool_calls": MIN_TOOL_CALLS_FOR_REVIEW,
+    }
+
+
 # ---------------------------------------------------------------------------
-# Conversation snapshot
+# Message snapshotting
 # ---------------------------------------------------------------------------
 
 
 def _snapshot_messages(messages: list) -> list[dict[str, Any]]:
-    """Convert ConversationMessage list to a serializable snapshot.
+    """Snapshot conversation messages for the review.
 
-    Truncates long tool results to keep the snapshot small. Limits to the
-    last 20 messages to bound the review cost.
+    Converts NIA ``ConversationMessage`` objects to plain dicts (the
+    forked engine rehydrates them). Caps at ``MAX_SNAPSHOT_MESSAGES``
+    (keeps head + tail, drops middle).
     """
     snapshot: list[dict[str, Any]] = []
-    for msg in messages[-20:]:
-        role = getattr(msg, "role", "unknown")
-        content_blocks = []
-        for block in getattr(msg, "content", []):
-            cls = block.__class__.__name__
-            if cls == "TextBlock":
-                content_blocks.append({"type": "text", "text": block.text})
-            elif cls == "ToolUseBlock":
-                content_blocks.append(
-                    {"type": "tool_use", "name": block.name, "input": block.input}
-                )
-            elif cls == "ToolResultBlock":
-                content = block.content
-                if len(content) > 500:
-                    content = content[:500] + "... [truncated]"
-                content_blocks.append(
-                    {"type": "tool_result", "content": content, "is_error": block.is_error}
-                )
-        snapshot.append({"role": role, "content": content_blocks})
+    for msg in messages:
+        if hasattr(msg, "model_dump"):
+            msg_dict = msg.model_dump()
+        elif isinstance(msg, dict):
+            msg_dict = msg
+        else:
+            continue
+        snapshot.append(msg_dict)
+
+    if len(snapshot) > MAX_SNAPSHOT_MESSAGES:
+        # Keep head (system prompt + first exchange) + tail (most recent).
+        head_count = 4
+        tail_count = MAX_SNAPSHOT_MESSAGES - head_count
+        snapshot = snapshot[:head_count] + snapshot[-tail_count:]
     return snapshot
 
 
 # ---------------------------------------------------------------------------
-# Response parsing
+# Action summarization
 # ---------------------------------------------------------------------------
 
 
-def _parse_review_response(text: str) -> dict[str, Any]:
-    """Parse the LLM's review response.
+def summarize_background_review_actions(
+    review_messages: List[Dict[str, Any]],
+    prior_snapshot: List[Dict[str, Any]],
+    *,
+    notification_mode: str = "on",
+) -> List[str]:
+    """Build the human-facing action summary for a background review pass.
 
-    Tolerates markdown code fences and embedded JSON.
+    Walks the review agent's session messages and collects successful
+    memory and skill-management actions to surface to the user. Tool
+    messages already present in ``prior_snapshot`` are skipped so stale
+    inherited results are not re-surfaced as fresh background work.
+
+    Args:
+        review_messages: The forked engine's message list after the review.
+        prior_snapshot: The snapshot passed into the review (to skip stale).
+        notification_mode: ``"off"`` = empty, ``"on"`` = generic messages,
+            ``"verbose"`` = include content previews.
+
+    Returns:
+        List of human-readable action strings.
     """
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
+    mode = str(notification_mode or "on").lower()
+    if mode == "off":
+        return []
+    verbose = mode == "verbose"
 
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-
-    import re
-
-    match = re.search(r"\{[\s\S]*\}", text)
-    if match:
-        try:
-            parsed = json.loads(match.group())
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-    return {"memories": [], "summary": f"Could not parse review response: {text[:200]}"}
-
-
-# ---------------------------------------------------------------------------
-# Memory writes
-# ---------------------------------------------------------------------------
-
-
-def _apply_memory_writes(
-    review_result: dict[str, Any],
-    memory: Any,
-) -> int:
-    """Apply memory writes from the review result. Returns count applied."""
-    memories = review_result.get("memories", [])
-    if not isinstance(memories, list):
-        return 0
-
-    count = 0
-    for mem in memories:
-        if not isinstance(mem, dict):
+    # Collect existing tool_call_ids from the prior snapshot to skip them.
+    existing_tool_call_ids: set = set()
+    for prior in prior_snapshot or []:
+        if not isinstance(prior, dict) or prior.get("role") != "tool":
             continue
-        category = mem.get("category", "fact")
-        content = mem.get("content", "")
-        key = mem.get("key")
+        tcid = prior.get("tool_call_id")
+        if tcid:
+            existing_tool_call_ids.add(tcid)
 
-        if not content:
+    # Map tool_call_ids to call details (name + arguments).
+    notify_tools = {"nia_memory", "skill_manage", "memory", "skill_view", "skills_list"}
+    call_details: dict[str, dict[str, Any]] = {}
+    for msg in review_messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls", []) or []:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function", {}) or {}
+            fn_name = fn.get("name", "")
+            tcid = tc.get("id")
+            if fn_name not in notify_tools or not tcid:
+                continue
+            try:
+                args = json.loads(fn.get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            call_details[tcid] = {
+                "tool": fn_name,
+                "action": args.get("action", ""),
+                "name": args.get("name", ""),
+                "content": args.get("content", ""),
+            }
+
+    # Walk tool messages and collect actions.
+    actions: List[str] = []
+    for msg in review_messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "tool":
+            continue
+        tcid = msg.get("tool_call_id")
+        if tcid and tcid in existing_tool_call_ids:
+            continue  # Skip stale inherited results.
+        if tcid and tcid not in call_details:
             continue
 
         try:
-            if category == "preference" and key:
-                if hasattr(memory, "add_preference"):
-                    memory.add_preference(key, content)
-                    count += 1
-            elif category == "pattern":
-                if hasattr(memory, "add_pattern"):
-                    memory.add_pattern(content)
-                    count += 1
+            data = json.loads(msg.get("content", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict) or not data.get("success"):
+            continue
+
+        message = data.get("message", "")
+        detail = call_details.get(tcid, {})
+        is_skill = detail.get("tool") in {"skill_manage", "skill_view"}
+
+        message_lower = message.lower()
+        if not verbose:
+            if "created" in message_lower:
+                actions.append(message)
+            elif "updated" in message_lower:
+                actions.append(message)
+            elif is_skill and "patched" in message_lower:
+                actions.append(message)
+            continue
+
+        # Verbose mode: include content previews.
+        label = "Skill" if is_skill else "Memory"
+        action = detail.get("action", "")
+        content = detail.get("content", "")
+        skill_name = detail.get("name", "")
+        max_preview = 120
+
+        if is_skill and skill_name:
+            if action == "create":
+                actions.append(f"📝 Skill '{skill_name}' created")
+            elif action in {"edit", "patch"}:
+                actions.append(f"📝 Skill '{skill_name}' patched")
             else:
-                if hasattr(memory, "add_fact"):
-                    memory.add_fact(content)
-                    count += 1
-        except Exception as exc:
-            logger.warning("Failed to apply memory write %r: %s", mem, exc)
+                actions.append(f"📝 Skill '{skill_name}' {action}")
+        elif content:
+            preview = content[:max_preview] + ("…" if len(content) > max_preview else "")
+            actions.append(f"{label} ➕ {preview}")
+        elif message:
+            actions.append(f"{label}: {message}")
 
-    if count > 0 and hasattr(memory, "save"):
-        try:
-            memory.save()
-        except Exception as exc:
-            logger.warning("Failed to persist memory after review: %s", exc)
-
-    return count
+    return actions
 
 
 # ---------------------------------------------------------------------------
-# Review execution
+# Fork execution
 # ---------------------------------------------------------------------------
 
 
-def _run_review(
+def _run_review_in_thread(
     messages_snapshot: list[dict[str, Any]],
     api_client: Any,
     model: str,
     system_prompt: str,
     memory: Any,
-) -> dict[str, Any]:
-    """Run a single review and apply any memory + skill writes.
+    prompt: str,
+) -> None:
+    """Worker function executed in the background-review daemon thread.
 
-    Returns a dict with: 'memories_applied' (count), 'skills_created' (list),
-    'skills_updated' (list), 'summary' (str), 'error' (str|None).
+    Forks a restricted :class:`QueryEngine` with only memory + skill
+    tools, runs the review prompt, and surfaces a compact action summary.
     """
-    # Build the review conversation: system prompt + conversation snapshot + review prompt.
-    # Use the PARENT's system prompt for prefix-cache parity (audit fix).
-    from niaharness.engine.messages import ConversationMessage, TextBlock
+    import contextlib
+    import io
 
-    # Build the transcript as actual ConversationMessages (not flattened text)
-    # so the prefix matches the parent's cached prefix (audit fix: cache awareness).
+    from niaharness.tools.skill_provenance import (
+        reset_background_review_read_marks,
+        set_current_write_origin,
+        reset_current_write_origin,
+    )
+
+    # Bind the write-origin ContextVar so skill_manage knows it's in
+    # background-review mode (enables the read-before-write gate).
+    origin_token = set_current_write_origin("background_review")
+    # Clear any stale read marks from a prior review.
+    reset_background_review_read_marks()
+
+    try:
+        # Thread-scoped silence: only this thread's stdout/stderr is
+        # redirected, not process-wide (other threads' output survives).
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                review_messages = _execute_review_fork(
+                    messages_snapshot, api_client, model, system_prompt, memory, prompt,
+                )
+            except Exception as exc:
+                logger.warning("Background review fork failed: %s", exc)
+                return
+
+        # Surface actions to the user.
+        try:
+            actions = summarize_background_review_actions(
+                review_messages, messages_snapshot, notification_mode="on",
+            )
+        except Exception as exc:
+            logger.warning("summarize_background_review_actions failed: %s", exc)
+            actions = []
+
+        if actions:
+            summary = " · ".join(dict.fromkeys(actions))
+            feedback = f"💾 Self-improvement review: {summary}"
+            logger.info(feedback)
+            _review_state.notify_feedback(feedback)
+        else:
+            logger.debug("Background review: nothing to save")
+    except Exception as exc:
+        logger.warning("Background memory/skill review failed: %s", exc)
+    finally:
+        reset_current_write_origin(origin_token)
+
+
+def _execute_review_fork(
+    messages_snapshot: list[dict[str, Any]],
+    api_client: Any,
+    model: str,
+    system_prompt: str,
+    memory: Any,
+    prompt: str,
+) -> list[dict[str, Any]]:
+    """Execute the review in a forked QueryEngine with restricted tools.
+
+    Returns the forked engine's message list (for action summarization).
+    """
+    import asyncio
+
+    from niaharness.engine.messages import ConversationMessage, TextBlock
+    from niaharness.tools import create_default_tool_registry
+    from niaharness.tools.base import ToolRegistry
+
+    # Build a restricted tool registry: memory + skill tools only.
+    review_registry = ToolRegistry()
+    full_registry = create_default_tool_registry()
+    allowed_tools = ("nia_memory", "skill_manage", "skill", "skills_list", "skill_view")
+    for tool_name in allowed_tools:
+        tool = full_registry.get(tool_name)
+        if tool:
+            review_registry.register(tool)
+
+    # Wire memory into the nia_memory tool.
+    mem_tool = review_registry.get("nia_memory")
+    if mem_tool and hasattr(mem_tool, "set_memory"):
+        mem_tool.set_memory(memory)
+
+    # Build the review conversation: system prompt + snapshot + review prompt.
     review_messages: list[ConversationMessage] = []
-    for msg in messages_snapshot:
-        role = msg.get("role", "user")
+    for msg_dict in messages_snapshot:
+        role = msg_dict.get("role", "user")
+        if role == "system":
+            continue  # System prompt is passed separately.
         content_blocks: list[Any] = []
-        for block in msg.get("content", []):
-            btype = block.get("type", "")
+        for block in msg_dict.get("content", []):
+            btype = block.get("type", "") if isinstance(block, dict) else ""
             if btype == "text":
                 content_blocks.append(TextBlock(text=block.get("text", "")))
-            # Skip tool_use/tool_result blocks in the review snapshot —
-            # they're not needed for the review and would bloat the context.
         if content_blocks:
             review_messages.append(ConversationMessage(role=role, content=content_blocks))
 
-    # Append the review prompt as the final user message.
+    # Append the review prompt + tool-restriction suffix as the final user message.
     review_messages.append(
         ConversationMessage(
             role="user",
-            content=[TextBlock(text=COMBINED_REVIEW_PROMPT)],
+            content=[TextBlock(text=prompt + _TOOL_RESTRICTION_SUFFIX)],
         )
     )
 
-    # Make the LLM call with tools (memory + skill_manage).
-    try:
-        import asyncio
+    # Run the forked engine in its own event loop.
+    async def _run_fork():
+        from niaharness.engine.query import run_query, QueryContext
+        from niaharness.permissions.checker import PermissionChecker
+        from niaharness.config.settings import PermissionSettings, PermissionMode
 
-        from niaharness.api.client import ApiMessageRequest
-        from niaharness.tools import create_default_tool_registry
-        from niaharness.tools.base import ToolRegistry
+        # FULL_AUTO so the fork doesn't block on approvals (it can only
+        # call memory/skill tools anyway, which are safe).
+        settings = PermissionSettings(mode=PermissionMode.FULL_AUTO)
+        context = QueryContext(
+            api_client=api_client,
+            tool_registry=review_registry,
+            permission_checker=PermissionChecker(settings),
+            cwd=os.getcwd(),
+            model=model,
+            system_prompt=system_prompt,  # reuse parent's prompt for cache parity
+            max_tokens=2048,
+            max_turns=MAX_REVIEW_ITERATIONS,
+        )
 
-        # Build a restricted tool registry for the review (memory + skill_manage only).
-        review_registry = ToolRegistry()
-        full_registry = create_default_tool_registry()
-        for tool_name in ("nia_memory", "skill_manage", "skill"):
-            tool = full_registry.get(tool_name)
-            if tool:
-                review_registry.register(tool)
-
-        # Wire memory into the nia_memory tool.
-        mem_tool = review_registry.get("nia_memory")
-        if mem_tool and hasattr(mem_tool, "set_memory"):
-            mem_tool.set_memory(memory)
-
-        async def _do_review_call():
-            from niaharness.engine.query import run_query, QueryContext
-            from niaharness.permissions.checker import PermissionChecker
-            from niaharness.config.settings import PermissionSettings
-
-            context = QueryContext(
-                api_client=api_client,
-                tool_registry=review_registry,
-                permission_checker=PermissionChecker(PermissionSettings()),
-                cwd=_get_cwd(),
-                model=model,
-                system_prompt=system_prompt,  # reuse parent's prompt for cache parity
-                max_tokens=2048,
-                max_turns=5,  # review should be quick
+        # Track tool calls for the action summary.
+        fork_messages: list[dict[str, Any]] = []
+        async for event, usage in run_query(context, review_messages):
+            from niaharness.engine.stream_events import (
+                AssistantTurnComplete,
+                ToolExecutionCompleted,
             )
+            if isinstance(event, ToolExecutionCompleted):
+                # Record the tool call + result for summarization.
+                fork_messages.append({
+                    "role": "assistant",
+                    "tool_calls": [{"id": getattr(event, "tool_call_id", ""), "function": {"name": event.tool_name, "arguments": getattr(event, "arguments", "{}")}}],
+                })
+                fork_messages.append({
+                    "role": "tool",
+                    "tool_call_id": getattr(event, "tool_call_id", ""),
+                    "content": getattr(event, "output", ""),
+                })
+            elif isinstance(event, AssistantTurnComplete):
+                if event.message.text:
+                    fork_messages.append({
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": event.message.text}],
+                    })
+        return fork_messages
 
-            full_text = ""
-            async for event, usage in run_query(context, review_messages):
-                from niaharness.engine.stream_events import (
-                    AssistantTextDelta,
-                    AssistantTurnComplete,
-                )
-                if isinstance(event, AssistantTextDelta):
-                    full_text += event.text
-                elif isinstance(event, AssistantTurnComplete):
-                    if event.message.text:
-                        full_text = event.message.text
-            return full_text
-
-        loop = asyncio.new_event_loop()
-        try:
-            full_text = loop.run_until_complete(_do_review_call())
-        finally:
-            loop.close()
-
-    except Exception as exc:
-        logger.warning("Background review LLM call failed: %s", exc)
-        return {
-            "memories_applied": 0,
-            "skills_created": [],
-            "skills_updated": [],
-            "summary": "",
-            "error": str(exc),
-        }
-
-    # Parse and apply memory writes.
-    review_result = _parse_review_response(full_text)
-    memories_applied = _apply_memory_writes(review_result, memory)
-
-    # Extract skill writes from the structured response.
-    skills_created = review_result.get("skills_created", [])
-    skills_updated = review_result.get("skills_updated", [])
-
-    return {
-        "memories_applied": memories_applied,
-        "skills_created": skills_created if isinstance(skills_created, list) else [],
-        "skills_updated": skills_updated if isinstance(skills_updated, list) else [],
-        "summary": review_result.get("summary", ""),
-        "error": None,
-    }
-
-
-def _get_cwd() -> str:
-    """Get the current working directory (best-effort)."""
-    import os
-
-    return os.getcwd()
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_run_fork())
+    finally:
+        loop.close()
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — spawn + wait
 # ---------------------------------------------------------------------------
 
 
@@ -541,7 +701,10 @@ def maybe_spawn_background_review(
     system_prompt: str,
     memory: Any,
     *,
+    tool_call_count: int = 0,
     was_interrupted: bool = False,
+    review_memory: bool = True,
+    review_skills: bool = True,
 ) -> None:
     """Maybe spawn a background review thread after a turn.
 
@@ -555,85 +718,66 @@ def maybe_spawn_background_review(
         model: The model to use for the review.
         system_prompt: The parent's system prompt (reused for cache parity).
         memory: The Memory instance to write to.
-        was_interrupted: If True, skip the review (audit fix: don't review
-            interrupted turns — Hermes doesn't).
+        tool_call_count: Number of tool calls in the just-completed turn.
+            Must be ≥ ``MIN_TOOL_CALLS_FOR_REVIEW`` (3) to trigger.
+        was_interrupted: If True, skip the review (don't review interrupted turns).
+        review_memory: If True, include memory review in the prompt.
+        review_skills: If True, include skill review in the prompt.
     """
-    if not is_background_review_enabled():
+    if not _is_background_review_enabled():
         return
     if memory is None:
         return
     if was_interrupted:
-        return  # audit fix: don't review interrupted turns
-    if not _review_state.should_review():
+        return
+    if tool_call_count < MIN_TOOL_CALLS_FOR_REVIEW:
+        return
+    if not review_memory and not review_skills:
         return
 
     snapshot = _snapshot_messages(messages)
     if len(snapshot) < 2:
         return
 
-    review_model = get_review_model() or model
+    # Pick the prompt based on which triggers fired.
+    if review_memory and review_skills:
+        prompt = COMBINED_REVIEW_PROMPT
+    elif review_memory:
+        prompt = MEMORY_REVIEW_PROMPT
+    else:
+        prompt = SKILL_REVIEW_PROMPT
+
+    review_model = model  # Inherit parent's model for cache parity.
 
     def _target():
-        # Audit fix: silence stdout/stderr in the review thread so any
-        # print statements from the API client or tools don't leak into
-        # the main conversation's console. Thread-scoped, not process-global.
-        # Adapted from Hermes Agent's thread_scoped_silence().
-        import contextlib
-        import io
+        _run_review_in_thread(
+            snapshot, api_client, review_model, system_prompt, memory, prompt,
+        )
 
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            try:
-                result = _run_review(
-                    snapshot, api_client, review_model, system_prompt, memory
-                )
-                if result.get("error"):
-                    logger.debug("Background review error: %s", result["error"])
-                elif result.get("memories_applied", 0) > 0 or result.get("skills_created") or result.get("skills_updated"):
-                    # Build user-visible feedback message (audit fix: surface results).
-                    parts = []
-                    if result["memories_applied"] > 0:
-                        parts.append(f"{result['memories_applied']} memory item(s)")
-                    if result.get("skills_created"):
-                        names = [s.get("name", "?") for s in result["skills_created"]]
-                        parts.append(f"created skill(s): {', '.join(names)}")
-                    if result.get("skills_updated"):
-                        names = [s.get("name", "?") for s in result["skills_updated"]]
-                        parts.append(f"updated skill(s): {', '.join(names)}")
-
-                    feedback = f"💾 Self-improvement review: {' · '.join(parts)}"
-                    logger.info(feedback)
-                    _review_state.notify_feedback(feedback)
-                else:
-                    logger.debug("Background review: %s", result.get("summary", "nothing saved"))
-            except Exception as exc:
-                logger.warning("Background review thread failed: %s", exc)
-
-    thread = threading.Thread(target=_target, daemon=True, name="nia-background-review")
+    thread = threading.Thread(target=_target, daemon=True, name="nia-bg-review")
     _review_state.register_thread(thread)
     thread.start()
 
 
 def wait_for_reviews(timeout: float = 5.0) -> None:
     """Wait for active review threads to finish (for tests)."""
-    import time as _time
-
-    deadline = _time.monotonic() + timeout
-    while _time.monotonic() < deadline:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         if _review_state.active_count() == 0:
             return
-        _time.sleep(0.05)
+        time.sleep(0.05)
 
 
-def get_review_stats() -> dict[str, Any]:
-    """Return review system statistics (for debugging/UI)."""
-    return {
-        "enabled": is_background_review_enabled(),
-        "model": get_review_model(),
-        "interval_seconds": get_review_interval(),
-        "active_threads": _review_state.active_count(),
-        "last_review_time": datetime.fromtimestamp(
-            _review_state._last_review_time, tz=timezone.utc
-        ).isoformat()
-        if _review_state._last_review_time > 0
-        else None,
-    }
+__all__ = [
+    "COMBINED_REVIEW_PROMPT",
+    "CONFIG_FLAG",
+    "MAX_REVIEW_ITERATIONS",
+    "MEMORY_REVIEW_PROMPT",
+    "MIN_TOOL_CALLS_FOR_REVIEW",
+    "SKILL_REVIEW_PROMPT",
+    "get_review_stats",
+    "maybe_spawn_background_review",
+    "set_feedback_callback",
+    "summarize_background_review_actions",
+    "wait_for_reviews",
+]

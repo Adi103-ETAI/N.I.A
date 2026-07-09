@@ -479,6 +479,7 @@ async def run_query(
     max_output_recovery_count = 0
     continuation_nudge_count = 0
     turn_count = 0
+    tool_call_count = 0  # Total tool calls across all turns (for background review)
 
     _start_time = time.monotonic()
 
@@ -503,6 +504,7 @@ async def run_query(
                     is_error=True,
                     duration_ms=(time.monotonic() - _start_time) * 1000,
                     num_turns=turn_count,
+                tool_call_count=tool_call_count,
                     total_cost_usd=current_cost,
                     errors=[f"Reached maximum budget (${context.max_budget_usd})"],
                 ), None
@@ -762,6 +764,7 @@ async def run_query(
                         is_error=True,
                         duration_ms=(time.monotonic() - _start_time) * 1000,
                         num_turns=turn_count,
+                tool_call_count=tool_call_count,
                         errors=[f"{error_msg} (recovery: {action.description})"],
                     ), None
                     return
@@ -773,6 +776,7 @@ async def run_query(
                     is_error=True,
                     duration_ms=(time.monotonic() - _start_time) * 1000,
                     num_turns=turn_count,
+                tool_call_count=tool_call_count,
                     errors=[error_msg],
                 ), None
                 return
@@ -782,6 +786,7 @@ async def run_query(
                 is_error=True,
                 duration_ms=(time.monotonic() - _start_time) * 1000,
                 num_turns=turn_count,
+                tool_call_count=tool_call_count,
                 errors=[error_msg],
             ), None
             return
@@ -841,12 +846,14 @@ async def run_query(
                 is_error=False,
                 duration_ms=(time.monotonic() - _start_time) * 1000,
                 num_turns=turn_count,
+                tool_call_count=tool_call_count,
                 result_text=final_message.text,
             ), None
             return
 
         # --- execute tool calls --------------------------------------------
         tool_calls = final_message.tool_uses
+        tool_call_count += len(tool_calls)  # Track for background review (Task 7)
 
         if len(tool_calls) == 1:
             tc = tool_calls[0]
@@ -899,6 +906,7 @@ async def run_query(
                 is_error=True,
                 duration_ms=(time.monotonic() - _start_time) * 1000,
                 num_turns=turn_count,
+                tool_call_count=tool_call_count,
                 errors=[failure_decision.message],
             ), None
             return
@@ -921,6 +929,7 @@ async def run_query(
         is_error=True,
         duration_ms=(time.monotonic() - _start_time) * 1000,
         num_turns=turn_count,
+        tool_call_count=tool_call_count,
         errors=[f"Exceeded maximum turn limit ({context.max_turns})"],
     ), None
 

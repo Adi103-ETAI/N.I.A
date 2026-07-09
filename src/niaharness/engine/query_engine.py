@@ -198,6 +198,7 @@ class QueryEngine:
         max_budget_usd: float | None = None,
         token_budget: int | None = None,
         memory: object | None = None,
+        post_turn_hooks: list | None = None,
     ) -> None:
         self._api_client = api_client
         self._tool_registry = tool_registry
@@ -214,6 +215,10 @@ class QueryEngine:
         self._max_budget_usd = max_budget_usd
         self._token_budget = token_budget
         self._memory = memory  # for background review (Task 5)
+        # Post-turn hooks: callables invoked after each QueryResult with
+        # (engine, result, tool_call_count). Used by the background review
+        # system (Task 7) to spawn the self-improvement fork.
+        self._post_turn_hooks: list = post_turn_hooks or []
 
         # State
         self._messages: list[ConversationMessage] = []
@@ -395,33 +400,26 @@ class QueryEngine:
             # AssistantTurnComplete / tool event.
             if isinstance(event, QueryResult):
                 self._last_result = event
-                # After the turn completes, maybe spawn a background memory +
-                # skill review (Task 5 — self-improving learning loop).
-                # Non-blocking, best-effort, runs in a daemon thread.
-                # Audit fix: skip review on interrupted turns (Hermes doesn't
-                # review interrupted turns either).
-                if self._memory is not None:
+                # After the turn completes, invoke post-turn hooks (Task 7).
+                # The background review hook spawns a self-improvement fork
+                # that reviews the turn and calls skill_manage / memory tools.
+                # Non-blocking, best-effort — never breaks the turn.
+                was_interrupted = (
+                    event.reason is not None
+                    and "interrupt" in str(event.reason).lower()
+                )
+                # Count tool calls in this turn for the ≥3 threshold.
+                tool_call_count = getattr(event, "tool_call_count", 0) or 0
+                for hook in self._post_turn_hooks:
                     try:
-                        from niaharness.engine.background_review import (
-                            maybe_spawn_background_review,
-                        )
-
-                        was_interrupted = (
-                            event.reason is not None
-                            and "interrupt" in str(event.reason).lower()
-                        )
-
-                        maybe_spawn_background_review(
-                            messages=self._messages,
-                            api_client=self._api_client,
-                            model=self._model,
-                            system_prompt=self._system_prompt,  # reuse for cache parity
-                            memory=self._memory,
+                        hook(
+                            engine=self,
+                            result=event,
+                            tool_call_count=tool_call_count,
                             was_interrupted=was_interrupted,
                         )
                     except Exception:
-                        # Review is best-effort — never break the turn.
-                        pass
+                        pass  # Hooks are best-effort.
 
                 # P1 fix: persist the assistant's final message to the session DB.
                 # QueryResult has result_text, not message.
