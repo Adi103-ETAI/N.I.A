@@ -92,12 +92,29 @@ def get_nia_home() -> Path:
     """Return the NIA home directory (``~/.nia/`` by default).
 
     Resolution order:
-    1. ``NIA_HOME`` env var (explicit NIA home override)
-    2. ``NIAHARNESS_CONFIG_DIR`` env var (canonical niaharness config dir)
-    4. ``~/.nia/`` (NIA-specific default)
+    1. Active profile (if a named profile is set via ``NIA_PROFILE`` or
+       ``~/.nia/active_profile``) → ``~/.nia/profiles/<name>/``
+    2. ``NIA_HOME`` env var (explicit NIA home override)
+    3. ``NIAHARNESS_CONFIG_DIR`` env var (canonical niaharness config dir)
+    4. ``~/.nia/`` (NIA-specific default — the "default" profile root)
 
     Creates the directory if it doesn't exist.
     """
+    # Check for an active named profile first.
+    try:
+        from niaharness.profiles import get_active_profile_name, DEFAULT_PROFILE
+
+        active = get_active_profile_name()
+        if active and active != DEFAULT_PROFILE:
+            from niaharness.profiles import _profiles_root
+
+            home = _profiles_root() / active
+            home.mkdir(parents=True, exist_ok=True)
+            return home
+    except Exception:
+        pass
+
+    # Fall back to env vars / default.
     for env_var in ("NIA_HOME", "NIAHARNESS_CONFIG_DIR"):
         value = os.environ.get(env_var)
         if value:

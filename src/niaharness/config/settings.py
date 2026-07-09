@@ -56,6 +56,11 @@ class Settings(BaseModel):
     base_url: str | None = None
     api_format: str = "anthropic"  # "anthropic" or "openai"
 
+    # Budget enforcement (prevents runaway loops)
+    max_turns: int = 90  # Max tool-calling iterations per turn (Hermes default: 90)
+    max_budget_usd: float | None = None  # Max estimated cost in USD per session (None = unlimited)
+    token_budget: int | None = None  # Max total tokens for continuation logic (None = unlimited)
+
     # Behavior
     system_prompt: str | None = None
     permission: PermissionSettings = Field(default_factory=PermissionSettings)
@@ -132,6 +137,19 @@ def _apply_env_overrides(settings: Settings) -> Settings:
     max_tokens = os.environ.get("NIAHARNESS_MAX_TOKENS")
     if max_tokens:
         updates["max_tokens"] = int(max_tokens)
+
+    # Budget enforcement env var overrides.
+    max_turns = os.environ.get("NIAHARNESS_MAX_TURNS")
+    if max_turns:
+        updates["max_turns"] = int(max_turns)
+
+    max_budget = os.environ.get("NIAHARNESS_MAX_BUDGET_USD")
+    if max_budget:
+        updates["max_budget_usd"] = float(max_budget)
+
+    token_budget = os.environ.get("NIAHARNESS_TOKEN_BUDGET")
+    if token_budget:
+        updates["token_budget"] = int(token_budget)
 
     api_key = (
         os.environ.get("ANTHROPIC_API_KEY")

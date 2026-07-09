@@ -70,7 +70,12 @@ class NIA:
     ) -> None:
         self._working_directory = working_directory or str(Path.cwd())
         self._personality = Personality(personality_config)
-        self._memory = Memory(storage_path=Path.home() / ".nia" / "memory.json")
+
+        # Profile-aware paths: memory, SOUL.md, config, skills, credentials
+        # all respect the active profile (~/.nia/ for default, ~/.nia/profiles/<name>/ for named).
+        from niaharness.profiles import get_profile_home
+        profile_home = get_profile_home()
+        self._memory = Memory(storage_path=profile_home / "memory.json")
         self._context = Context()
         self._engine: QueryEngine | None = None
         self._mcp_manager: Any = None
@@ -143,6 +148,9 @@ class NIA:
             model=resolved_model,
             system_prompt=self._build_system_prompt(),
             max_tokens=settings.max_tokens,
+            max_turns=settings.max_turns,
+            max_budget_usd=settings.max_budget_usd,
+            token_budget=settings.token_budget,
             hook_executor=self._hook_executor,
             tool_metadata={
                 "mcp_manager": self._mcp_manager,

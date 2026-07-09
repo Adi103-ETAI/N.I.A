@@ -54,10 +54,19 @@ PROFILES_DIR = "profiles"
 
 
 def _nia_home_root() -> Path:
-    """Return the root NIA home directory (~/.nia/)."""
-    from niaharness.prompts.soul import get_nia_home
+    """Return the root NIA home directory (~/.nia/).
 
-    return get_nia_home()
+    This is the ROOT home — NOT profile-aware. It resolves env vars
+    (NIA_HOME, NIAHARNESS_CONFIG_DIR) or defaults to ~/.nia/.
+    Profile-aware path resolution is done by get_nia_home() in soul.py,
+    which calls get_active_profile_name() from this module. To avoid
+    a circular import, this function does NOT call get_nia_home().
+    """
+    for env_var in ("NIA_HOME", "NIAHARNESS_CONFIG_DIR"):
+        value = os.environ.get(env_var)
+        if value:
+            return Path(value)
+    return Path.home() / ".nia"
 
 
 def _profiles_root() -> Path:
