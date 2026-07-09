@@ -1,0 +1,19 @@
+node_modules/
+__pycache__/
+*.pyc
+.git/
+.github/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+docs/
+*.md
+!README.md
+.env
+.env.*
+!.env.example
+ frontend/

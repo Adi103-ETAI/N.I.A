@@ -1,0 +1,17 @@
+services:
+  nia:
+    build: .
+    container_name: nia
+    stdin_open: true
+    tty: true
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - NIA_HOME=/root/.nia
+      - NIAHARNESS_MAX_TURNS=${NIAHARNESS_MAX_TURNS:-90}
+    volumes:
+      - nia-home:/root/.nia
+      - ./src:/app/src:ro
+    restart: unless-stopped
+
+volumes:
+  nia-home:
