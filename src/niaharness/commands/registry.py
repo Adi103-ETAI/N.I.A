@@ -1453,26 +1453,31 @@ def create_default_command_registry() -> CommandRegistry:
             )
         return CommandResult(message=f"Voice mode {'enabled' if enabled else 'disabled'}.")
 
-    async def _doctor_handler(_: str, context: CommandContext) -> CommandResult:
-        settings = load_settings()
-        memory_dir = get_project_memory_dir(context.cwd)
-        state = context.app_state.get() if context.app_state is not None else None
-        lines = [
-            "Doctor summary:",
-            f"- cwd: {context.cwd}",
-            f"- model: {settings.model}",
-            f"- permission_mode: {state.permission_mode if state is not None else settings.permission.mode}",
-            f"- theme: {state.theme if state is not None else settings.theme}",
-            f"- output_style: {state.output_style if state is not None else settings.output_style}",
-            f"- vim_mode: {'on' if (state.vim_enabled if state is not None else settings.vim_mode) else 'off'}",
-            f"- voice_mode: {'on' if (state.voice_enabled if state is not None else settings.voice_mode) else 'off'}",
-            f"- effort: {state.effort if state is not None else settings.effort}",
-            f"- passes: {state.passes if state is not None else settings.passes}",
-            f"- memory_dir: {memory_dir}",
-            f"- plugin_count: {max(len(context.plugin_summary.splitlines()) - 1, 0) if context.plugin_summary else 0}",
-            f"- mcp_configured: {'yes' if context.mcp_summary and 'No MCP' not in context.mcp_summary else 'no'}",
-        ]
-        return CommandResult(message="\n".join(lines))
+    async def _doctor_handler(args: str, context: CommandContext) -> CommandResult:
+        """Run NIA Doctor diagnostics.
+
+        Supports:
+          - ``/doctor`` — dry-run (report only)
+          - ``/doctor --fix`` — auto-repair fixable issues
+          - ``/doctor --ack <id>`` — acknowledge a security advisory
+        """
+        del context
+        try:
+            from niaharness.cli.doctor import run_doctor
+
+            # Parse args.
+            fix = "--fix" in args
+            ack_id = None
+            if "--ack" in args:
+                parts = args.split()
+                idx = parts.index("--ack")
+                if idx + 1 < len(parts):
+                    ack_id = parts[idx + 1]
+
+            result = run_doctor(fix=fix, ack=ack_id)
+            return CommandResult(message=result.report)
+        except Exception as exc:
+            return CommandResult(message=f"Doctor failed: {exc}")
 
     async def _privacy_settings_handler(_: str, context: CommandContext) -> CommandResult:
         settings = load_settings()
@@ -1515,21 +1520,25 @@ def create_default_command_registry() -> CommandRegistry:
             )
         )
 
-    async def _upgrade_handler(_: str, context: CommandContext) -> CommandResult:
+    async def _upgrade_handler(args: str, context: CommandContext) -> CommandResult:
+        """Check for and execute NIA updates.
+
+        Supports:
+          - ``/upgrade`` — check for update + execute if available
+          - ``/upgrade --check`` — check only, don't install
+          - ``/upgrade --no-backup`` — skip the pre-update backup
+        """
         del context
         try:
-            version = importlib.metadata.version("niaharness")
-        except importlib.metadata.PackageNotFoundError:
-            version = "0.1.0"
-        return CommandResult(
-            message=(
-                f"Current version: {version}\n"
-                "Upgrade instructions:\n"
-                "- uv sync --extra dev\n"
-                "- uv pip install -e .\n"
-                "- npm --prefix frontend/terminal install"
-            )
-        )
+            from niaharness.cli.update import run_update
+
+            check_only = "--check" in args
+            no_backup = "--no-backup" in args
+
+            result = run_update(check=check_only, no_backup=no_backup)
+            return CommandResult(message=result.report)
+        except Exception as exc:
+            return CommandResult(message=f"Upgrade failed: {exc}")
 
     async def _diff_handler(args: str, context: CommandContext) -> CommandResult:
         if args.strip() == "full":
@@ -1675,7 +1684,7 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(SlashCommand("keybindings", "Show resolved keybindings", _keybindings_handler))
     registry.register(SlashCommand("vim", "Show or update Vim mode", _vim_handler))
     registry.register(SlashCommand("voice", "Show or update voice mode", _voice_handler))
-    registry.register(SlashCommand("doctor", "Show environment diagnostics", _doctor_handler))
+    registry.register(SlashCommand("doctor", "Run diagnostics and auto-repair (optional: --fix, --ack <id>)", _doctor_handler))
     registry.register(SlashCommand("diff", "Show git diff output", _diff_handler))
     registry.register(SlashCommand("branch", "Show git branch information", _branch_handler))
     registry.register(SlashCommand("commit", "Show status or create a git commit", _commit_handler))
@@ -1684,7 +1693,7 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(SlashCommand("privacy-settings", "Show local privacy and storage settings", _privacy_settings_handler))
     registry.register(SlashCommand("rate-limit-options", "Show ways to reduce provider rate pressure", _rate_limit_options_handler))
     registry.register(SlashCommand("release-notes", "Show recent NiaHarness release notes", _release_notes_handler))
-    registry.register(SlashCommand("upgrade", "Show upgrade instructions", _upgrade_handler))
+    registry.register(SlashCommand("upgrade", "Check for and install updates (optional: --check, --no-backup)", _upgrade_handler))
     registry.register(SlashCommand("agents", "List or inspect agent and teammate tasks", _agents_handler))
     registry.register(SlashCommand("tasks", "Manage background tasks", _tasks_handler))
 
@@ -1758,21 +1767,50 @@ def create_default_command_registry() -> CommandRegistry:
     async def _insights_handler(args: str, context: CommandContext) -> CommandResult:
         del context
         try:
-            from niaharness.insights import InsightsEngine, format_insights
+            from niaharness.insights import InsightsEngine
 
             engine = InsightsEngine()
-            # Parse days from args (default 7)
-            days = 7
-            if args.strip().isdigit():
-                days = max(1, min(int(args.strip()), 90))
+            # Parse args: optional days (default 30) and optional --source <name>
+            # and --gateway flag for chat-delivery format.
+            args_stripped = args.strip()
+            days = 30
+            source = None
+            use_gateway_format = False
 
-            report = engine.get_report(days=days)
-            return CommandResult(message=format_insights(report))
+            if args_stripped:
+                parts = args_stripped.split()
+                for part in parts:
+                    if part == "--gateway":
+                        use_gateway_format = True
+                    elif part.startswith("--source="):
+                        source = part[len("--source="):]
+                    elif part == "--source":
+                        # Skip the flag; the next part is the value.
+                        continue
+                    elif part.isdigit():
+                        days = max(1, min(int(part), 365))
+                    # Skip the value of a preceding --source flag.
+                # Handle "--source <name>" (space-separated).
+                if "--source" in parts:
+                    idx = parts.index("--source")
+                    if idx + 1 < len(parts) and not parts[idx + 1].startswith("--"):
+                        source = parts[idx + 1]
+
+            report = engine.generate(days=days, source=source)
+            if use_gateway_format:
+                message = engine.format_gateway(report)
+            else:
+                message = engine.format_terminal(report)
+            return CommandResult(message=message)
         except Exception as exc:
             return CommandResult(message=f"Failed to generate insights: {exc}")
 
     registry.register(
-        SlashCommand("insights", "Show usage analytics and cost estimation (optional: days)", _insights_handler)
+        SlashCommand(
+            "insights",
+            "Show usage analytics and cost estimation (optional: days, --source <name>, --gateway)",
+            _insights_handler,
+        )
     )
 
     # ── /profile — profile management ───────────────────────────────

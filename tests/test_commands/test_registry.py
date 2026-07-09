@@ -104,8 +104,8 @@ async def test_doctor_command_reports_context(tmp_path: Path, monkeypatch):
         ),
     )
 
-    assert "Doctor summary:" in result.message
-    assert str(tmp_path) in result.message
+    assert "NIA Doctor" in result.message
+    assert "Security Advisories" in result.message
 
 
 @pytest.mark.asyncio
@@ -424,7 +424,7 @@ async def test_copy_rewind_and_meta_commands(tmp_path: Path, monkeypatch):
 
     upgrade_command, upgrade_args = registry.lookup("/upgrade")
     upgrade_result = await upgrade_command.handler(upgrade_args, context)
-    assert "Upgrade instructions:" in upgrade_result.message
+    assert "NIA Update" in upgrade_result.message
 
 
 @pytest.mark.asyncio
