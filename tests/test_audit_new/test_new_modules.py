@@ -120,11 +120,30 @@ def test_profiles_basic():
 
 
 def test_insights_cost_estimation():
-    """Test cost estimation."""
+    """Test cost estimation with the new usage_pricing module.
+
+    The new behavior (ported from Hermes) returns 0.0 for unknown models
+    instead of fabricating a default price — unknown-cost sessions are
+    tracked separately via the ``unknown_cost_sessions`` overview field.
+    """
     from niaharness.insights import estimate_cost
+    # Known model: claude-3-opus is $15/M input, $75/M output.
     assert abs(estimate_cost("claude-3-opus", 1_000_000, 0) - 15.0) < 0.01
     assert abs(estimate_cost("claude-3-opus", 0, 1_000_000) - 75.0) < 0.01
-    assert estimate_cost("unknown-model", 1_000_000, 0) > 0
+    # Unknown model: returns 0.0 (no fabricated default).
+    assert estimate_cost("unknown-model", 1_000_000, 0) == 0.0
+    # Claude 4.7 with cache-read tokens.
+    from niaharness.insights.usage_pricing import CanonicalUsage, estimate_usage_cost
+    usage = CanonicalUsage(
+        input_tokens=1_000_000,
+        output_tokens=500_000,
+        cache_read_tokens=200_000,
+    )
+    result = estimate_usage_cost("claude-opus-4-7", usage, provider="anthropic")
+    assert result.status == "estimated"
+    assert result.amount_usd is not None
+    # $5 (1M input) + $12.50 (500K output) + $0.10 (200K cache-read) = $17.60
+    assert abs(float(result.amount_usd) - 17.60) < 0.01
 
 
 def test_context_engine():
