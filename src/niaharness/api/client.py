@@ -299,10 +299,18 @@ class AnthropicApiClient:
         base_url: str | None = None,
         max_retries: int = MAX_RETRIES,
     ) -> None:
-        kwargs: dict[str, Any] = {"api_key": api_key}
-        if base_url:
-            kwargs["base_url"] = base_url
-        self._client = AsyncAnthropic(**kwargs)
+        # Delegate client construction to the transport so the client gets
+        # the right auth mode (api_key vs OAuth bearer vs third-party bearer)
+        # and the correct ``anthropic-beta`` header set per endpoint.  This
+        # enables prompt caching, extended thinking, and the 1M-context beta
+        # without callers needing to configure them manually.
+        from niaharness.providers.anthropic_transport import build_anthropic_client
+
+        self._client = build_anthropic_client(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=900.0,
+        )
         self._max_retries = min(max_retries, MAX_CONFIGURABLE_RETRIES)
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
@@ -369,23 +377,55 @@ class AnthropicApiClient:
             raise RequestFailure(str(last_error)) from last_error
 
     async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
-        """Single attempt at streaming a message."""
-        params: dict[str, Any] = {
-            "model": request.model,
-            "messages": [message.to_api_param() for message in request.messages],
-            "max_tokens": request.max_tokens,
-        }
-        if request.system_prompt:
-            params["system"] = request.system_prompt
-        if request.tools:
-            params["tools"] = request.tools
-        if request.temperature is not None:
-            params["temperature"] = request.temperature
-        if request.top_p is not None:
-            params["top_p"] = request.top_p
+        """Single attempt at streaming a message.
+
+        Routes through :func:`niaharness.providers.anthropic_transport.build_anthropic_kwargs`
+        so the request benefits from:
+
+          - **Message conversion + repair** — NIA ``ConversationMessage`` →
+            Anthropic wire format, with orphan-strip / role-merge /
+            thinking-signature management.
+          - **Prompt caching** — ``cache_control`` markers applied to the
+            system prompt, last tool definition, and last assistant block
+            (~10x cost reduction on long sessions).
+          - **Model capability detection** — adaptive thinking config,
+            sampling-param strip, ``max_tokens`` resolution from the model
+            ceiling when not provided.
+          - **Tool-schema sanitization** — nullable-union collapse +
+            top-level ``oneOf``/``allOf``/``anyOf`` strip (Anthropic rejects
+            them with 400).
+        """
+        from niaharness.providers.anthropic_transport import build_anthropic_kwargs
+
+        # Base URL is read from the underlying SDK client (set at construction).
+        base_url = getattr(self._client, "base_url", None)
+        base_url_str = str(base_url) if base_url else None
+
+        # Build the full kwargs via the transport.  We pass the raw
+        # ConversationMessage objects — the transport handles conversion +
+        # repair + caching.
+        messages = list(request.messages)
+        params = build_anthropic_kwargs(
+            model=request.model,
+            messages=messages,
+            system_prompt=request.system_prompt,
+            tools=request.tools or None,
+            max_tokens=request.max_tokens,
+            reasoning_effort=request.reasoning_effort,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            base_url=base_url_str,
+            enable_caching=True,
+        )
+
+        # Strip internal helper keys the SDK doesn't accept.
+        sdk_params = {k: v for k, v in params.items() if not k.startswith("_")}
+        extra_headers = params.get("_extra_headers")
+        if extra_headers:
+            sdk_params["extra_headers"] = extra_headers
 
         try:
-            async with self._client.messages.stream(**params) as stream:
+            async with self._client.messages.stream(**sdk_params) as stream:
                 async for event in stream:
                     event_type = getattr(event, "type", None)
 

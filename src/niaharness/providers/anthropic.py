@@ -423,35 +423,62 @@ class AnthropicProvider(LLMProvider):
     ) -> Any:
         """Create an Anthropic async client.
 
+        Delegates to :func:`niaharness.providers.anthropic_transport.build_anthropic_client`,
+        which auto-detects auth mode (``api_key`` vs OAuth bearer vs third-party
+        bearer) based on the key shape and base URL, and applies the correct
+        ``anthropic-beta`` header set per endpoint.
+
         Args:
-            api_key: Anthropic API key. Falls back to ANTHROPIC_API_KEY env var.
-            base_url: Override base URL.
-            **kwargs: Additional options (e.g., use_oauth=True).
+            api_key: Anthropic API key OR OAuth token. Falls back to
+                ``ANTHROPIC_API_KEY`` env var, then to OAuth (when
+                ``use_oauth=True``), then to ``resolve_anthropic_token()``.
+            base_url: Override base URL (auto-resolved from env vars).
+            **kwargs: Additional options. Recognized keys:
+                - ``use_oauth``: when True and no api_key, resolve via
+                  :func:`resolve_anthropic_token` (OAuth → credential pool → env).
+                - ``timeout``: read timeout in seconds (default 900).
+                - ``drop_context_1m_beta``: strip the 1M-context beta.
 
         Returns:
-            AsyncAnthropic client instance.
+            ``anthropic.AsyncAnthropic`` client configured for the
+            resolved endpoint and auth mode.
         """
-        from anthropic import AsyncAnthropic
+        from niaharness.providers.anthropic_transport import (
+            build_anthropic_client,
+            resolve_anthropic_token,
+        )
 
-        resolved_key = self.resolve_api_key(api_key)
+        use_oauth = bool(kwargs.pop("use_oauth", False))
+        timeout = kwargs.pop("timeout", 900.0)
+        drop_context_1m_beta = bool(kwargs.pop("drop_context_1m_beta", False))
+
+        resolved_key = api_key or self.resolve_api_key()
+
+        # If no explicit key, try OAuth / credential pool / env chain.
+        if not resolved_key and use_oauth:
+            resolved_key = resolve_anthropic_token()
+
+        # If still no key but use_oauth is False, try OAuth manager directly
+        # as a last resort (preserves the old behavior).
         if not resolved_key:
-            # Try OAuth if enabled
-            if kwargs.get("use_oauth"):
-                token_manager = OAuthTokenManager()
-                resolved_key = token_manager.get_valid_token()
-            if not resolved_key:
-                raise ValueError(
-                    "No API key found. Set ANTHROPIC_API_KEY environment variable "
-                    "or provide api_key parameter."
-                )
+            token_manager = OAuthTokenManager()
+            resolved_key = token_manager.get_valid_token()
+
+        if not resolved_key:
+            raise ValueError(
+                "No API key found. Set ANTHROPIC_API_KEY environment variable, "
+                "run `nia auth login` to set up OAuth, or provide api_key parameter."
+            )
 
         resolved_url = self.resolve_base_url(base_url)
 
-        client_kwargs: dict[str, Any] = {"api_key": resolved_key}
-        if resolved_url:
-            client_kwargs["base_url"] = resolved_url
-
-        return AsyncAnthropic(**client_kwargs)
+        return build_anthropic_client(
+            api_key=resolved_key,
+            base_url=resolved_url,
+            timeout=timeout,
+            drop_context_1m_beta=drop_context_1m_beta,
+            **kwargs,
+        )
 
     def get_thinking_client(
         self,
