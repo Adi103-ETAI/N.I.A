@@ -2,21 +2,14 @@
 # docker-compose.yml for N.I.A — Neural Intelligence Assistant
 #
 # Ported from Hermes Agent's docker-compose.yml architecture.
+# Uses s6-overlay for process supervision (gateway + dashboard services).
 #
 # Usage:
 #   NIA_UID=$(id -u) NIA_GID=$(id -g) docker compose up -d
 #
 # Set NIA_UID / NIA_GID to the host user that owns ~/.nia so files
 # created inside the container stay readable/writable on the host.
-# The entrypoint.sh remaps the internal `nia` user to these values
-# via usermod/groupmod.
-#
-# Security notes:
-#   - The container runs as root initially (for UID remap + volume chown),
-#     then drops to the `nia` user for the main process.
-#   - /opt/data is a named volume (or bind-mount ~/.nia:/opt/data).
-#   - API keys should be passed via environment or .env file, NOT baked
-#     into the image.
+# The stage2-hook.sh remaps the internal `nia` user to these values.
 
 services:
   nia:
@@ -24,17 +17,14 @@ services:
     image: nia-agent
     container_name: nia
     restart: unless-stopped
-    stdin_open: true
-    tty: true
+    network_mode: host
     volumes:
-      # Mount NIA home directory (SOUL.md, memory, sessions, credentials, etc.)
-      - nia-home:/opt/data
-      # Mount project directory for file operations (optional)
-      # - ./workspace:/workspace
+      # NIA home directory (SOUL.md, memory, sessions, credentials, etc.)
+      - ~/.nia:/opt/data
     environment:
       - NIA_UID=${NIA_UID:-10000}
       - NIA_GID=${NIA_GID:-10000}
-      # API key — at least one is required. Set in .env or here.
+      # API key — at least one is required.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # Override the default model (optional)
       - NIAHARNESS_MODEL=${NIAHARNESS_MODEL:-}
@@ -43,9 +33,31 @@ services:
       - NIAHARNESS_MAX_BUDGET_USD=${NIAHARNESS_MAX_BUDGET_USD:-}
       # Telegram gateway (optional)
       - NIA_TELEGRAM_BOT_TOKEN=${NIA_TELEGRAM_BOT_TOKEN:-}
-      # Auxiliary model for background tasks (optional — use a cheaper model)
+      # Auxiliary model for background tasks (optional)
       - NIA_AUX_MODEL=${NIA_AUX_MODEL:-}
       - NIA_AUX_API_KEY=${NIA_AUX_API_KEY:-}
+      # Dashboard (optional — uncomment to enable)
+      # - NIA_DASHBOARD=1
+      # - NIA_DASHBOARD_HOST=127.0.0.1
+      # - NIA_DASHBOARD_PORT=9119
+    # Default command: start the gateway service (s6-overlay supervised).
+    # Override with `docker compose run nia --print "hello"` for one-shot.
+    command: ["gateway", "run"]
 
-volumes:
-  nia-home:
+  dashboard:
+    image: nia-agent
+    container_name: nia-dashboard
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - nia
+    volumes:
+      - ~/.nia:/opt/data
+    environment:
+      - NIA_UID=${NIA_UID:-10000}
+      - NIA_GID=${NIA_GID:-10000}
+      - NIA_DASHBOARD=1
+      - NIA_DASHBOARD_HOST=127.0.0.1
+      - NIA_DASHBOARD_PORT=9119
+    # Localhost-only. For remote access, tunnel via `ssh -L 9119:localhost:9119`.
+    command: ["dashboard", "--host", "127.0.0.1", "--no-open"]

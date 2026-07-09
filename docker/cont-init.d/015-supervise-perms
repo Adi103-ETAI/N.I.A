@@ -1,0 +1,48 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Make supervise/ trees for ALL declared s6 services queryable and
+# controllable by the unprivileged nia user (UID 10000).
+#
+# Ported from Hermes Agent's docker/cont-init.d/015-supervise-perms.
+#
+# s6-supervise creates each service's supervise/ and event/ directory
+# with mode 0700 owned by root. Unprivileged clients (the nia user)
+# get EACCES on every probe/control call. This script chowns them.
+
+set -eu
+
+SVC_ROOT=/run/s6-rc/servicedirs
+
+if [ ! -d "$SVC_ROOT" ]; then
+    echo "[supervise-perms] $SVC_ROOT not present; skipping"
+    exit 0
+fi
+
+for svc in "$SVC_ROOT"/*; do
+    [ -d "$svc" ] || continue
+    name=$(basename "$svc")
+
+    # Skip s6-overlay-internal services.
+    case "$name" in
+        s6rc-*|s6-linux-*)
+            continue
+            ;;
+    esac
+
+    if [ -d "$svc/supervise" ]; then
+        chown -R nia:nia "$svc/supervise" 2>/dev/null || \
+            echo "[supervise-perms] could not chown $svc/supervise"
+        chmod 0710 "$svc/supervise" 2>/dev/null || true
+        if [ -p "$svc/supervise/control" ]; then
+            chmod 0660 "$svc/supervise/control" 2>/dev/null || true
+        fi
+    fi
+
+    if [ -d "$svc/event" ]; then
+        chown nia:nia "$svc/event" 2>/dev/null || \
+            echo "[supervise-perms] could not chown $svc/event"
+        chmod 03730 "$svc/event" 2>/dev/null || true
+    fi
+done
+
+echo "[supervise-perms] chowned supervise/ trees for static s6-rc services"

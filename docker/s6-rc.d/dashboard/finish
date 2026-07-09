@@ -1,0 +1,19 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Dashboard finish script. Companion to ./run.
+#
+# Ported from Hermes Agent's docker/s6-rc.d/dashboard/finish.
+# When NIA_DASHBOARD is unset, ./run exits 0. Without this finish script,
+# s6-supervise would restart the run script in a tight loop. By exiting
+# 125 here, we tell s6-supervise "permanent failure, do not restart".
+
+case "${NIA_DASHBOARD:-}" in
+    1|true|TRUE|True|yes|YES|Yes)
+        # Dashboard was enabled — let s6-supervise restart on crash.
+        exit 0
+        ;;
+    *)
+        # Dashboard disabled — permanent-failure marker.
+        exit 125
+        ;;
+esac

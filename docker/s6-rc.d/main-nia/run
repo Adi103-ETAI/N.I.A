@@ -1,0 +1,14 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Main NIA service.
+#
+# Ported from Hermes Agent's docker/s6-rc.d/main-hermes/run.
+#
+# IMPORTANT — this is NOT how the user's CMD runs.
+# The container's CMD runs as /init's "main program" via main-wrapper.sh,
+# NOT as an s6-supervised service. This service exists because:
+#   1. s6-rc requires at least one user service for the "user" bundle.
+#   2. Future work may want to supervise a long-lived NIA process
+#      (e.g. for gateway-server containers).
+# For now this is a no-op: it sleeps forever.
+exec sleep infinity

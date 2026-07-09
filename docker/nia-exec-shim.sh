@@ -2,15 +2,12 @@
 # shellcheck shell=sh
 # /opt/nia/bin/niaharness — `docker exec` privilege-drop shim.
 #
-# Ported from Hermes Agent's docker/hermes-exec-shim.sh.
+# Ported from Hermes Agent's docker/hermes-exec-shim.sh (88 lines).
 #
 # When an operator runs `docker exec <c> niaharness ...` the default
 # UID is root (0), and any file the command writes under $NIA_HOME
-# (settings.json, SOUL.md, memory.json) ends up root-owned and
-# unreadable to the main process running as user `nia`.
-#
-# This shim drops to the `nia` user before exec'ing the real venv
-# binary. When invoked as non-root, it short-circuits with no overhead.
+# ends up root-owned and unreadable to the supervised nia process.
+# This shim drops to the nia user before exec'ing the real venv binary.
 
 set -e
 
@@ -36,12 +33,15 @@ esac
 # Root, no opt-out. Drop to the nia user.
 export HOME="${NIA_HOME:-/opt/data}"
 
-# Try different privilege-drop tools
-if command -v su-exec >/dev/null 2>&1; then
-    exec su-exec nia "$REAL" "$@"
-elif command -v gosu >/dev/null 2>&1; then
-    exec gosu nia "$REAL" "$@"
-else
-    # Fallback: use su
-    exec su nia -c "$(printf '%q ' "$REAL" "$@")"
+# s6-setuidgid lives under /command/ which is NOT on `docker exec`'s PATH.
+S6_SUID=/command/s6-setuidgid
+if [ -x "$S6_SUID" ]; then
+    exec "$S6_SUID" nia "$REAL" "$@"
 fi
+
+# Fallback: try gosu, then su
+if command -v gosu >/dev/null 2>&1; then
+    exec gosu nia "$REAL" "$@"
+fi
+
+exec su nia -c "$(printf '%q ' "$REAL" "$@")"

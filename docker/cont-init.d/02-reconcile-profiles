@@ -1,0 +1,34 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Container-boot reconciliation of per-profile gateway s6 services.
+#
+# Ported from Hermes Agent's docker/cont-init.d/02-reconcile-profiles.
+#
+# Service directories under /run/service/ live on tmpfs and are wiped
+# on every container restart. Profile directories under
+# $NIA_HOME/profiles/ live on the persistent VOLUME. This script
+# walks the persistent profiles, recreates the s6 service slots, and
+# auto-starts only those whose last recorded state was `running`.
+
+set -e
+
+# Make the dynamic scandir nia-writable.
+chown nia:nia /run/service 2>/dev/null || true
+
+# Make the svscan control FIFO nia-writable so s6-svscanctl -a works.
+if [ -d /run/service/.s6-svscan ]; then
+    for entry in control lock; do
+        if [ -e "/run/service/.s6-svscan/$entry" ]; then
+            chown nia:nia "/run/service/.s6-svscan/$entry" 2>/dev/null || true
+        fi
+    done
+fi
+
+# Run the Python reconciler (if it exists).
+if [ -f /opt/nia/.venv/bin/python ]; then
+    [ "$(id -u)" = 0 ] || exec /opt/nia/.venv/bin/python -m niaharness.container_boot 2>/dev/null || true
+    exec s6-setuidgid nia /opt/nia/.venv/bin/python -m niaharness.container_boot 2>/dev/null || true
+fi
+
+# If no reconciler, just exit cleanly.
+exit 0

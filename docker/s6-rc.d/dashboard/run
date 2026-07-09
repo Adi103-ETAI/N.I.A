@@ -1,0 +1,29 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Dashboard service. Always declared so s6 has a supervised slot; if
+# NIA_DASHBOARD isn't truthy the run script exits cleanly and the
+# companion finish script returns 125 (s6's "permanent failure, do not
+# restart" marker), so s6-svstat reports the slot as down.
+#
+# Ported from Hermes Agent's docker/s6-rc.d/dashboard/run.
+# Adapted for NIA: uses `niaharness dashboard` instead of `hermes dashboard`.
+
+case "${NIA_DASHBOARD:-}" in
+    1|true|TRUE|True|yes|YES|Yes) ;;
+    *)
+        exit 0
+        ;;
+esac
+
+export HOME="${NIA_HOME:-/opt/data}"
+
+cd "$HOME"
+# shellcheck disable=SC1091
+. /opt/nia/.venv/bin/activate
+
+dash_host="${NIA_DASHBOARD_HOST:-0.0.0.0}"
+dash_port="${NIA_DASHBOARD_PORT:-9119}"
+
+[ "$(id -u)" = 0 ] || exec niaharness dashboard --host "$dash_host" --port "$dash_port" --no-open
+exec s6-setuidgid nia niaharness dashboard \
+    --host "$dash_host" --port "$dash_port" --no-open
