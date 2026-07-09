@@ -272,7 +272,28 @@ class LLMContextEngine(ContextEngine):
         model: str = "",
         context_window: int = 32_000,
         max_tokens: int = 4096,
+        focus_topic: Optional[str] = None,
+        force: bool = False,
     ) -> ContextBuildResult:
+        """Build the final message list for a model call.
+
+        Args:
+            history: The conversation history (may be modified/compacted).
+            system_prompt: The system prompt (always preserved).
+            new_messages: New messages to append (user, tool results, etc.).
+            model: The model name (for token estimation + context window).
+            context_window: The model's context window in tokens.
+            max_tokens: Max tokens for the response (reserved from budget).
+            focus_topic: Optional focus topic for prioritized summarization
+                (e.g. from /compress <topic>). When provided, the LLM
+                summary preserves 60-70% of its budget for focus-topic
+                content.
+            force: If True, bypass the anti-thrash / cooldown gate (for
+                manual /compress).
+
+        Returns:
+            ContextBuildResult with the final message list.
+        """
         from niaharness.engine.llm_compaction import CompactionRequest
         from niaharness.services.compact import estimate_message_tokens
 
@@ -291,6 +312,21 @@ class LLMContextEngine(ContextEngine):
                 tokens_saved=0,
             )
 
+        # Anti-thrash + cooldown gate (unless force=True).
+        if not force and not self._compactor.should_compress(prompt_tokens=tokens_before):
+            # Gate says skip — return messages unchanged.
+            return ContextBuildResult(
+                messages=all_messages,
+                token_count=tokens_before,
+                was_compacted=False,
+                compaction_method="skipped",
+                tokens_saved=0,
+                metadata={
+                    "skip_reason": "cooldown_or_anti_thrash",
+                    "ineffective_count": getattr(self._compactor, "_ineffective_compression_count", 0),
+                },
+            )
+
         # Compact with LLM.
         request = CompactionRequest(
             messages=all_messages,
@@ -298,6 +334,8 @@ class LLMContextEngine(ContextEngine):
             context_window=context_window,
             target_tokens=budget,
             previous_summary=getattr(self._compactor, "_previous_summary", None),
+            focus_topic=focus_topic,
+            force=force,
         )
         result = await self._compactor.compact(request)
 
@@ -307,7 +345,21 @@ class LLMContextEngine(ContextEngine):
             was_compacted=result.success and result.method != "none",
             compaction_method=result.method,
             tokens_saved=max(0, tokens_before - result.tokens_after),
+            metadata={
+                "savings_pct": result.savings_pct,
+                "aborted": result.aborted,
+                "error": result.error,
+            },
         )
+
+    def on_session_start(self, session_id: str, **kwargs: Any) -> None:
+        """Called when a session begins.
+
+        Binds the session DB + session ID to the compactor so durable
+        cooldowns can round-trip. The session_db is passed via kwargs.
+        """
+        session_db = kwargs.get("session_db")
+        self._compactor.bind_session_state(session_db=session_db, session_id=session_id)
 
     def on_session_reset(self) -> None:
         self._compactor.reset_session_state()
