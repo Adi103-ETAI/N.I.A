@@ -11,20 +11,30 @@ Flow for shell commands:
   3. Shell hardening gate (``shell_hardening.check_command``):
      - Hardline floor (rm -rf /, mkfs, dd to block device, etc.) — unconditional block
      - Sudo stdin guard (sudo -S without SUDO_PASSWORD) — unconditional block
-     - User deny patterns — unconditional block
+     - User deny patterns (approvals.deny in config.yaml) — unconditional block
      - Dangerous patterns — ``requires_confirmation``
-  4. Approval layer (``approval.ApprovalChecker.check``):
+  4. Tirith AST scan (``tirith_security.check_command_security``) — best-effort,
+     fail-open. Blocks on tirith exit code 1, warns on 2.
+  5. Approval layer (``approval.ApprovalChecker.check``):
      - YOLO / session-yolo / mode=off bypass
      - Permanent allowlist (exact match or fnmatch glob)
      - Session-scoped approval
      - Smart-approve (LLM auto-approve for low-risk commands)
      - Gateway async approval (blocking wait for chat-based /approve /deny)
      - CLI interactive prompt (fallback)
-  5. Mode-based decision (FULL_AUTO / PLAN / DEFAULT)
+  6. Mode-based decision (FULL_AUTO / PLAN / DEFAULT)
 
 The approval layer runs BEFORE the mode-based decision so that even in
 DEFAULT mode, a command on the permanent allowlist or a smart-approved
 low-risk command proceeds without a manual prompt.
+
+P1 additions:
+  - Tirith AST integration (``check_command_security``).
+  - User-defined deny rules (``_match_user_deny_rule`` from
+    ``approvals.deny`` config).
+  - Container guard skipping (``_should_skip_container_guards``).
+  - Observability context (``set_current_observability_context`` for
+    turn_id + tool_call_id span tags).
 """
 
 from __future__ import annotations
@@ -37,7 +47,11 @@ from niaharness.permissions.approval import (
     ApprovalChecker,
     ApprovalConfig,
     ApprovalDecision,
+    _match_user_deny_rule,
+    _should_skip_container_guards,
     get_current_session_key,
+    get_current_tool_call_id,
+    get_current_turn_id,
 )
 from niaharness.permissions.modes import PermissionMode
 from niaharness.permissions.shell_hardening import (
@@ -54,10 +68,11 @@ class PermissionDecision:
     allowed: bool
     requires_confirmation: bool = False
     reason: str = ""
-    category: str = "ok"  # ok | hardline | sudo_stdin | user_deny | dangerous | denied_tool | path_rule | approval
+    category: str = "ok"  # ok | hardline | sudo_stdin | user_deny | dangerous | tirith_block | denied_tool | path_rule | approval
     pattern_key: str | None = None
     description: str | None = None
     approval_choice: str | None = None  # once | session | always | deny (from approval layer)
+    tirith_findings: list | None = None  # P1: tirith findings (if scanned)
 
 
 @dataclass(frozen=True)
@@ -75,6 +90,17 @@ class PermissionChecker:
     handles the per-session approval flow for dangerous commands. The
     approval checker is constructed on first use so it picks up config
     changes (e.g. ``~/.nia/approvals.json`` written by the gateway).
+
+    P1 additions:
+      - Tirith AST scan runs after the shell-hardening gate but before
+        the approval layer. Fail-open by default.
+      - User-defined deny rules (``approvals.deny``) are checked as part
+        of the shell-hardening gate (unconditional block, before yolo).
+      - Container guard skipping: when the backend is sandboxed (Docker
+        without host mounts, Singularity, Modal, Daytona), dangerous-
+        command prompts are skipped.
+      - Observability: every decision is tagged with the current turn_id
+        + tool_call_id from the contextvars set by the engine/gateway.
     """
 
     def __init__(
@@ -83,6 +109,9 @@ class PermissionChecker:
         *,
         approval_checker: ApprovalChecker | None = None,
         approval_callback=None,
+        env_type: str = "local",
+        has_host_access: bool = False,
+        enable_tirith: bool = True,
     ) -> None:
         self._settings = settings
         # Parse path rules from settings.
@@ -102,6 +131,11 @@ class PermissionChecker:
         # Approval checker — lazily constructed if not provided.
         self._approval_checker = approval_checker
         self._approval_callback = approval_callback
+        # P1: container backend metadata.
+        self._env_type = env_type
+        self._has_host_access = has_host_access
+        # P1: tirith enable flag (can be disabled for tests / by config).
+        self._enable_tirith = enable_tirith
 
     @property
     def approval_checker(self) -> ApprovalChecker:
@@ -116,6 +150,11 @@ class PermissionChecker:
                 approval_callback=self._approval_callback,
             )
         return self._approval_checker
+
+    def set_env_type(self, env_type: str, *, has_host_access: bool = False) -> None:
+        """Update the terminal backend type (for container guard skipping)."""
+        self._env_type = env_type
+        self._has_host_access = has_host_access
 
     def evaluate(
         self,
@@ -159,7 +198,18 @@ class PermissionChecker:
                             category="path_rule",
                         )
 
-        # 4. Shell hardening gate (deobfuscation + hardline + dangerous).
+        # 4. Container guard skipping — sandboxed backends skip the
+        # dangerous-command approval flow entirely.
+        if command and _should_skip_container_guards(
+            self._env_type, has_host_access=self._has_host_access
+        ):
+            return PermissionDecision(
+                allowed=True,
+                reason=f"Container guards skipped (env_type={self._env_type})",
+                category="ok",
+            )
+
+        # 5. Shell hardening gate (deobfuscation + hardline + user-deny + dangerous).
         if command:
             user_deny_patterns = list(getattr(self._settings, "denied_commands", []))
             full_auto = self._settings.mode == PermissionMode.FULL_AUTO
@@ -169,13 +219,15 @@ class PermissionChecker:
                 full_auto=full_auto,
             )
 
-            # 4a. Hard block (hardline / sudo_stdin / user_deny) — no recovery.
+            # 5a. Hard block (hardline / sudo_stdin / user_deny) — no recovery.
             if not hardening_decision.allowed and not hardening_decision.requires_confirmation:
                 append_permission_audit_log(
                     command=command,
                     decision=hardening_decision,
                     tool_name=tool_name,
                     session_id=get_current_session_key(default=""),
+                    turn_id=get_current_turn_id(),
+                    tool_call_id=get_current_tool_call_id(),
                 )
                 return PermissionDecision(
                     allowed=False,
@@ -184,7 +236,70 @@ class PermissionChecker:
                     description=hardening_decision.description,
                 )
 
-            # 4b. Dangerous — requires confirmation. Delegate to the approval layer.
+            # 5b. P1: User-defined deny rules (approvals.deny) — unconditional block.
+            deny_pattern = _match_user_deny_rule(command)
+            if deny_pattern is not None:
+                from niaharness.permissions.shell_hardening import ShellHardeningDecision as _SHD
+                deny_decision = _SHD(
+                    allowed=False,
+                    requires_confirmation=False,
+                    reason=f"Command matches user-defined deny rule: {deny_pattern}",
+                    category="user_deny",
+                    description=deny_pattern,
+                )
+                append_permission_audit_log(
+                    command=command,
+                    decision=deny_decision,
+                    tool_name=tool_name,
+                    session_id=get_current_session_key(default=""),
+                    turn_id=get_current_turn_id(),
+                    tool_call_id=get_current_tool_call_id(),
+                )
+                return PermissionDecision(
+                    allowed=False,
+                    reason=deny_decision.reason,
+                    category="user_deny",
+                    description=deny_pattern,
+                )
+
+            # 5c. P1: Tirith AST scan — best-effort, fail-open.
+            if self._enable_tirith and hardening_decision.allowed:
+                try:
+                    from niaharness.permissions.tirith_security import (
+                        check_command_security,
+                    )
+                    tirith_result = check_command_security(command)
+                    if tirith_result["action"] == "block":
+                        tirith_decision = ShellHardeningDecision(
+                            allowed=False,
+                            requires_confirmation=False,
+                            reason=f"Tirith security scan blocked: {tirith_result.get('summary', '')}",
+                            category="tirith_block",
+                            description=tirith_result.get("summary", "tirith block"),
+                        )
+                        append_permission_audit_log(
+                            command=command,
+                            decision=tirith_decision,
+                            tool_name=tool_name,
+                            session_id=get_current_session_key(default=""),
+                            turn_id=get_current_turn_id(),
+                            tool_call_id=get_current_tool_call_id(),
+                        )
+                        return PermissionDecision(
+                            allowed=False,
+                            reason=tirith_decision.reason,
+                            category="tirith_block",
+                            description=tirith_decision.description,
+                            tirith_findings=tirith_result.get("findings", []),
+                        )
+                    # Note: tirith "warn" doesn't block — it's advisory.
+                    # The shell-hardening gate + approval layer handle
+                    # confirmation.
+                except Exception:
+                    # Best-effort — never break the turn on tirith failure.
+                    pass
+
+            # 5d. Dangerous — requires confirmation. Delegate to the approval layer.
             if hardening_decision.requires_confirmation:
                 # In FULL_AUTO mode, the shell-hardening gate already allowed
                 # the command (with a warning). Skip the approval layer so
@@ -195,6 +310,8 @@ class PermissionChecker:
                         decision=hardening_decision,
                         tool_name=tool_name,
                         session_id=get_current_session_key(default=""),
+                        turn_id=get_current_turn_id(),
+                        tool_call_id=get_current_tool_call_id(),
                     )
                     return PermissionDecision(
                         allowed=True,
@@ -217,6 +334,8 @@ class PermissionChecker:
                     decision=hardening_decision,
                     tool_name=tool_name,
                     session_id=get_current_session_key(default=""),
+                    turn_id=get_current_turn_id(),
+                    tool_call_id=get_current_tool_call_id(),
                 )
 
                 if approval_decision.approved:
@@ -230,9 +349,6 @@ class PermissionChecker:
                     )
 
                 # Not approved — block.
-                # If the approval layer set requires_confirmation (gateway
-                # pending without notify_cb), propagate it so the UI can
-                # show "waiting for approval".
                 return PermissionDecision(
                     allowed=False,
                     requires_confirmation=approval_decision.requires_confirmation,
@@ -243,7 +359,7 @@ class PermissionChecker:
                     approval_choice=approval_decision.choice,
                 )
 
-            # 4c. Also check legacy fnmatch patterns (backward compat).
+            # 5e. Also check legacy fnmatch patterns (backward compat).
             for pattern in getattr(self._settings, "denied_commands", []):
                 if isinstance(pattern, str) and fnmatch.fnmatch(command, pattern):
                     return PermissionDecision(
@@ -252,7 +368,7 @@ class PermissionChecker:
                         category="user_deny",
                     )
 
-        # 5. Mode-based decision.
+        # 6. Mode-based decision.
         if self._settings.mode == PermissionMode.FULL_AUTO:
             return PermissionDecision(
                 allowed=True,

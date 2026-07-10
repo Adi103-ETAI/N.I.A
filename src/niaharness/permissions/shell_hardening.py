@@ -942,6 +942,8 @@ def append_permission_audit_log(
     decision: ShellHardeningDecision,
     tool_name: str = "bash",
     session_id: Optional[str] = None,
+    turn_id: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
 ) -> None:
     """Append a structured entry to the permission audit log.
 
@@ -949,9 +951,14 @@ def append_permission_audit_log(
     every blocked or confirmed command for forensic review. Successful
     ``ok`` commands are not logged (would be too noisy).
 
+    P1: now accepts ``turn_id`` + ``tool_call_id`` for observability
+    correlation. When set, they're appended to the log line as
+    ``turn=<id>`` and ``tool_call=<id>`` tags so audit entries can be
+    correlated back to the originating request span.
+
     Format (one JSON line per event):
-        2026-07-08T10:30:00Z BLOCK hardline "rm -rf /" tool=bash session=abc123
-        description="recursive delete of root filesystem"
+        2026-07-08T10:30:00Z BLOCK hardline "rm -rf /" tool=bash session=abc123 \\
+        turn=t1 tool_call=tc1 description="recursive delete of root filesystem"
     """
     if decision.category == "ok" and decision.allowed and not decision.requires_confirmation:
         return  # Don't log successful non-dangerous commands.
@@ -977,6 +984,11 @@ def append_permission_audit_log(
         ]
         if session_id:
             parts.append(f"session={session_id}")
+        # P1: observability tags.
+        if turn_id:
+            parts.append(f"turn={turn_id}")
+        if tool_call_id:
+            parts.append(f"tool_call={tool_call_id}")
         parts.append(f'cmd="{cmd_preview}"')
         if decision.description:
             parts.append(f'description="{decision.description}"')

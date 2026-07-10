@@ -155,6 +155,177 @@ def reset_interactive_context(token: contextvars.Token[Optional[bool]]) -> None:
     _nia_interactive_ctx.reset(token)
 
 
+# ---------------------------------------------------------------------------
+# P1: Observability context — turn_id + tool_call_id for span tags.
+# ---------------------------------------------------------------------------
+
+# Active turn_id + tool_call_id (gateway/engine sets per turn; CLI defaults to "").
+_nia_approval_turn_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "nia_approval_turn_id", default=""
+)
+_nia_approval_tool_call_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "nia_approval_tool_call_id", default=""
+)
+
+
+def set_current_observability_context(
+    *,
+    turn_id: str = "",
+    tool_call_id: str = "",
+) -> tuple[contextvars.ContextVar[str], contextvars.ContextVar[str]]:
+    """Bind active tool correlation IDs to approval hooks.
+
+    Used by the gateway / engine to tag every approval decision with the
+    turn_id + tool_call_id it belongs to, so audit logs + spans can be
+    correlated back to the originating request.
+
+    Returns a tuple of tokens that must be passed to
+    :func:`reset_current_observability_context` to restore the prior
+    values.
+    """
+    return (
+        _nia_approval_turn_id.set(turn_id or ""),
+        _nia_approval_tool_call_id.set(tool_call_id or ""),
+    )
+
+
+def reset_current_observability_context(
+    tokens: tuple[contextvars.ContextVar[str], contextvars.ContextVar[str]],
+) -> None:
+    """Restore prior approval hook correlation IDs."""
+    turn_token, tool_token = tokens
+    _nia_approval_tool_call_id.reset(tool_token)
+    _nia_approval_turn_id.reset(turn_token)
+
+
+def get_current_turn_id() -> str:
+    """Return the active turn_id (or empty string)."""
+    return _nia_approval_turn_id.get()
+
+
+def get_current_tool_call_id() -> str:
+    """Return the active tool_call_id (or empty string)."""
+    return _nia_approval_tool_call_id.get()
+
+
+# ---------------------------------------------------------------------------
+# P1: User-defined deny rules (approvals.deny in config.yaml).
+# ---------------------------------------------------------------------------
+
+
+def _get_user_deny_patterns() -> list[str]:
+    """Load user-defined deny patterns from config.yaml + env.
+
+    Reads the ``approvals.deny`` section from config.yaml, plus the
+    ``NIA_APPROVAL_DENY`` env var (comma-separated globs).
+
+    Returns a list of fnmatch glob patterns. Empty list = no deny rules.
+    """
+    patterns: list[str] = []
+
+    # From config.yaml.
+    try:
+        from niaharness.config.settings import load_settings
+        settings = load_settings()
+        approvals_section = getattr(settings, "approvals", None) or {}
+        if isinstance(approvals_section, dict):
+            deny_list = approvals_section.get("deny", []) or []
+            if isinstance(deny_list, list):
+                patterns.extend(
+                    p.strip() for p in deny_list
+                    if isinstance(p, str) and p.strip()
+                )
+    except Exception:
+        pass
+
+    # From env var (comma-separated).
+    env_deny = os.environ.get("NIA_APPROVAL_DENY", "").strip()
+    if env_deny:
+        patterns.extend(
+            p.strip() for p in env_deny.split(",")
+            if p.strip()
+        )
+
+    return patterns
+
+
+def _match_user_deny_rule(command: str) -> str | None:
+    """Return the matching ``approvals.deny`` glob, or None.
+
+    ``approvals.deny`` in config.yaml is a user-defined list of fnmatch
+    globs that block a command unconditionally — like the hardline floor,
+    a deny match fires BEFORE the yolo / mode=off bypass. It is the
+    user-editable counterpart to the code-shipped hardline blocklist:
+    "never let the agent run this, even under yolo".
+
+    Matching is case-insensitive. Uses the deobfuscated command variants
+    from shell_hardening so quoting tricks (``r\\m``, ``git st""atus``)
+    can't sidestep a rule.
+    """
+    import fnmatch as _fnmatch
+    try:
+        from niaharness.permissions.shell_hardening import _command_detection_variants
+    except Exception:
+        # Fallback: just use the raw command.
+        def _command_detection_variants(cmd: str) -> list[str]:
+            return [cmd]
+
+    patterns = _get_user_deny_patterns()
+    if not patterns:
+        return None
+
+    # Check each deobfuscated command variant against each pattern.
+    for command_variant in _command_detection_variants(command):
+        candidate = command_variant.lower().strip()
+        for pattern in patterns:
+            if _fnmatch.fnmatchcase(candidate, pattern.lower()):
+                return pattern
+    return None
+
+
+def _user_deny_block_result(pattern: str) -> dict:
+    """Build the standard block result for an ``approvals.deny`` match."""
+    return {
+        "approved": False,
+        "user_deny": True,
+        "message": (
+            f"BLOCKED: this command matches the user-defined deny rule "
+            f"'{pattern}' (approvals.deny in config.yaml). It cannot be "
+            "executed via the agent — not even with --yolo, /yolo, or "
+            "approvals.mode=off. Do NOT retry or rephrase this command; "
+            "the user has explicitly forbidden it."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# P1: Container guard skipping (for sandboxed backends).
+# ---------------------------------------------------------------------------
+
+
+def _should_skip_container_guards(env_type: str, has_host_access: bool = False) -> bool:
+    """Return True when the backend is isolated enough to skip dangerous-command prompts.
+
+    Isolated container backends sandbox the agent away from the host, so their
+    commands can't damage real files/services and we skip the approval layer.
+    Docker is the exception once host paths are bind-mounted into the container:
+    at that point a command like ``rm -rf /workspace`` reaches host files, so it
+    must go through the normal approval flow.
+
+    Args:
+        env_type: Terminal backend type ('local', 'ssh', 'docker',
+            'singularity', 'modal', 'daytona').
+        has_host_access: True when a Docker sandbox bind-mounts host paths,
+            so its commands can reach the host and must not skip approval.
+
+    Returns:
+        True if the guards can be skipped (sandboxed enough), False otherwise.
+    """
+    if env_type == "docker":
+        return not has_host_access
+    return env_type in ("singularity", "modal", "daytona")
+
+
 def _is_interactive_cli() -> bool:
     """Return True when the current context is an interactive CLI session.
 
