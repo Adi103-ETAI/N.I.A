@@ -1251,6 +1251,282 @@ class SessionDB:
             "expires_at": expires_at,
         }
 
+    # ------------------------------------------------------------------
+    # Session lifecycle (end / reopen / ensure)
+    # ------------------------------------------------------------------
+
+    def end_session(self, session_id: str, reason: str = "completed") -> bool:
+        """Mark a session as ended with a reason.
+
+        Args:
+            session_id: The session to end.
+            reason: Why the session ended (e.g. "completed", "session_reset",
+                "agent_close", "cron_complete").
+
+        Returns:
+            True if the session was found and updated.
+        """
+        import time as _time
+
+        def _do(conn: sqlite3.Connection) -> bool:
+            conn.execute(
+                "UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ?",
+                (_time.time(), reason, session_id),
+            )
+            conn.commit()
+            return conn.total_changes > 0
+
+        try:
+            return self._execute_write(_do)
+        except Exception as exc:
+            logger.debug("end_session failed: %s", exc)
+            return False
+
+    def reopen_session(self, session_id: str) -> bool:
+        """Reopen a previously-ended session (clears end_reason + ended_at).
+
+        Used by /resume and session recovery to continue a conversation
+        that was previously closed.
+
+        Returns:
+            True if the session was found and reopened.
+        """
+        def _do(conn: sqlite3.Connection) -> bool:
+            conn.execute(
+                "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?",
+                (session_id,),
+            )
+            conn.commit()
+            return conn.total_changes > 0
+
+        try:
+            return self._execute_write(_do)
+        except Exception as exc:
+            logger.debug("reopen_session failed: %s", exc)
+            return False
+
+    def ensure_session(self, session_id: str, **kwargs: Any) -> dict:
+        """Upsert a session — create if it doesn't exist, update if it does.
+
+        Args:
+            session_id: The session ID.
+            **kwargs: Fields to set (source, model, started_at, etc.).
+
+        Returns:
+            The session dict.
+        """
+        existing = self.get_session(session_id)
+        if existing:
+            if kwargs:
+                self.update_session(session_id, **kwargs)
+            return self.get_session(session_id) or existing
+        return self.create_session(session_id=session_id, **kwargs)
+
+    def is_session_ended(self, session_id: str) -> bool:
+        """True if the session has an end_reason set (i.e. it's been ended)."""
+        session = self.get_session(session_id)
+        if session is None:
+            return True  # Doesn't exist → treat as ended.
+        return bool(session.get("end_reason"))
+
+    # ------------------------------------------------------------------
+    # Title management
+    # ------------------------------------------------------------------
+
+    def set_session_title(self, session_id: str, title: str) -> bool:
+        """Set the human-readable title for a session."""
+        title = (title or "").strip()[:200]  # Cap at 200 chars.
+
+        def _do(conn: sqlite3.Connection) -> bool:
+            conn.execute(
+                "UPDATE sessions SET title = ? WHERE id = ?",
+                (title, session_id),
+            )
+            conn.commit()
+            return conn.total_changes > 0
+
+        try:
+            return self._execute_write(_do)
+        except Exception as exc:
+            logger.debug("set_session_title failed: %s", exc)
+            return False
+
+    def get_session_title(self, session_id: str) -> Optional[str]:
+        """Return the title for a session, or None."""
+        session = self.get_session(session_id)
+        if session is None:
+            return None
+        return session.get("title")
+
+    def resolve_session_id(self, prefix: str) -> Optional[str]:
+        """Resolve a session ID prefix to a full session ID.
+
+        If *prefix* is already a full ID, returns it. Otherwise, finds
+        the unique session whose ID starts with *prefix*.
+
+        Returns:
+            The full session ID, or None if no match / ambiguous.
+        """
+        if not prefix:
+            return None
+        # Exact match.
+        session = self.get_session(prefix)
+        if session:
+            return session["id"]
+        # Prefix match.
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT id FROM sessions WHERE id LIKE ? ORDER BY started_at DESC",
+                    (prefix + "%",),
+                ).fetchall()
+        except Exception:
+            return None
+        if len(rows) == 1:
+            return rows[0]["id"]
+        return None
+
+    # ------------------------------------------------------------------
+    # Message operations (replace / rewind / dedup)
+    # ------------------------------------------------------------------
+
+    def replace_messages(self, session_id: str, messages: list[dict]) -> bool:
+        """Hard-replace all messages for a session.
+
+        Used by /retry, /undo, /compress — deletes all existing messages
+        and inserts the new list.
+
+        Args:
+            session_id: The session to replace messages for.
+            messages: List of message dicts with role, content, etc.
+
+        Returns:
+            True on success.
+        """
+        import time as _time
+
+        def _do(conn: sqlite3.Connection) -> bool:
+            # Delete existing messages.
+            conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            # Insert new messages.
+            for i, msg in enumerate(messages):
+                conn.execute(
+                    "INSERT INTO messages (session_id, role, content, tool_call_id, "
+                    "tool_calls, tool_name, timestamp, seq) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        session_id,
+                        msg.get("role", "unknown"),
+                        msg.get("content", ""),
+                        msg.get("tool_call_id"),
+                        msg.get("tool_calls"),
+                        msg.get("tool_name"),
+                        msg.get("timestamp", _time.time()),
+                        i,
+                    ),
+                )
+            # Update message count.
+            conn.execute(
+                "UPDATE sessions SET message_count = ? WHERE id = ?",
+                (len(messages), session_id),
+            )
+            conn.commit()
+            return True
+
+        try:
+            return self._execute_write(_do)
+        except Exception as exc:
+            logger.warning("replace_messages failed: %s", exc)
+            return False
+
+    def has_platform_message_id(
+        self, session_id: str, platform_message_id: str
+    ) -> bool:
+        """Check if a platform message ID has already been persisted (dedup guard).
+
+        Used by the gateway to prevent duplicate message processing on
+        transient failures.
+        """
+        if not platform_message_id:
+            return False
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT 1 FROM messages WHERE session_id = ? AND platform_message_id = ? LIMIT 1",
+                    (session_id, platform_message_id),
+                ).fetchone()
+            return row is not None
+        except Exception:
+            return False
+
+    def get_messages_as_conversation(
+        self, session_id: str
+    ) -> list[dict[str, Any]]:
+        """Return messages in OpenAI conversation format.
+
+        Each message has: role, content. Assistant messages also have
+        tool_calls if present.
+        """
+        messages = self.get_messages(session_id)
+        result: list[dict[str, Any]] = []
+        for msg in messages:
+            entry: dict[str, Any] = {
+                "role": msg.get("role", "user"),
+                "content": msg.get("content", ""),
+            }
+            if msg.get("tool_calls"):
+                entry["tool_calls"] = msg["tool_calls"]
+            if msg.get("tool_call_id"):
+                entry["tool_call_id"] = msg["tool_call_id"]
+            result.append(entry)
+        return result
+
+    def list_recent_user_messages(
+        self, session_id: str, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """Return the most recent user messages for /undo."""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT id, content, timestamp FROM messages "
+                    "WHERE session_id = ? AND role = 'user' "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    (session_id, limit),
+                ).fetchall()
+            return [dict(row) for row in rows]
+        except Exception:
+            return []
+
+    # ------------------------------------------------------------------
+    # Meta store (key/value)
+    # ------------------------------------------------------------------
+
+    def get_meta(self, key: str) -> Optional[str]:
+        """Get a value from the state_meta key/value store."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT value FROM state_meta WHERE key = ?", (key,)
+                ).fetchone()
+            return row["value"] if row else None
+        except Exception:
+            return None
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Set a value in the state_meta key/value store."""
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "INSERT INTO state_meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+            conn.commit()
+
+        try:
+            self._execute_write(_do)
+        except Exception as exc:
+            logger.debug("set_meta failed: %s", exc)
+
 
 # ---------------------------------------------------------------------------
 # Backward-compatible module-level API
