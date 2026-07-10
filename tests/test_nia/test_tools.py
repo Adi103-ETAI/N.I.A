@@ -19,7 +19,7 @@ class FakeMemory:
         self._prefs: dict[str, str] = {}
 
     def search_relevant(self, query: str, limit: int = 5):
-        from agents.nia.core.memory import MemoryEntry
+        from niaharness.identity.memory import MemoryEntry
         return [
             MemoryEntry(content=f"Fact about {query}", category="fact")
             for _ in range(min(2, limit))
@@ -35,7 +35,7 @@ class FakeMemory:
         return dict(self._prefs)
 
     def get_recent_conversation(self, limit: int = 10):
-        from agents.nia.core.memory import MemoryEntry
+        from niaharness.identity.memory import MemoryEntry
         return [
             MemoryEntry(content="Hello", category="conversation", metadata={"role": "user"}),
         ]
@@ -55,12 +55,12 @@ class FakeContext:
 
     @property
     def time_of_day(self):
-        from agents.nia.core.context import TimeOfDay
+        from niaharness.identity.context import TimeOfDay
         return TimeOfDay.MORNING
 
     @property
     def user_state(self):
-        from agents.nia.core.context import UserState
+        from niaharness.identity.context import UserState
         return UserState.ACTIVE
 
     def get_full_context(self) -> dict:

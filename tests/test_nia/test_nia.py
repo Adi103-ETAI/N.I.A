@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from agents.nia.core.personality import PersonalityConfig
-from agents.nia.nia import NIA
+from niaharness.identity.personality import PersonalityConfig
+from niaharness.identity import NIA
 
 
 def test_nia_instantiation(tmp_path: Path):

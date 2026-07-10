@@ -9,4 +9,4 @@ def test_cli_help():
     runner = CliRunner()
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    assert "Oh my Harness!" in result.output
+    assert "N.I.A" in result.output

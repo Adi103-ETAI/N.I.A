@@ -1,11 +1,9 @@
 """Entry point for `python -m niaharness`.
 
-Redirects to the NIA agent CLI (agents.nia.__main__) which provides
-the new medical-themed UI with caduceus logo, session info, and
-flicker-free streaming.
+Redirects to the unified NIA CLI (niaharness.cli:app).
 """
 
-from agents.nia.__main__ import app
+from niaharness.cli import app
 
 if __name__ == "__main__":
     app()

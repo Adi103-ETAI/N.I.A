@@ -45,7 +45,7 @@ niaharness = "niaharness.cli:app"
 nh = "niaharness.cli:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/niaharness", "src/agents"]
+packages = ["src/niaharness"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
