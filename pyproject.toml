@@ -40,9 +40,9 @@ dev = [
 ]
 
 [project.scripts]
-nia = "agents.nia.__main__:app"
-nh = "agents.nia.__main__:app"
+nia = "niaharness.cli:app"
 niaharness = "niaharness.cli:app"
+nh = "niaharness.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/niaharness", "src/agents"]

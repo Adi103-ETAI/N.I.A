@@ -10,14 +10,25 @@ from typing import Optional
 import typer
 
 app = typer.Typer(
-    name="niaharness",
+    name="nia",
     help=(
-        "Oh my Harness! An AI-powered coding assistant.\n\n"
-        "Starts an interactive session by default, use -p/--print for non-interactive output."
+        "N.I.A — Neural Intelligence Assistant\n\n"
+        "An AI partner inspired by J.A.R.V.I.S. — thinks, plans, and executes with calm authority.\n\n"
+        "Starts an interactive session by default. Use subcommands for management tasks:\n"
+        "  nia setup     — First-time setup wizard\n"
+        "  nia doctor    — Diagnose and auto-repair issues\n"
+        "  nia update    — Check for and install updates\n"
+        "  nia gateway   — Manage chat platform gateway\n"
+        "  nia profile   — Manage profiles and aliases\n"
+        "  nia auth      — Manage authentication\n"
+        "  nia cron      — Manage scheduled jobs\n"
+        "  nia status    — Show system status\n"
+        "  nia version   — Show version info"
     ),
     add_completion=False,
     rich_markup_mode="rich",
     invoke_without_command=True,
+    no_args_is_help=False,
 )
 
 
@@ -29,11 +40,337 @@ mcp_app = typer.Typer(name="mcp", help="Manage MCP servers")
 plugin_app = typer.Typer(name="plugin", help="Manage plugins")
 auth_app = typer.Typer(name="auth", help="Manage authentication")
 cron_app = typer.Typer(name="cron", help="Manage cron scheduler and jobs")
+gateway_app = typer.Typer(name="gateway", help="Manage chat platform gateway")
+profile_app = typer.Typer(name="profile", help="Manage profiles and aliases")
 
 app.add_typer(mcp_app)
 app.add_typer(plugin_app)
 app.add_typer(auth_app)
 app.add_typer(cron_app)
+app.add_typer(gateway_app)
+app.add_typer(profile_app)
+
+
+# ---------------------------------------------------------------------------
+# nia setup — first-time setup wizard
+# ---------------------------------------------------------------------------
+
+@app.command("setup")
+def setup_command() -> None:
+    """First-time setup wizard — configure API key, model, and identity."""
+    print()
+    print("╔═══════════════════════════════════════════════════════════╗")
+    print("║              🤖 N.I.A Setup Wizard                        ║")
+    print("╚═══════════════════════════════════════════════════════════╝")
+    print()
+
+    # Step 1: API key
+    print("Step 1: API Key")
+    print("  NIA needs an API key to talk to an LLM provider.")
+    print("  Supported: Anthropic, OpenAI, OpenRouter, and 17+ more.")
+    print()
+    key = typer.prompt("  Paste your API key (or press Enter to skip)", default="", show_default=False)
+    if key:
+        # Detect provider from key prefix.
+        if key.startswith("sk-ant-"):
+            env_var = "ANTHROPIC_API_KEY"
+            provider = "Anthropic"
+        elif key.startswith("sk-or-"):
+            env_var = "OPENROUTER_API_KEY"
+            provider = "OpenRouter"
+        elif key.startswith("sk-"):
+            env_var = "OPENAI_API_KEY"
+            provider = "OpenAI"
+        else:
+            env_var = "ANTHROPIC_API_KEY"
+            provider = "auto-detect"
+
+        # Write to ~/.nia/.env
+        from niaharness.prompts.soul import get_nia_home
+        env_path = get_nia_home() / ".env"
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = env_path.read_text() if env_path.exists() else ""
+        # Remove old key if present.
+        lines = [l for l in existing.splitlines() if not l.startswith(f"{env_var}=")]
+        lines.append(f"{env_var}={key}")
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        import os as _os
+        _os.chmod(str(env_path), 0o600)
+        print(f"\n  ✓ API key saved to {env_path} ({provider})")
+    else:
+        print("  ⚠ Skipped — set ANTHROPIC_API_KEY or OPENAI_API_KEY manually later.")
+    print()
+
+    # Step 2: Model selection
+    print("Step 2: Model")
+    print("  Recommended models:")
+    print("    1. claude-sonnet-4-6     (Anthropic — best balance)")
+    print("    2. claude-opus-4-7       (Anthropic — most capable)")
+    print("    3. gpt-4o                (OpenAI)")
+    print("    4. deepseek-chat         (DeepSeek — cheapest)")
+    model_choice = typer.prompt("  Choose (1-4) or type a model name", default="1")
+    models = {
+        "1": "claude-sonnet-4-6",
+        "2": "claude-opus-4-7",
+        "3": "gpt-4o",
+        "4": "deepseek-chat",
+    }
+    model = models.get(model_choice, model_choice)
+    print(f"\n  ✓ Model: {model}")
+    print()
+
+    # Step 3: SOUL.md
+    print("Step 3: Identity (SOUL.md)")
+    from niaharness.prompts.soul import get_nia_home
+    soul_path = get_nia_home() / "SOUL.md"
+    if not soul_path.exists():
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text(
+            "# NIA Agent Persona\n\n"
+            "You are NIA, a helpful AI assistant with a calm, professional "
+            "demeanor inspired by J.A.R.V.I.S.\n",
+            encoding="utf-8",
+        )
+        print(f"  ✓ Created {soul_path}")
+    else:
+        print(f"  ✓ SOUL.md already exists at {soul_path}")
+    print()
+
+    # Step 4: Directory structure
+    print("Step 4: Directory structure")
+    nia_home = get_nia_home()
+    for subdir in ["cron", "sessions", "skills", "memories", "mcp-tokens"]:
+        d = nia_home / subdir
+        d.mkdir(parents=True, exist_ok=True)
+        print(f"  ✓ {d}")
+    print()
+
+    # Step 5: Done
+    print("╔═══════════════════════════════════════════════════════════╗")
+    print("║  ✅ Setup complete!                                       ║")
+    print("║                                                           ║")
+    print("║  Start NIA with:  nia                                     ║")
+    print("║  Or one-shot:     nia -p 'Hello NIA'                     ║")
+    print("║  Run diagnostics: nia doctor                              ║")
+    print("╚═══════════════════════════════════════════════════════════╝")
+
+
+# ---------------------------------------------------------------------------
+# nia doctor — run diagnostics
+# ---------------------------------------------------------------------------
+
+@app.command("doctor")
+def doctor_command(
+    fix: bool = typer.Option(False, "--fix", help="Auto-repair fixable issues"),
+    ack: str = typer.Option(None, "--ack", help="Acknowledge a security advisory by ID"),
+) -> None:
+    """Run diagnostics and auto-repair issues."""
+    from niaharness.cli.doctor import run_doctor
+    result = run_doctor(fix=fix, ack=ack)
+    print(result.report)
+
+
+# ---------------------------------------------------------------------------
+# nia update — check for and install updates
+# ---------------------------------------------------------------------------
+
+@app.command("update")
+def update_command(
+    check: bool = typer.Option(False, "--check", help="Check only, don't install"),
+    no_backup: bool = typer.Option(False, "--no-backup", help="Skip pre-update backup"),
+) -> None:
+    """Check for and install NIA updates."""
+    from niaharness.cli.update import run_update
+    result = run_update(check=check, no_backup=no_backup)
+    print(result.report)
+
+
+# ---------------------------------------------------------------------------
+# nia status — show system status
+# ---------------------------------------------------------------------------
+
+@app.command("status")
+def status_command() -> None:
+    """Show system status — version, model, provider, sessions, profile."""
+    import importlib.metadata
+    from niaharness.config.settings import load_settings
+
+    try:
+        version = importlib.metadata.version("niaharness")
+    except Exception:
+        version = "unknown"
+
+    settings = load_settings()
+    print()
+    print("╔═══════════════════════════════════════════════════════════╗")
+    print("║                   📊 N.I.A Status                         ║")
+    print("╚═══════════════════════════════════════════════════════════╝")
+    print(f"  Version:    {version}")
+    print(f"  Model:      {settings.model}")
+    print(f"  Max tokens: {settings.max_tokens}")
+    print(f"  Permission: {settings.permission.mode}")
+    print(f"  API format: {settings.api_format}")
+
+    # Check API key.
+    import os
+    has_key = bool(
+        os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("OPENROUTER_API_KEY")
+    )
+    print(f"  API key:    {'✓ configured' if has_key else '✗ not set'}")
+
+    # Check SOUL.md.
+    from niaharness.prompts.soul import get_nia_home
+    soul = get_nia_home() / "SOUL.md"
+    print(f"  SOUL.md:    {'✓ exists' if soul.exists() else '✗ missing'}")
+    print(f"  NIA home:   {get_nia_home()}")
+    print()
+
+
+# ---------------------------------------------------------------------------
+# nia version — show version
+# ---------------------------------------------------------------------------
+
+@app.command("version")
+def version_command() -> None:
+    """Show NIA version information."""
+    import importlib.metadata
+    try:
+        version = importlib.metadata.version("niaharness")
+    except Exception:
+        version = "unknown"
+    print(f"N.I.A — Neural Intelligence Assistant v{version}")
+
+
+# ---------------------------------------------------------------------------
+# nia gateway subcommands
+# ---------------------------------------------------------------------------
+
+@gateway_app.command("run")
+def gateway_run(
+    platform: str = typer.Option("telegram", "--platform", help="Chat platform (telegram)"),
+) -> None:
+    """Start the gateway (Telegram bot long-polling)."""
+    import asyncio
+    import os
+
+    token = os.environ.get("NIA_TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        print("Error: NIA_TELEGRAM_BOT_TOKEN not set.", file=sys.stderr)
+        print("Get a token from @BotFather, then:", file=sys.stderr)
+        print("  export NIA_TELEGRAM_BOT_TOKEN='your-token'", file=sys.stderr)
+        raise typer.Exit(1)
+
+    from niaharness.gateway import GatewayRouter, TelegramAdapter
+
+    router = GatewayRouter()
+    adapter = TelegramAdapter(token=token, router=router)
+    router.register_adapter(adapter)
+
+    print(f"Starting NIA gateway on {platform}...")
+    asyncio.run(router.start_all())
+
+
+@gateway_app.command("status")
+def gateway_status() -> None:
+    """Check if the gateway is running."""
+    from niaharness.services.cron_scheduler import is_scheduler_running
+    print(f"Gateway: {'running' if is_scheduler_running() else 'stopped'}")
+
+
+# ---------------------------------------------------------------------------
+# nia profile subcommands
+# ---------------------------------------------------------------------------
+
+@profile_app.command("list")
+def profile_list() -> None:
+    """List all profiles."""
+    from niaharness.profiles import list_profiles, get_active_profile
+    profiles = list_profiles()
+    active = get_active_profile()
+    print(f"\nProfiles ({len(profiles)}):")
+    for p in profiles:
+        marker = " *" if p.name == active.name else "  "
+        print(f"{marker} {p.name:<20} {'(default)' if p.is_default else ''}")
+    print()
+
+
+@profile_app.command("create")
+def profile_create(
+    name: str = typer.Argument(..., help="Profile name"),
+    clone: bool = typer.Option(False, "--clone", help="Copy config/.env/SOUL.md from default"),
+    alias: bool = typer.Option(False, "--alias", help="Create a wrapper script alias"),
+) -> None:
+    """Create a new profile."""
+    from niaharness.profiles import create_profile, get_profile
+    try:
+        create_profile(name, seed_from_default=clone)
+        print(f"✓ Created profile: {name}")
+    except Exception as exc:
+        print(f"✗ Failed: {exc}", file=sys.stderr)
+        raise typer.Exit(1)
+
+    if alias:
+        from niaharness.profiles.aliases import create_wrapper_script
+        path = create_wrapper_script(name)
+        if path:
+            print(f"✓ Alias created: {path}")
+            print(f"  Type '{name}' to launch NIA under this profile.")
+        else:
+            print("⚠ Could not create alias (check ~/.local/bin is writable)")
+
+
+@profile_app.command("delete")
+def profile_delete(
+    name: str = typer.Argument(..., help="Profile name to delete"),
+) -> None:
+    """Delete a profile."""
+    from niaharness.profiles import delete_profile
+    try:
+        delete_profile(name)
+        # Also remove alias.
+        from niaharness.profiles.aliases import remove_wrapper_script
+        remove_wrapper_script(name)
+        print(f"✓ Deleted profile: {name}")
+    except Exception as exc:
+        print(f"✗ Failed: {exc}", file=sys.stderr)
+        raise typer.Exit(1)
+
+
+@profile_app.command("switch")
+def profile_switch(
+    name: str = typer.Argument(..., help="Profile to switch to"),
+) -> None:
+    """Switch the active profile."""
+    from niaharness.profiles import switch_profile
+    try:
+        switch_profile(name)
+        print(f"✓ Active profile: {name}")
+    except Exception as exc:
+        print(f"✗ Failed: {exc}", file=sys.stderr)
+        raise typer.Exit(1)
+
+
+@profile_app.command("alias")
+def profile_alias(
+    profile: str = typer.Argument(..., help="Profile to create an alias for"),
+    name: str = typer.Option(None, "--name", help="Custom alias name (defaults to profile name)"),
+) -> None:
+    """Create a wrapper script alias for a profile."""
+    from niaharness.profiles.aliases import create_wrapper_script, check_alias_collision
+    alias_name = name or profile
+    collision = check_alias_collision(alias_name)
+    if collision:
+        print(f"✗ {collision}", file=sys.stderr)
+        raise typer.Exit(1)
+    path = create_wrapper_script(alias_name, target=profile)
+    if path:
+        print(f"✓ Alias created: {path}")
+        print(f"  Type '{alias_name}' to launch NIA under profile '{profile}'.")
+    else:
+        print("✗ Could not create alias", file=sys.stderr)
+        raise typer.Exit(1)
 
 
 # ---- mcp subcommands ----
