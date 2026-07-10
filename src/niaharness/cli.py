@@ -281,8 +281,82 @@ def gateway_run(
 @gateway_app.command("status")
 def gateway_status() -> None:
     """Check if the gateway is running."""
-    from niaharness.services.cron_scheduler import is_scheduler_running
-    print(f"Gateway: {'running' if is_scheduler_running() else 'stopped'}")
+    from niaharness.gateway.status import (
+        get_running_pid,
+        is_gateway_running,
+        read_runtime_status,
+    )
+
+    pid = get_running_pid()
+    if pid is None:
+        print("Gateway: stopped")
+        return
+
+    print(f"Gateway: running (PID {pid})")
+    status = read_runtime_status()
+    if status:
+        state = status.get("state", "unknown")
+        active = status.get("active_agents", 0)
+        uptime = status.get("uptime_seconds", 0)
+        adapters = status.get("adapters", [])
+        updated = status.get("updated_at", "")
+        print(f"  State: {state}")
+        print(f"  Active agents: {active}")
+        print(f"  Uptime: {uptime:.0f}s")
+        if adapters:
+            print(f"  Adapters: {', '.join(adapters)}")
+        if updated:
+            print(f"  Last updated: {updated}")
+
+
+@gateway_app.command("run")
+def gateway_run(
+    replace: bool = typer.Option(
+        False, "--replace", help="Replace any existing gateway instance"
+    ),
+) -> None:
+    """Run the gateway (blocks until Ctrl+C)."""
+    import asyncio
+
+    async def _run() -> None:
+        from niaharness.gateway.runner import GatewayRunner
+
+        runner = GatewayRunner(replace=replace)
+        try:
+            await runner.start()
+            await runner.run_forever()
+        except KeyboardInterrupt:
+            pass
+        except Exception as exc:
+            print(f"Gateway error: {exc}")
+        finally:
+            await runner.stop()
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        pass
+
+
+@gateway_app.command("drain")
+def gateway_drain() -> None:
+    """Begin a drain (stop accepting new turns)."""
+    from niaharness.gateway.drain_control import write_drain_request
+
+    payload = write_drain_request()
+    print(f"Drain request written: {payload['requested_at']}")
+    print("The gateway will stop accepting new turns once it picks up the marker.")
+
+
+@gateway_app.command("cancel-drain")
+def gateway_cancel_drain() -> None:
+    """Cancel a pending drain."""
+    from niaharness.gateway.drain_control import clear_drain_request
+
+    if clear_drain_request():
+        print("Drain request removed.")
+    else:
+        print("No drain request found.")
 
 
 # ---------------------------------------------------------------------------

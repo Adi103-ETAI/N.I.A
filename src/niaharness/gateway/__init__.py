@@ -183,6 +183,18 @@ class GatewayRouter:
         self._adapters: Dict[str, PlatformAdapter] = {}
         # Session store for persistent conversations (Task 9).
         self._session_store = session_store
+        # P1: override handler — when set, the GatewayRunner intercepts
+        # all incoming messages (for slash commands, streaming, etc.).
+        self._message_handler_override: Optional[Callable] = None
+
+    def set_message_handler_override(self, handler: Callable) -> None:
+        """Set an override handler that intercepts all incoming messages.
+
+        P1: used by GatewayRunner to add slash command handling, streaming,
+        secret redaction, and silence detection on top of the router's
+        default routing.
+        """
+        self._message_handler_override = handler
 
     def _get_session_store(self) -> Any:
         """Lazily construct the SessionStore if not provided."""
@@ -239,7 +251,23 @@ class GatewayRouter:
         message is mapped to a persistent session (session_key → session_id),
         the session context prompt is injected, and the response is persisted
         to the session transcript.
+
+        P1: if a message handler override is set (by GatewayRunner), it
+        intercepts the message first — for slash commands, streaming,
+        secret redaction, and silence detection.
         """
+        # P1: check for override handler (GatewayRunner).
+        if self._message_handler_override is not None:
+            try:
+                import asyncio
+                if asyncio.iscoroutinefunction(self._message_handler_override):
+                    await self._message_handler_override(message)
+                else:
+                    self._message_handler_override(message)
+                return
+            except Exception as exc:
+                logger.error("Override handler failed: %s", exc)
+                # Fall through to default handling.
         adapter = self._adapters.get(message.platform)
         if adapter is None:
             logger.warning("No adapter for platform '%s'", message.platform)
