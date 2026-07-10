@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterator
@@ -228,6 +229,27 @@ class QueryEngine:
         self._abort_controller = AbortController()
         self._session_id = uuid4().hex
 
+        # Engine recovery state (P1: robust fallback + credential rotation)
+        self._credential_pool: Any = None
+        self._fallback_chain: list[dict] = []  # [{"model":..., "provider":..., "api_key":..., "base_url":...}]
+        self._fallback_index: int = 0
+        self._fallback_activated: bool = False
+        self._has_retried_429: bool = False
+        self._primary_recovery_attempted: bool = False
+        self._max_api_retries: int = 10
+
+        # Mid-turn steering (P1: user can redirect agent mid-execution)
+        self._pending_steer: str | None = None
+        self._pending_steer_lock = threading.Lock()
+        self._interrupt_requested: bool = False
+        self._interrupt_message: str | None = None
+
+        # Provider/model metadata for switch_model
+        self._provider: str | None = None
+        self._base_url: str | None = None
+        self._api_key: str | None = None
+        self._api_format: str = "anthropic"
+
     # -- Properties --------------------------------------------------------
 
     @property
@@ -284,6 +306,261 @@ class QueryEngine:
     def set_model(self, model: str) -> None:
         """Update the active model for future turns."""
         self._model = model
+
+    def switch_model(
+        self,
+        model: str,
+        *,
+        provider: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        api_format: str | None = None,
+    ) -> bool:
+        """Switch the active model/provider mid-session.
+
+        Rebuilds the API client with new credentials, preserving the
+        conversation history. If the new client fails to construct,
+        rolls back atomically — no half-applied model/client mismatch.
+
+        Args:
+            model: New model name.
+            provider: New provider name (optional).
+            api_key: New API key (optional — falls back to current).
+            base_url: New base URL (optional).
+            api_format: 'anthropic' or 'openai' (optional).
+
+        Returns:
+            True if the switch succeeded, False if it failed and rolled back.
+        """
+        # Snapshot for atomic rollback.
+        old_model = self._model
+        old_provider = self._provider
+        old_api_key = self._api_key
+        old_base_url = self._base_url
+        old_api_format = self._api_format
+        old_client = self._api_client
+
+        try:
+            # Resolve credentials.
+            resolved_key = api_key or self._api_key or ""
+            resolved_url = base_url or self._base_url
+            resolved_format = api_format or self._api_format
+
+            # Build new client.
+            if resolved_format == "anthropic" or (provider and provider == "anthropic"):
+                from niaharness.api.client import AnthropicApiClient
+                new_client = AnthropicApiClient(api_key=resolved_key, base_url=resolved_url)
+            else:
+                # OpenAI-compatible.
+                from niaharness.api.openai_client import OpenAIApiClient
+                new_client = OpenAIApiClient(api_key=resolved_key, base_url=resolved_url)
+
+            # Apply.
+            self._model = model
+            self._provider = provider or self._provider
+            self._api_key = resolved_key
+            self._base_url = resolved_url
+            self._api_format = resolved_format
+            self._api_client = new_client
+
+            # Reset fallback state for the new provider.
+            self._fallback_index = 0
+            self._fallback_activated = False
+            self._has_retried_429 = False
+            self._primary_recovery_attempted = False
+
+            logger.info("Switched model to %s (provider=%s)", model, self._provider)
+            return True
+
+        except Exception as exc:
+            # Rollback.
+            logger.warning("switch_model failed, rolling back: %s", exc)
+            self._model = old_model
+            self._provider = old_provider
+            self._api_key = old_api_key
+            self._base_url = old_base_url
+            self._api_format = old_api_format
+            self._api_client = old_client
+            return False
+
+    def steer(self, text: str) -> bool:
+        """Inject a user message into the next tool result without interrupting.
+
+        Unlike interrupt(), this does NOT stop the current tool call. The
+        text is stashed and the agent loop appends it to the last tool
+        result's content once the current tool batch finishes. The model
+        sees the steer as part of the tool output on its next iteration.
+
+        Thread-safe: callable from gateway/CLI/TUI threads. Multiple calls
+        before the drain point concatenate with newlines.
+
+        Args:
+            text: The user text to inject. Empty strings are ignored.
+
+        Returns:
+            True if the steer was accepted, False if the text was empty.
+        """
+        if not text or not text.strip():
+            return False
+        cleaned = text.strip()
+        with self._pending_steer_lock:
+            if self._pending_steer:
+                self._pending_steer = self._pending_steer + "\n" + cleaned
+            else:
+                self._pending_steer = cleaned
+        return True
+
+    def _drain_pending_steer(self) -> str | None:
+        """Return and clear the pending steer text. Called by the agent loop
+        after each tool batch completes."""
+        with self._pending_steer_lock:
+            text = self._pending_steer
+            self._pending_steer = None
+        return text
+
+    def interrupt(self, message: str | None = None) -> None:
+        """Request the agent to interrupt its current tool-calling loop.
+
+        Call this from another thread (e.g., input handler, gateway) to
+        gracefully stop the agent and process a new message.
+
+        Args:
+            message: Optional new message that triggered the interrupt.
+        """
+        self._interrupt_requested = True
+        self._interrupt_message = message
+        self._abort_controller.request_abort()
+
+    @property
+    def is_interrupted(self) -> bool:
+        """True if an interrupt has been requested."""
+        return self._interrupt_requested
+
+    def clear_interrupt(self) -> None:
+        """Clear the interrupt flag (call after handling the interrupt)."""
+        self._interrupt_requested = False
+        self._interrupt_message = None
+
+    @property
+    def interrupt_message(self) -> str | None:
+        """Return the message that triggered the interrupt, if any."""
+        return self._interrupt_message
+
+    def set_credential_pool(self, pool: Any) -> None:
+        """Wire a credential pool into the engine for automatic rotation on 429/401/403.
+
+        Args:
+            pool: A CredentialPool instance (from niaharness.api.credential_pool).
+        """
+        self._credential_pool = pool
+
+    def set_fallback_chain(self, chain: list[dict]) -> None:
+        """Configure the fallback provider chain.
+
+        Each entry should have: model, provider, api_key, base_url, api_format.
+        On API failure, the engine walks this chain, trying each provider
+        in order until one succeeds or the chain is exhausted.
+
+        Args:
+            chain: List of provider config dicts.
+        """
+        self._fallback_chain = list(chain)
+
+    def _try_activate_fallback(self, reason: str | None = None) -> bool:
+        """Try to activate the next fallback provider in the chain.
+
+        Returns True if a fallback was activated, False if the chain is exhausted.
+        Resets retry counters on success so the new provider gets a fresh start.
+        """
+        if self._fallback_index >= len(self._fallback_chain):
+            return False
+
+        entry = self._fallback_chain[self._fallback_index]
+        self._fallback_index += 1
+        self._fallback_activated = True
+
+        success = self.switch_model(
+            entry.get("model", self._model),
+            provider=entry.get("provider"),
+            api_key=entry.get("api_key"),
+            base_url=entry.get("base_url"),
+            api_format=entry.get("api_format"),
+        )
+
+        if success:
+            # Reset retry state for the new provider.
+            self._has_retried_429 = False
+            self._primary_recovery_attempted = False
+            logger.info(
+                "Activated fallback #%d: model=%s provider=%s (reason=%s)",
+                self._fallback_index, entry.get("model"), entry.get("provider"), reason,
+            )
+            return True
+
+        # This fallback failed to construct — try the next one.
+        return self._try_activate_fallback(reason)
+
+    def _recover_with_credential_pool(
+        self,
+        status_code: int | None,
+    ) -> bool:
+        """Try to recover from a 429/401/403 by rotating credentials.
+
+        Returns True if a new credential was selected and the client rebuilt.
+        """
+        if self._credential_pool is None:
+            return False
+
+        if status_code not in (401, 402, 403, 429):
+            return False
+
+        # 429: only retry once per turn with the pool.
+        if status_code == 429 and self._has_retried_429:
+            return False
+
+        try:
+            # Select next credential from the pool.
+            provider_name = self._provider or "anthropic"
+            cred = self._credential_pool.select(provider_name)
+            if cred is None:
+                return False
+
+            # Rebuild the client with the new credential.
+            new_key = cred.api_key or cred.access_token or ""
+            if not new_key:
+                return False
+
+            success = self.switch_model(
+                self._model,
+                provider=self._provider,
+                api_key=new_key,
+                base_url=self._base_url,
+                api_format=self._api_format,
+            )
+
+            if success:
+                if status_code == 429:
+                    self._has_retried_429 = True
+                logger.info(
+                    "Recovered with credential pool (status=%d, provider=%s)",
+                    status_code, provider_name,
+                )
+                return True
+
+        except Exception as exc:
+            logger.warning("Credential pool recovery failed: %s", exc)
+
+        return False
+
+    @property
+    def has_pending_fallback(self) -> bool:
+        """True if there are more fallback providers to try."""
+        return self._fallback_index < len(self._fallback_chain)
+
+    @property
+    def fallback_activated(self) -> bool:
+        """True if a fallback provider has been activated this session."""
+        return self._fallback_activated
 
     def set_permission_checker(self, checker: PermissionChecker) -> None:
         """Update the active permission checker for future turns."""

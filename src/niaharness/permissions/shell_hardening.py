@@ -275,15 +275,330 @@ def _mark_command_starts(command: str) -> str:
 
 
 def _command_detection_variants(command: str) -> List[str]:
-    """Return the normalized + start-marked variants of a command.
+    """Return the normalized + start-marked + per-word-deobfuscated variants.
 
-    The dangerous-pattern detector runs over BOTH variants so that
-    quoted-prose false positives (``echo "rm -rf /"``) and quote-aware
-    command-start detection (``{ reboot; }``) are both handled.
+    The dangerous-pattern detector runs over ALL variants so that
+    quoted-prose false positives (``echo "rm -rf /"``), quote-aware
+    command-start detection (``{ reboot; }``), and obfuscation tricks
+    (``r\\m``, ``$(echo rm)``, ``r''m``) are all handled.
     """
     normalized = normalize_command_for_detection(command)
     marked = _mark_command_starts(normalized)
-    return [normalized, marked]
+
+    # Per-word deobfuscation: walk each command-position word and collapse
+    # shell quoting/escaping + simple literal command substitutions.
+    deobfuscated_parts: List[str] = []
+    for variant in (normalized, marked):
+        words: List[str] = []
+        for start in _iter_shell_command_word_spans(variant):
+            word_start, word_end = start
+            raw_word = variant[word_start:word_end]
+            deobfuscated = _deobfuscate_shell_word_for_detection(raw_word)
+            if deobfuscated and deobfuscated != raw_word:
+                words.append(variant[:word_start] + deobfuscated + variant[word_end:])
+        if words:
+            deobfuscated_parts.extend(words)
+
+    variants = [normalized, marked]
+    # Add deobfuscated variants (deduped).
+    for dp in deobfuscated_parts:
+        if dp not in variants:
+            variants.append(dp)
+    return variants
+
+
+# ---------------------------------------------------------------------------
+# Per-word shell deobfuscation (prevents r\m, $(echo rm), r''m evasion)
+# ---------------------------------------------------------------------------
+
+# Regex for safe shell literal (no special chars that need expansion).
+_SIMPLE_SHELL_LITERAL_RE = re.compile(r"^[A-Za-z0-9_./:@%+=,-]+$")
+
+# ${var/pat/repl} substitution.
+_PARAM_REPLACEMENT_RE = re.compile(r"\$\{(\w+)/[^}]*?/([^}]*)\}")
+
+# ${var:-default} substitution.
+_PARAM_DEFAULT_RE = re.compile(r"\$\{(\w+):-(\w+)\}")
+
+
+def _scan_dollar_paren_end(command: str, start: int) -> Optional[int]:
+    """Find the closing ``)`` for a ``$(`` starting at *start*. None if unbalanced."""
+    depth = 1
+    i = start + 2
+    quote: Optional[str] = None
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < len(command):
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < len(command):
+            i += 2
+            continue
+        if command.startswith("$(", i):
+            depth += 1
+            i += 2
+            continue
+        if ch == "(":
+            depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+            i += 1
+            continue
+        i += 1
+    return None
+
+
+def _scan_backtick_end(command: str, start: int) -> Optional[int]:
+    """Find the closing backtick for a backtick starting at *start*. None if unbalanced."""
+    i = start + 1
+    while i < len(command):
+        if command[i] == "\\" and i + 1 < len(command):
+            i += 2
+            continue
+        if command[i] == "`":
+            return i + 1
+        i += 1
+    return None
+
+
+def _read_shell_word(command: str, pos: int) -> tuple[int, int, str]:
+    """Read one shell word without executing expansions."""
+    start = _skip_shell_whitespace(command, pos)
+    i = start
+    quote: Optional[str] = None
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < len(command):
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < len(command):
+            i += 2
+            continue
+        if command.startswith("$(", i):
+            end = _scan_dollar_paren_end(command, i)
+            if end is None:
+                i += 2
+            else:
+                i = end
+            continue
+        if command.startswith("${", i):
+            end = command.find("}", i + 2)
+            if end == -1:
+                i += 2
+            else:
+                i = end + 1
+            continue
+        if ch == "`":
+            end = _scan_backtick_end(command, i)
+            if end is None:
+                i += 1
+            else:
+                i = end
+            continue
+        if ch.isspace() or ch in ";&|":
+            break
+        i += 1
+    return (start, i, command[start:i])
+
+
+def _strip_optional_shell_quotes(word: str) -> str:
+    """Strip matching outer quotes from a word."""
+    if len(word) >= 2 and word[0] == word[-1] and word[0] in ("'", '"'):
+        return word[1:-1]
+    return word
+
+
+def _is_simple_shell_literal(value: str) -> bool:
+    """True if value contains only safe literal characters (no expansions)."""
+    return bool(value and _SIMPLE_SHELL_LITERAL_RE.fullmatch(value))
+
+
+def _literal_command_substitution_output(script: str) -> Optional[str]:
+    """Resolve tiny literal command substitutions (echo/printf) without a shell."""
+    import shlex
+    try:
+        tokens = shlex.split(script, posix=True)
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    command = tokens[0].lower()
+    args = tokens[1:]
+    if command == "echo":
+        while args and re.fullmatch(r"-[nEe]+", args[0]):
+            args = args[1:]
+        if len(args) == 1 and _is_simple_shell_literal(args[0]):
+            return args[0]
+        return None
+    if command == "printf":
+        if len(args) == 1 and _is_simple_shell_literal(args[0]):
+            return args[0]
+        if len(args) == 2 and args[0] == "%s" and _is_simple_shell_literal(args[1]):
+            return args[1]
+    return None
+
+
+def _replace_simple_command_substitutions(word: str) -> str:
+    """Replace $(...) and `...` with their literal output when safe."""
+    chars: list[str] = []
+    i = 0
+    while i < len(word):
+        if word.startswith("$(", i):
+            end = _scan_dollar_paren_end(word, i)
+            if end is not None:
+                replacement = _literal_command_substitution_output(word[i + 2:end - 1])
+                if replacement is not None:
+                    chars.append(replacement)
+                    i = end
+                    continue
+        if word[i] == "`":
+            end = _scan_backtick_end(word, i)
+            if end is not None:
+                replacement = _literal_command_substitution_output(word[i + 1:end - 1])
+                if replacement is not None:
+                    chars.append(replacement)
+                    i = end
+                    continue
+        chars.append(word[i])
+        i += 1
+    return "".join(chars)
+
+
+def _replace_simple_shell_expansions(word: str) -> str:
+    """Collapse ${var/pat/repl} and ${var:-default} substitutions."""
+    word = _replace_simple_command_substitutions(word)
+    word = _PARAM_REPLACEMENT_RE.sub(lambda m: m.group(2), word)
+    return _PARAM_DEFAULT_RE.sub(lambda m: m.group(2), word)
+
+
+def _strip_shell_word_syntax(word: str) -> str:
+    """Collapse shell quoting/escaping: r\m → rm, r''m → rm, "rm" → rm."""
+    chars: list[str] = []
+    quote: Optional[str] = None
+    i = 0
+    while i < len(word):
+        ch = word[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < len(word):
+                chars.append(word[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+                i += 1
+                continue
+            chars.append(ch)
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < len(word):
+            chars.append(word[i + 1])
+            i += 2
+            continue
+        chars.append(ch)
+        i += 1
+    return "".join(chars)
+
+
+def _deobfuscate_shell_word_for_detection(word: str) -> str:
+    """Collapse shell quoting/escaping + simple command substitutions.
+
+    Two iterations catch nested cases like ``$(echo $(echo rm))``.
+    """
+    deobfuscated = word
+    for _ in range(2):
+        previous = deobfuscated
+        deobfuscated = _replace_simple_shell_expansions(deobfuscated)
+        deobfuscated = _strip_shell_word_syntax(deobfuscated)
+        if deobfuscated == previous:
+            break
+    return deobfuscated
+
+
+def _iter_shell_command_word_spans(command: str):
+    """Yield (start, end) spans for each command-position word in *command*.
+
+    A command-position word is the first word after a command separator
+    (start of string, after ``;``, ``&&``, ``||``, ``|``, newline).
+    """
+    for start_offset in _iter_shell_command_starts(command):
+        _s, word_end, _w = _read_shell_word(command, start_offset)
+        if word_end > _s:
+            yield (_s, word_end)
+
+
+# ---------------------------------------------------------------------------
+# Shell comment stripping (prevents # injection from hiding commands)
+# ---------------------------------------------------------------------------
+
+
+def _strip_line_comment(line: str) -> str:
+    """Strip a ``#`` comment from a single line (quote-aware)."""
+    quote: Optional[str] = None
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < len(line):
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < len(line):
+            i += 2
+            continue
+        if ch == "#":
+            # Only strip if # is at start of line or preceded by whitespace.
+            if i == 0 or line[i - 1] in " \t":
+                return line[:i].rstrip()
+        i += 1
+    return line
+
+
+def _strip_shell_comments(command: str) -> str:
+    """Strip ``#`` comments from a multi-line command (outside quotes).
+
+    A command like ``rm -rf / # cleanup`` must still be detected as
+    dangerous. Comment stripping happens before pattern detection so
+    the detector sees the actual command, not the comment-injected
+    version.
+    """
+    if not command:
+        return command
+    lines = command.split("\n")
+    stripped = [_strip_line_comment(line) for line in lines]
+    return "\n".join(stripped)
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +853,10 @@ def check_command(
     """
     if not command or not command.strip():
         return ShellHardeningDecision(allowed=True, category="ok")
+
+    # 0. Strip shell comments before detection — a command like
+    # ``rm -rf / # cleanup`` must still be detected as dangerous.
+    command = _strip_shell_comments(command)
 
     # 1. Hardline blocklist (unconditional).
     is_hardline, hardline_desc = detect_hardline_command(command)
