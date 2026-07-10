@@ -1527,6 +1527,1264 @@ class SessionDB:
         except Exception as exc:
             logger.debug("set_meta failed: %s", exc)
 
+    # ==================================================================
+    # P1: Gateway routing (ported from Hermes hermes_state.py)
+    # ==================================================================
+
+    def record_gateway_session_peer(
+        self,
+        session_id: str,
+        *,
+        source: str,
+        user_id: str | None = None,
+        session_key: str | None = None,
+        chat_id: str | None = None,
+        chat_type: str | None = None,
+        thread_id: str | None = None,
+        display_name: str | None = None,
+        origin_json: str | None = None,
+    ) -> None:
+        """Persist the gateway routing peer for an existing session row."""
+        if not session_id or not session_key:
+            return
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                """UPDATE sessions
+                   SET session_key = ?, source = ?, user_id = ?, chat_id = ?,
+                       chat_type = ?, thread_id = ?,
+                       display_name = COALESCE(?, display_name),
+                       origin_json = COALESCE(?, origin_json)
+                   WHERE id = ?""",
+                (
+                    session_key, source, user_id, chat_id,
+                    chat_type, thread_id, display_name, origin_json,
+                    session_id,
+                ),
+            )
+        self._execute_write(_do)
+
+    def set_expiry_finalized(self, session_id: str, finalized: bool = True) -> None:
+        """Mark a gateway session's expiry-finalization flag."""
+        if not session_id:
+            return
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE sessions SET expiry_finalized = ? WHERE id = ?",
+                (1 if finalized else 0, session_id),
+            )
+        self._execute_write(_do)
+
+    def save_gateway_routing_entry(
+        self, session_key: str, entry_json: str, *, scope: str = ""
+    ) -> None:
+        """Upsert one gateway routing entry (session_key -> entry JSON)."""
+        if not session_key or not entry_json:
+            return
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                """INSERT INTO gateway_routing (scope, session_key, entry_json, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(scope, session_key) DO UPDATE SET
+                       entry_json = excluded.entry_json,
+                       updated_at = excluded.updated_at""",
+                (scope, session_key, entry_json, time.time()),
+            )
+        self._execute_write(_do)
+
+    def replace_gateway_routing_entries(
+        self, entries: Dict[str, str], *, scope: str = ""
+    ) -> None:
+        """Atomically replace the routing index for *scope*."""
+        now = time.time()
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "DELETE FROM gateway_routing WHERE scope = ?", (scope,)
+            )
+            if entries:
+                conn.executemany(
+                    "INSERT INTO gateway_routing (scope, session_key, entry_json, updated_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    [(scope, k, v, now) for k, v in entries.items() if k and v],
+                )
+        self._execute_write(_do)
+
+    def load_gateway_routing_entries(self, *, scope: str = "") -> Dict[str, str]:
+        """Load routing entries for *scope* as {session_key: entry_json}."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT session_key, entry_json FROM gateway_routing WHERE scope = ?",
+                (scope,),
+            ).fetchall()
+        return {
+            (r["session_key"] if isinstance(r, sqlite3.Row) else r[0]):
+            (r["entry_json"] if isinstance(r, sqlite3.Row) else r[1])
+            for r in rows
+        }
+
+    def delete_gateway_routing_entries(
+        self, session_keys: List[str], *, scope: str = ""
+    ) -> None:
+        """Remove routing entries for the given session keys in *scope*."""
+        if not session_keys:
+            return
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.executemany(
+                "DELETE FROM gateway_routing WHERE scope = ? AND session_key = ?",
+                [(scope, k) for k in session_keys],
+            )
+        self._execute_write(_do)
+
+    def list_gateway_sessions(
+        self,
+        *,
+        platform: str | None = None,
+        active_only: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """List gateway sessions (rows with a session_key). Returns newest per key."""
+        query = """
+            SELECT sessions.*,
+                   COALESCE(
+                       (SELECT MAX(m.timestamp) FROM messages m
+                        WHERE m.session_id = sessions.id),
+                       sessions.started_at
+                   ) AS last_active
+            FROM sessions
+            WHERE session_key IS NOT NULL
+              AND started_at = (
+                  SELECT MAX(s2.started_at) FROM sessions s2
+                  WHERE s2.session_key = sessions.session_key
+              )
+        """
+        params: list = []
+        if platform:
+            query += " AND LOWER(source) = LOWER(?)"
+            params.append(platform)
+        if active_only:
+            query += " AND ended_at IS NULL"
+        query += " ORDER BY last_active DESC"
+        with self._lock:
+            rows = self._conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def find_session_by_origin(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        thread_id: str | None = None,
+        user_id: str | None = None,
+    ) -> Optional[str]:
+        """Find the most recent live session_id for a platform + chat origin."""
+        if not platform or chat_id in (None, ""):
+            return None
+        query = """
+            SELECT id, user_id, started_at FROM sessions
+            WHERE LOWER(source) = LOWER(?)
+              AND session_key IS NOT NULL
+              AND chat_id = ?
+              AND ended_at IS NULL
+        """
+        params: list = [platform, str(chat_id)]
+        if thread_id is not None:
+            query += " AND COALESCE(thread_id, '') = ?"
+            params.append(str(thread_id))
+        query += " ORDER BY started_at DESC"
+        with self._lock:
+            rows = [dict(r) for r in self._conn.execute(query, params).fetchall()]
+        if not rows:
+            return None
+        if user_id:
+            exact = [r for r in rows if str(r.get("user_id") or "") == str(user_id)]
+            if exact:
+                return str(exact[0]["id"])
+            if len(rows) > 1:
+                return None
+        elif len(rows) > 1:
+            distinct_users = {
+                str(r.get("user_id") or "").strip()
+                for r in rows
+                if str(r.get("user_id") or "").strip()
+            }
+            if len(distinct_users) > 1:
+                return None
+        return str(rows[0]["id"])
+
+    def find_latest_gateway_session_for_peer(
+        self,
+        *,
+        source: str,
+        user_id: str | None = None,
+        session_key: str | None = None,
+        chat_id: str | None = None,
+        chat_type: str | None = None,
+        thread_id: str | None = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Find the latest recoverable gateway session for a routing peer."""
+        if not session_key:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT * FROM sessions
+                   WHERE session_key = ? AND source = ?
+                     AND (ended_at IS NULL OR end_reason = 'agent_close')
+                     AND (COALESCE(message_count, 0) > 0 OR EXISTS (
+                         SELECT 1 FROM messages WHERE messages.session_id = sessions.id LIMIT 1
+                     ))
+                   ORDER BY started_at DESC LIMIT 1""",
+                (session_key, source),
+            ).fetchone()
+            if row is not None:
+                return dict(row)
+            if chat_id is None or chat_type is None:
+                return None
+            row = self._conn.execute(
+                """SELECT * FROM sessions
+                   WHERE source = ?
+                     AND COALESCE(user_id, '') = COALESCE(?, '')
+                     AND COALESCE(chat_id, '') = COALESCE(?, '')
+                     AND COALESCE(chat_type, '') = COALESCE(?, '')
+                     AND COALESCE(thread_id, '') = COALESCE(?, '')
+                     AND (ended_at IS NULL OR end_reason = 'agent_close')
+                   ORDER BY started_at DESC LIMIT 1""",
+                (source, user_id or "", chat_id, chat_type, thread_id or ""),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    # ==================================================================
+    # P1: Handoff (cross-platform session transfer)
+    # ==================================================================
+
+    def request_handoff(self, session_id: str, platform: str) -> bool:
+        """Mark a session as pending handoff to the given platform.
+
+        Returns True if the row was found and not already in flight.
+        """
+        def _do(conn: sqlite3.Connection) -> bool:
+            cur = conn.execute(
+                "UPDATE sessions SET handoff_state = 'pending', "
+                "handoff_platform = ?, handoff_error = NULL "
+                "WHERE id = ? AND (handoff_state IS NULL "
+                "                  OR handoff_state IN ('completed', 'failed'))",
+                (platform, session_id),
+            )
+            return cur.rowcount > 0
+        return self._execute_write(_do)
+
+    def get_handoff_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Read the current handoff state for a session."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT handoff_state, handoff_platform, handoff_error "
+                    "FROM sessions WHERE id = ?",
+                    (session_id,),
+                ).fetchone()
+            if not row:
+                return None
+            return {
+                "state": row["handoff_state"] if isinstance(row, sqlite3.Row) else row[0],
+                "platform": row["handoff_platform"] if isinstance(row, sqlite3.Row) else row[1],
+                "error": row["handoff_error"] if isinstance(row, sqlite3.Row) else row[2],
+            }
+        except Exception:
+            return None
+
+    def list_pending_handoffs(self) -> List[Dict[str, Any]]:
+        """Return all sessions in handoff_state='pending', oldest first."""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT * FROM sessions WHERE handoff_state = 'pending' "
+                    "ORDER BY started_at ASC"
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def claim_handoff(self, session_id: str) -> bool:
+        """Atomically transition pending → running. Returns True if claimed."""
+        def _do(conn: sqlite3.Connection) -> bool:
+            cur = conn.execute(
+                "UPDATE sessions SET handoff_state = 'running' "
+                "WHERE id = ? AND handoff_state = 'pending'",
+                (session_id,),
+            )
+            return cur.rowcount > 0
+        return self._execute_write(_do)
+
+    def complete_handoff(self, session_id: str) -> None:
+        """Mark a handoff as completed."""
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE sessions SET handoff_state = 'completed', "
+                "handoff_error = NULL WHERE id = ?",
+                (session_id,),
+            )
+        self._execute_write(_do)
+
+    def fail_handoff(self, session_id: str, error: str) -> None:
+        """Mark a handoff as failed and record the reason."""
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE sessions SET handoff_state = 'failed', "
+                "handoff_error = ? WHERE id = ?",
+                (error[:500], session_id),
+            )
+        self._execute_write(_do)
+
+    # ==================================================================
+    # P1: Message operations (archive_and_compact, rewind, restore, around)
+    # ==================================================================
+
+    def _insert_message_rows(
+        self,
+        conn: sqlite3.Connection,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+    ) -> Tuple[int, int]:
+        """Insert a batch of messages, return (message_count, tool_call_count)."""
+        if not messages:
+            return 0, 0
+        now = time.time()
+        rows = []
+        tool_calls = 0
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, (dict, list)):
+                content = json.dumps(content)
+            tool_calls_str = msg.get("tool_calls")
+            if tool_calls_str and isinstance(tool_calls_str, (dict, list)):
+                tool_calls_str = json.dumps(tool_calls_str)
+                tool_calls += 1
+            elif tool_calls_str:
+                tool_calls += 1
+            rows.append((
+                session_id,
+                msg.get("role", "user"),
+                content,
+                msg.get("tool_call_id"),
+                tool_calls_str,
+                msg.get("tool_name"),
+                msg.get("timestamp", now),
+                msg.get("token_count"),
+                msg.get("finish_reason"),
+                msg.get("reasoning"),
+                msg.get("reasoning_content"),
+                msg.get("reasoning_details"),
+                msg.get("seq"),
+                msg.get("platform_message_id"),
+                msg.get("observed", 0),
+                msg.get("active", 1),
+                msg.get("compacted", 0),
+            ))
+        conn.executemany(
+            """INSERT INTO messages (
+                session_id, role, content, tool_call_id, tool_calls, tool_name,
+                timestamp, token_count, finish_reason, reasoning,
+                reasoning_content, reasoning_details, seq,
+                platform_message_id, observed, active, compacted
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        return len(rows), tool_calls
+
+    def has_archived_messages(self, session_id: str) -> bool:
+        """Return True if the session has any soft-archived (active=0) rows."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM messages WHERE session_id = ? AND active = 0 LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return row is not None
+
+    def archive_and_compact(
+        self, session_id: str, compacted_messages: List[Dict[str, Any]]
+    ) -> int:
+        """Non-destructive in-place compaction. Soft-archives active messages
+        and inserts compacted_messages as fresh active rows. Returns new active count.
+        """
+        def _do(conn: sqlite3.Connection) -> int:
+            conn.execute(
+                "UPDATE messages SET active = 0, compacted = 1 "
+                "WHERE session_id = ? AND active = 1",
+                (session_id,),
+            )
+            inserted, tool_calls_total = self._insert_message_rows(
+                conn, session_id, compacted_messages
+            )
+            conn.execute(
+                "UPDATE sessions SET message_count = ?, tool_call_count = ? WHERE id = ?",
+                (inserted, tool_calls_total, session_id),
+            )
+            return inserted
+        return self._execute_write(_do)
+
+    def get_messages_around(
+        self,
+        session_id: str,
+        around_message_id: int,
+        window: int = 5,
+    ) -> Dict[str, Any]:
+        """Load a window of messages anchored on a specific message id."""
+        with self._lock:
+            anchor_row = self._conn.execute(
+                "SELECT * FROM messages WHERE id = ? AND session_id = ?",
+                (around_message_id, session_id),
+            ).fetchone()
+        if anchor_row is None:
+            return {"before": [], "anchor": None, "after": []}
+        anchor = dict(anchor_row)
+
+        with self._lock:
+            before_rows = self._conn.execute(
+                "SELECT * FROM messages WHERE session_id = ? AND id < ? AND active = 1 "
+                "ORDER BY id DESC LIMIT ?",
+                (session_id, around_message_id, window),
+            ).fetchall()
+            after_rows = self._conn.execute(
+                "SELECT * FROM messages WHERE session_id = ? AND id > ? AND active = 1 "
+                "ORDER BY id ASC LIMIT ?",
+                (session_id, around_message_id, window),
+            ).fetchall()
+        return {
+            "before": list(reversed([dict(r) for r in before_rows])),
+            "anchor": anchor,
+            "after": [dict(r) for r in after_rows],
+        }
+
+    def rewind_to_message(
+        self, session_id: str, target_message_id: int
+    ) -> Dict[str, Any]:
+        """Soft-delete all messages with id >= target_message_id.
+
+        Returns {"rewound_count", "target_message", "new_head_id"}.
+        Raises ValueError if the target doesn't exist or isn't a user message.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM messages WHERE id = ? AND session_id = ?",
+                (target_message_id, session_id),
+            ).fetchone()
+        if row is None:
+            raise ValueError(
+                f"message {target_message_id} not found in session {session_id}"
+            )
+        target_row = dict(row)
+        if target_row.get("role") != "user":
+            raise ValueError(
+                f"rewind target must be a 'user' message (got role="
+                f"{target_row.get('role')!r})"
+            )
+
+        def _do(conn: sqlite3.Connection) -> List[int]:
+            cursor = conn.execute(
+                "SELECT id FROM messages "
+                "WHERE session_id = ? AND id >= ? AND active = 1",
+                (session_id, target_message_id),
+            )
+            ids = [r[0] for r in cursor.fetchall()]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                conn.execute(
+                    f"UPDATE messages SET active = 0 WHERE id IN ({placeholders})",
+                    ids,
+                )
+            conn.execute(
+                "UPDATE sessions SET rewind_count = COALESCE(rewind_count, 0) + 1 "
+                "WHERE id = ?",
+                (session_id,),
+            )
+            return ids
+
+        rewound = self._execute_write(_do)
+
+        with self._lock:
+            head_row = self._conn.execute(
+                "SELECT MAX(id) FROM messages WHERE session_id = ? AND active = 1",
+                (session_id,),
+            ).fetchone()
+        new_head_id = head_row[0] if head_row and head_row[0] is not None else None
+
+        return {
+            "rewound_count": len(rewound),
+            "target_message": target_row,
+            "new_head_id": new_head_id,
+        }
+
+    def restore_rewound(self, session_id: str, since_message_id: int) -> int:
+        """Mark inactive messages with id >= since_message_id active again."""
+        def _do(conn: sqlite3.Connection) -> int:
+            cursor = conn.execute(
+                "SELECT id FROM messages "
+                "WHERE session_id = ? AND id >= ? AND active = 0",
+                (session_id, since_message_id),
+            )
+            ids = [r[0] for r in cursor.fetchall()]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                conn.execute(
+                    f"UPDATE messages SET active = 1 WHERE id IN ({placeholders})",
+                    ids,
+                )
+            return len(ids)
+        return self._execute_write(_do)
+
+    def clear_messages(self, session_id: str) -> None:
+        """Delete all messages for a session."""
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            conn.execute(
+                "UPDATE sessions SET message_count = 0, tool_call_count = 0 WHERE id = ?",
+                (session_id,),
+            )
+        self._execute_write(_do)
+
+    def resolve_resume_session_id(self, session_id: str) -> str:
+        """Resolve a session id to its latest compression continuation.
+
+        If the session has children (compression continuations), follow the
+        chain forward to the tip. Otherwise return the input id unchanged.
+        """
+        current = session_id
+        visited: set[str] = set()
+        while current and current not in visited:
+            visited.add(current)
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT id FROM sessions WHERE parent_session_id = ? "
+                    "ORDER BY started_at ASC LIMIT 1",
+                    (current,),
+                ).fetchone()
+            if row is None:
+                break
+            current = str(row["id"]) if isinstance(row, sqlite3.Row) else str(row[0])
+        return current
+
+    # ==================================================================
+    # P1: Session meta + update methods
+    # ==================================================================
+
+    def update_session_meta(self, session_id: str, metadata: Dict[str, Any]) -> bool:
+        """Merge metadata into a session's existing metadata JSON."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT metadata FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+        if row is None:
+            return False
+        existing = {}
+        raw = row["metadata"] if isinstance(row, sqlite3.Row) else row[0]
+        if raw:
+            try:
+                existing = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                existing = {}
+        existing.update(metadata)
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE sessions SET metadata = ? WHERE id = ?",
+                (json.dumps(existing), session_id),
+            )
+        self._execute_write(_do)
+        return True
+
+    def update_system_prompt(self, session_id: str, system_prompt: str) -> None:
+        """Update the system prompt for a session."""
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE sessions SET system_prompt = ? WHERE id = ?",
+                (system_prompt, session_id),
+            )
+        self._execute_write(_do)
+
+    def update_session_model(self, session_id: str, model: str) -> None:
+        """Update the model for a session."""
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE sessions SET model = ? WHERE id = ?",
+                (model, session_id),
+            )
+        self._execute_write(_do)
+
+    def update_session_billing_route(
+        self,
+        session_id: str,
+        *,
+        provider: str | None = None,
+        base_url: str | None = None,
+        mode: str | None = None,
+    ) -> None:
+        """Update billing route fields for a session."""
+        sets: list[str] = []
+        params: list[Any] = []
+        if provider is not None:
+            sets.append("billing_provider = ?")
+            params.append(provider)
+        if base_url is not None:
+            sets.append("billing_base_url = ?")
+            params.append(base_url)
+        if mode is not None:
+            sets.append("billing_mode = ?")
+            params.append(mode)
+        if not sets:
+            return
+        params.append(session_id)
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                f"UPDATE sessions SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+        self._execute_write(_do)
+
+    def update_token_counts(
+        self,
+        session_id: str,
+        *,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cache_read_tokens: int | None = None,
+        cache_write_tokens: int | None = None,
+        reasoning_tokens: int | None = None,
+    ) -> None:
+        """Update token count fields for a session (additive on each call)."""
+        sets: list[str] = []
+        params: list[Any] = []
+        for col, val in [
+            ("input_tokens", input_tokens),
+            ("output_tokens", output_tokens),
+            ("cache_read_tokens", cache_read_tokens),
+            ("cache_write_tokens", cache_write_tokens),
+            ("reasoning_tokens", reasoning_tokens),
+        ]:
+            if val is not None and val > 0:
+                sets.append(f"{col} = COALESCE({col}, 0) + ?")
+                params.append(val)
+        if not sets:
+            return
+        params.append(session_id)
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                f"UPDATE sessions SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+        self._execute_write(_do)
+
+    def update_session_cwd(
+        self, session_id: str, cwd: str, *, git_branch: str | None = None
+    ) -> None:
+        """Update the cwd (and optionally git_branch) for a session."""
+        sets = ["project_path = ?"]
+        params: list[Any] = [cwd]
+        if git_branch is not None:
+            sets.append("git_branch = ?")
+            params.append(git_branch)
+        params.append(session_id)
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                f"UPDATE sessions SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+        self._execute_write(_do)
+
+    def backfill_repo_roots(self, cwd_to_root: Dict[str, str]) -> None:
+        """Backfill git_repo_root for sessions matching cwd_to_root keys."""
+        if not cwd_to_root:
+            return
+
+        def _do(conn: sqlite3.Connection) -> None:
+            for cwd, root in cwd_to_root.items():
+                conn.execute(
+                    "UPDATE sessions SET git_repo_root = ? "
+                    "WHERE project_path = ? AND git_repo_root IS NULL",
+                    (root, cwd),
+                )
+        self._execute_write(_do)
+
+    def set_session_archived(self, session_id: str, archived: bool) -> bool:
+        """Set the archived flag for a session. Returns True if found."""
+        def _do(conn: sqlite3.Connection) -> bool:
+            cur = conn.execute(
+                "UPDATE sessions SET archived = ? WHERE id = ?",
+                (1 if archived else 0, session_id),
+            )
+            return cur.rowcount > 0
+        return self._execute_write(_do)
+
+    # ==================================================================
+    # P1: Title methods
+    # ==================================================================
+
+    @staticmethod
+    def sanitize_title(title: str | None) -> str | None:
+        """Sanitize a title for storage. Strips control chars, truncates."""
+        if not title:
+            return None
+        # Strip control characters except newlines/tabs.
+        cleaned = "".join(
+            c for c in title if c == "\n" or c == "\t" or (ord(c) >= 32)
+        )
+        cleaned = cleaned.strip()
+        if not cleaned:
+            return None
+        return cleaned[:200]  # cap at 200 chars
+
+    def get_session_by_title(self, title: str) -> Optional[Dict[str, Any]]:
+        """Get a session by exact title match."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM sessions WHERE title = ? ORDER BY started_at DESC LIMIT 1",
+                (title,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def resolve_session_by_title(self, title: str) -> Optional[str]:
+        """Resolve a title to a session id. Returns None if not found."""
+        session = self.get_session_by_title(title)
+        return session["id"] if session else None
+
+    def get_next_title_in_lineage(self, base_title: str) -> str:
+        """Find the next available title with a numeric suffix in the lineage.
+
+        e.g. if "Project Chat" exists, returns "Project Chat (1)".
+        If "Project Chat (1)" exists, returns "Project Chat (2)".
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT title FROM sessions WHERE title LIKE ? ORDER BY title",
+                (f"{base_title}%",),
+            ).fetchall()
+        existing = {
+            r["title"] if isinstance(r, sqlite3.Row) else r[0]
+            for r in row
+        }
+        if base_title not in existing:
+            return base_title
+        i = 1
+        while f"{base_title} ({i})" in existing:
+            i += 1
+        return f"{base_title} ({i})"
+
+    def get_compression_tip(self, session_id: str) -> Optional[str]:
+        """Walk forward through compression children to find the tip session id."""
+        return self.resolve_resume_session_id(session_id)
+
+    # ==================================================================
+    # P1: Rich listing + pruning
+    # ==================================================================
+
+    def distinct_session_cwds(
+        self, include_archived: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Distinct non-empty session cwds with usage stats."""
+        where = "project_path IS NOT NULL AND TRIM(project_path) != ''"
+        if not include_archived:
+            where += " AND archived = 0"
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT project_path AS cwd, COUNT(*) AS sessions, "
+                f"MAX(COALESCE(ended_at, started_at, 0)) AS last_active "
+                f"FROM sessions WHERE {where} GROUP BY project_path"
+            ).fetchall()
+        return [
+            {
+                "cwd": r["cwd"] if isinstance(r, sqlite3.Row) else r[0],
+                "sessions": int((r["sessions"] if isinstance(r, sqlite3.Row) else r[1]) or 0),
+                "last_active": float(
+                    (r["last_active"] if isinstance(r, sqlite3.Row) else r[2]) or 0
+                ),
+            }
+            for r in rows
+        ]
+
+    def list_sessions_rich(
+        self,
+        *,
+        source: str | None = None,
+        exclude_sources: List[str] | None = None,
+        cwd_prefix: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        min_message_count: int = 0,
+        include_archived: bool = False,
+        archived_only: bool = False,
+        search_query: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        """List sessions with preview (first user message) and last active.
+
+        Simplified port of Hermes's list_sessions_rich — omits the recursive
+        compression-chain CTE (returns raw root rows).
+        """
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        if source:
+            where_clauses.append("s.source = ?")
+            params.append(source)
+        if exclude_sources:
+            placeholders = ",".join("?" for _ in exclude_sources)
+            where_clauses.append(f"s.source NOT IN ({placeholders})")
+            params.extend(exclude_sources)
+        if cwd_prefix:
+            where_clauses.append("s.project_path LIKE ?")
+            params.append(f"{cwd_prefix}%")
+        if min_message_count > 0:
+            where_clauses.append("s.message_count >= ?")
+            params.append(min_message_count)
+        if archived_only:
+            where_clauses.append("s.archived = 1")
+        elif not include_archived:
+            where_clauses.append("s.archived = 0")
+        if search_query:
+            needle = f"%{search_query.lower()}%"
+            where_clauses.append(
+                "(LOWER(COALESCE(s.title, '')) LIKE ? OR LOWER(s.id) LIKE ?)"
+            )
+            params.extend([needle, needle])
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        query = f"""
+            SELECT s.*,
+                   (SELECT m.content FROM messages m
+                    WHERE m.session_id = s.id AND m.role = 'user'
+                    ORDER BY m.id ASC LIMIT 1) AS preview,
+                   COALESCE(
+                       (SELECT MAX(m.timestamp) FROM messages m
+                        WHERE m.session_id = s.id),
+                       s.started_at
+                   ) AS last_active
+            FROM sessions s
+            {where_sql}
+            ORDER BY s.started_at DESC
+            LIMIT ? OFFSET ?
+        """
+        params.extend([limit, offset])
+        with self._lock:
+            rows = self._conn.execute(query, params).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            preview = d.pop("preview", None)
+            if preview:
+                d["preview"] = str(preview)[:60]
+            else:
+                d["preview"] = ""
+            result.append(d)
+        return result
+
+    def list_cron_job_runs(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """List sessions created by the cron scheduler.
+
+        Sessions with source='cron' are cron job runs.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM sessions WHERE source = 'cron' "
+                "ORDER BY started_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def _prune_filter_where(
+        self,
+        *,
+        started_before: float | None = None,
+        started_after: float | None = None,
+        source: str | None = None,
+        title_like: str | None = None,
+        end_reason: str | None = None,
+        cwd_prefix: str | None = None,
+        min_messages: int | None = None,
+        max_messages: int | None = None,
+        archived: bool | None = None,
+        model_like: str | None = None,
+        provider: str | None = None,
+        user_id: str | None = None,
+        chat_id: str | None = None,
+        chat_type: str | None = None,
+        branch_like: str | None = None,
+        min_tokens: int | None = None,
+        max_tokens: int | None = None,
+        min_cost: float | None = None,
+        max_cost: float | None = None,
+        min_tool_calls: int | None = None,
+        max_tool_calls: int | None = None,
+    ) -> Tuple[str, list]:
+        """Build the shared WHERE clause for bulk prune/archive selection."""
+        clauses = ["s.ended_at IS NOT NULL"]
+        params: list = []
+        if started_before is not None:
+            clauses.append("s.started_at < ?")
+            params.append(started_before)
+        if started_after is not None:
+            clauses.append("s.started_at >= ?")
+            params.append(started_after)
+        if source:
+            clauses.append("s.source = ?")
+            params.append(source)
+        if title_like:
+            clauses.append("LOWER(COALESCE(s.title, '')) LIKE ?")
+            params.append(f"%{title_like.lower()}%")
+        if end_reason:
+            clauses.append("s.end_reason = ?")
+            params.append(end_reason)
+        if cwd_prefix:
+            clauses.append("s.project_path LIKE ?")
+            params.append(f"{cwd_prefix}%")
+        if min_messages is not None:
+            clauses.append("s.message_count >= ?")
+            params.append(min_messages)
+        if max_messages is not None:
+            clauses.append("s.message_count <= ?")
+            params.append(max_messages)
+        if model_like:
+            clauses.append("LOWER(COALESCE(s.model, '')) LIKE ?")
+            params.append(f"%{model_like.lower()}%")
+        if provider:
+            clauses.append("LOWER(COALESCE(s.billing_provider, '')) = ?")
+            params.append(provider.lower())
+        if user_id:
+            clauses.append("s.user_id = ?")
+            params.append(user_id)
+        if chat_id:
+            clauses.append("s.chat_id = ?")
+            params.append(chat_id)
+        if chat_type:
+            clauses.append("s.chat_type = ?")
+            params.append(chat_type)
+        if branch_like:
+            clauses.append("LOWER(COALESCE(s.git_branch, '')) LIKE ?")
+            params.append(f"%{branch_like.lower()}%")
+        if min_tokens is not None:
+            clauses.append(
+                "(COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0)) >= ?"
+            )
+            params.append(min_tokens)
+        if max_tokens is not None:
+            clauses.append(
+                "(COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0)) <= ?"
+            )
+            params.append(max_tokens)
+        if min_cost is not None:
+            clauses.append(
+                "COALESCE(s.actual_cost_usd, s.estimated_cost_usd, 0) >= ?"
+            )
+            params.append(min_cost)
+        if max_cost is not None:
+            clauses.append(
+                "COALESCE(s.actual_cost_usd, s.estimated_cost_usd, 0) <= ?"
+            )
+            params.append(max_cost)
+        if min_tool_calls is not None:
+            clauses.append("COALESCE(s.tool_call_count, 0) >= ?")
+            params.append(min_tool_calls)
+        if max_tool_calls is not None:
+            clauses.append("COALESCE(s.tool_call_count, 0) <= ?")
+            params.append(max_tool_calls)
+        if archived is True:
+            clauses.append("s.archived = 1")
+        elif archived is False:
+            clauses.append("s.archived = 0")
+        return " AND ".join(clauses), params
+
+    def list_prune_candidates(
+        self,
+        older_than_days: float | None = None,
+        source: str | None = None,
+        **filters: Any,
+    ) -> List[Dict[str, Any]]:
+        """Return sessions a matching prune_sessions call would touch."""
+        if filters.get("started_before") is None and older_than_days is not None:
+            filters["started_before"] = time.time() - (older_than_days * 86400)
+        where, params = self._prune_filter_where(source=source, **filters)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""SELECT s.id, s.source, s.title, s.model, s.started_at,
+                           s.ended_at, s.message_count, s.archived
+                    FROM sessions s WHERE {where}
+                    ORDER BY s.started_at ASC""",
+                params,
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def archive_sessions(
+        self,
+        older_than_days: float | None = None,
+        source: str | None = None,
+        **filters: Any,
+    ) -> int:
+        """Bulk-archive sessions matching the filters. Returns count archived."""
+        filters.setdefault("archived", False)
+        rows = self.list_prune_candidates(
+            older_than_days=older_than_days, source=source, **filters
+        )
+        for row in rows:
+            self.set_session_archived(row["id"], True)
+        return len(rows)
+
+    def prune_sessions(
+        self,
+        older_than_days: float | None = 90,
+        source: str | None = None,
+        **filters: Any,
+    ) -> int:
+        """Delete sessions matching the filters. Returns count deleted."""
+        if filters.get("started_before") is None and older_than_days is not None:
+            filters["started_before"] = time.time() - (older_than_days * 86400)
+        where, where_params = self._prune_filter_where(source=source, **filters)
+
+        def _do(conn: sqlite3.Connection) -> int:
+            cursor = conn.execute(
+                f"SELECT s.id FROM sessions s WHERE {where}", where_params
+            )
+            session_ids = {row[0] for row in cursor.fetchall()}
+            if not session_ids:
+                return 0
+            placeholders = ",".join("?" * len(session_ids))
+            conn.execute(
+                f"UPDATE sessions SET parent_session_id = NULL "
+                f"WHERE parent_session_id IN ({placeholders})",
+                list(session_ids),
+            )
+            for sid in session_ids:
+                conn.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
+                conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+            return len(session_ids)
+        return self._execute_write(_do)
+
+    def maybe_auto_prune_and_vacuum(
+        self,
+        retention_days: int = 90,
+        min_interval_hours: int = 24,
+        vacuum: bool = True,
+    ) -> Dict[str, Any]:
+        """Idempotent auto-maintenance: prune old sessions + optional VACUUM."""
+        result: Dict[str, Any] = {"skipped": False, "pruned": 0, "vacuumed": False}
+        try:
+            last_raw = self.get_meta("last_auto_prune")
+            now = time.time()
+            if last_raw:
+                try:
+                    last_ts = float(last_raw)
+                    if now - last_ts < min_interval_hours * 3600:
+                        result["skipped"] = True
+                        return result
+                except (TypeError, ValueError):
+                    pass
+
+            pruned = self.prune_sessions(older_than_days=retention_days)
+            result["pruned"] = pruned
+
+            if vacuum and pruned > 0:
+                try:
+                    self.vacuum()
+                    result["vacuumed"] = True
+                except Exception as exc:
+                    logger.warning("state.db VACUUM failed: %s", exc)
+
+            self.set_meta("last_auto_prune", str(now))
+            if pruned > 0:
+                logger.info(
+                    "state.db auto-maintenance: pruned %d session(s) older than %d days%s",
+                    pruned, retention_days,
+                    " + VACUUM" if result["vacuumed"] else "",
+                )
+        except Exception as exc:
+            logger.warning("state.db auto-maintenance failed: %s", exc)
+            result["error"] = str(exc)
+        return result
+
+    def count_empty_sessions(self) -> int:
+        """Count sessions with zero messages."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM sessions WHERE message_count = 0 "
+                "OR message_count IS NULL"
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def delete_empty_sessions(self) -> int:
+        """Delete sessions with zero messages. Returns count deleted."""
+        def _do(conn: sqlite3.Connection) -> int:
+            cursor = conn.execute(
+                "SELECT id FROM sessions WHERE message_count = 0 "
+                "OR message_count IS NULL"
+            )
+            ids = [row[0] for row in cursor.fetchall()]
+            for sid in ids:
+                conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+            return len(ids)
+        return self._execute_write(_do)
+
+    def prune_empty_ghost_sessions(self) -> int:
+        """Alias for delete_empty_sessions."""
+        return self.delete_empty_sessions()
+
+    def finalize_orphaned_compression_sessions(self) -> int:
+        """End sessions whose parent has ended (orphaned compression children)."""
+        def _do(conn: sqlite3.Connection) -> int:
+            cursor = conn.execute(
+                """SELECT s.id FROM sessions s
+                   WHERE s.parent_session_id IS NOT NULL
+                     AND s.ended_at IS NULL
+                     AND EXISTS (
+                         SELECT 1 FROM sessions p
+                         WHERE p.id = s.parent_session_id AND p.ended_at IS NOT NULL
+                     )"""
+            )
+            ids = [row[0] for row in cursor.fetchall()]
+            now = time.time()
+            for sid in ids:
+                conn.execute(
+                    "UPDATE sessions SET ended_at = ?, end_reason = 'parent_ended' "
+                    "WHERE id = ?",
+                    (now, sid),
+                )
+            return len(ids)
+        return self._execute_write(_do)
+
+    # ==================================================================
+    # P1: Export + misc
+    # ==================================================================
+
+    def export_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Export a session + all its messages as a dict."""
+        session = self.get_session(session_id)
+        if session is None:
+            return None
+        messages = self.get_messages(session_id, include_compacted=True)
+        return {"session": session, "messages": messages}
+
+    def export_all(self, source: str | None = None) -> List[Dict[str, Any]]:
+        """Export all sessions (optionally filtered by source)."""
+        sessions = self.list_sessions(source=source, limit=100000)
+        result = []
+        for s in sessions:
+            export = self.export_session(s["id"])
+            if export:
+                result.append(export)
+        return result
+
+    def session_count(self, *, include_archived: bool = False) -> int:
+        """Return the total session count."""
+        where = "" if include_archived else " WHERE archived = 0"
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT COUNT(*) FROM sessions{where}"
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def message_count(self, session_id: str | None = None) -> int:
+        """Return total message count, or count for a specific session."""
+        if session_id:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+        else:
+            with self._lock:
+                row = self._conn.execute("SELECT COUNT(*) FROM messages").fetchone()
+        return int(row[0]) if row else 0
+
+    def delete_session_if_empty(self, session_id: str) -> bool:
+        """Delete a session only if it has zero messages."""
+        if self.message_count(session_id) > 0:
+            return False
+        return self.delete_session(session_id)
+
+    def delete_sessions(self, session_ids: List[str]) -> int:
+        """Delete multiple sessions. Returns count deleted."""
+        if not session_ids:
+            return 0
+
+        def _do(conn: sqlite3.Connection) -> int:
+            count = 0
+            for sid in session_ids:
+                conn.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
+                cur = conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+                count += cur.rowcount
+            return count
+        return self._execute_write(_do)
+
+    def search_sessions_by_id(self, id_query: str) -> List[Dict[str, Any]]:
+        """Search sessions by id substring."""
+        needle = f"%{id_query}%"
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM sessions WHERE id LIKE ? ORDER BY started_at DESC LIMIT 50",
+                (needle,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def search_sessions(
+        self,
+        query: str,
+        *,
+        source: str | None = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Search sessions by title or id substring."""
+        needle = f"%{query.lower()}%"
+        where = "LOWER(COALESCE(s.title, '')) LIKE ? OR LOWER(s.id) LIKE ?"
+        params: list[Any] = [needle, needle]
+        if source:
+            where += " AND s.source = ?"
+            params.append(source)
+        params.append(limit)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM sessions s WHERE {where} "
+                "ORDER BY s.started_at DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# P1: AsyncSessionDB wrapper
+# ---------------------------------------------------------------------------
+
+
+class AsyncSessionDB:
+    """Async wrapper around SessionDB.
+
+    Offloads each call to a thread via asyncio.to_thread so a blocking
+    SQLite call never freezes the event loop. Generic forwarder — works
+    for any method on the underlying SessionDB.
+    """
+
+    def __init__(self, db: "SessionDB") -> None:
+        self._db = db
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._db, name)
+        if not callable(attr):
+            return attr
+
+        async def _offloaded(*args: Any, **kwargs: Any) -> Any:
+            import asyncio
+            return await asyncio.to_thread(attr, *args, **kwargs)
+
+        return _offloaded
+
+    @property
+    def underlying(self) -> "SessionDB":
+        """Return the underlying SessionDB instance."""
+        return self._db
+
 
 # ---------------------------------------------------------------------------
 # Backward-compatible module-level API
@@ -1699,6 +2957,7 @@ def vacuum() -> None:
 
 
 __all__ = [
+    "AsyncSessionDB",
     "SessionDB",
     "SCHEMA_SQL",
     "FTS_SQL",
