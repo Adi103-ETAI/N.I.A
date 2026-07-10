@@ -200,6 +200,7 @@ class QueryEngine:
         token_budget: int | None = None,
         memory: object | None = None,
         post_turn_hooks: list | None = None,
+        memory_manager: object | None = None,
     ) -> None:
         self._api_client = api_client
         self._tool_registry = tool_registry
@@ -216,6 +217,8 @@ class QueryEngine:
         self._max_budget_usd = max_budget_usd
         self._token_budget = token_budget
         self._memory = memory  # for background review (Task 5)
+        # P1 fix: MemoryManager for prefetch/sync/lifecycle hooks.
+        self._memory_manager = memory_manager
         # Post-turn hooks: callables invoked after each QueryResult with
         # (engine, result, tool_call_count). Used by the background review
         # system (Task 7) to spawn the self-improvement fork.
@@ -289,6 +292,62 @@ class QueryEngine:
         Requires cost_per_token_fn to be set on the cost tracker.
         """
         return self._cost_tracker.total_cost_usd
+
+    @property
+    def memory_manager(self) -> object | None:
+        """Return the MemoryManager (or None if not wired)."""
+        return self._memory_manager
+
+    def set_memory_manager(self, manager: object) -> None:
+        """Wire a MemoryManager into the engine (P1 fix).
+
+        Once wired, the engine:
+          - Calls on_turn_start at the beginning of each turn.
+          - Calls sync_all (background) after each turn completes.
+          - Calls on_session_end when the engine is shut down.
+          - Calls on_pre_compress before context compaction.
+        """
+        self._memory_manager = manager
+
+    def _memory_manager_on_turn_start(self, user_message: str) -> None:
+        """Best-effort: notify the MemoryManager of a new turn."""
+        if self._memory_manager is None:
+            return
+        try:
+            turn_number = len(self._messages) + 1
+            self._memory_manager.on_turn_start(turn_number, user_message)
+        except Exception:
+            pass
+
+    def _memory_manager_sync_turn(
+        self,
+        user_content: str,
+        assistant_content: str,
+    ) -> None:
+        """Best-effort: sync the completed turn to all memory providers."""
+        if self._memory_manager is None:
+            return
+        try:
+            self._memory_manager.sync_all(
+                user_content,
+                assistant_content,
+                session_id=self._session_id,
+            )
+        except Exception:
+            pass
+
+    def _memory_manager_on_session_end(self) -> None:
+        """Best-effort: notify the MemoryManager of session end."""
+        if self._memory_manager is None:
+            return
+        try:
+            messages = [
+                {"role": m.role, "content": m.text}
+                for m in self._messages
+            ]
+            self._memory_manager.on_session_end(messages)
+        except Exception:
+            pass
 
     # -- Mutators ----------------------------------------------------------
 
@@ -645,6 +704,9 @@ class QueryEngine:
         # P1 fix: persist the user message to the session DB (if enabled).
         self._persist_message_to_session_db("user", prompt)
 
+        # P1 fix: notify the MemoryManager of a new turn (prefetch, etc.).
+        self._memory_manager_on_turn_start(prompt)
+
         context = QueryContext(
             api_client=self._api_client,
             tool_registry=self._tool_registry,
@@ -702,6 +764,9 @@ class QueryEngine:
                 # QueryResult has result_text, not message.
                 if event.result_text:
                     self._persist_message_to_session_db("assistant", event.result_text)
+                    # P1 fix: sync the completed turn to all memory providers
+                    # (background, non-blocking).
+                    self._memory_manager_sync_turn(prompt, event.result_text)
                 continue
             yield event
 

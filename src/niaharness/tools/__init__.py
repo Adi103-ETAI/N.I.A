@@ -142,12 +142,31 @@ def register_nia_tools(registry: ToolRegistry, memory: object, context: object, 
     mem_tool = registry.get("nia_memory")
     if mem_tool is not None:
         mem_tool.set_memory(memory)
+        # P1 fix: wire the MemoryManager into the tool so built-in
+        # writes mirror to external providers via on_memory_write.
+        try:
+            from niaharness.memory import get_memory_manager
+            mem_tool.set_memory_manager(get_memory_manager())
+        except Exception:
+            pass  # MemoryManager not initialized — non-fatal.
     ctx_tool = registry.get("nia_context")
     if ctx_tool is not None:
         ctx_tool.set_context(context)
     session_tool = registry.get("nia_session")
     if session_tool is not None and engine is not None:
         session_tool.set_engine(engine)
+    # P1 fix: inject memory provider tools (memory_search, memory_add,
+    # memory_list) into the registry.
+    try:
+        from niaharness.memory import (
+            get_memory_manager,
+            inject_memory_provider_tools,
+        )
+        manager = get_memory_manager()
+        if manager.providers:
+            inject_memory_provider_tools(registry, manager)
+    except Exception:
+        pass  # Non-fatal — tools just won't be registered.
 
 
 __all__ = [

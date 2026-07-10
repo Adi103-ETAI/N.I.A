@@ -51,6 +51,7 @@ auth_app = typer.Typer(name="auth", help="Manage authentication")
 cron_app = typer.Typer(name="cron", help="Manage cron scheduler and jobs")
 gateway_app = typer.Typer(name="gateway", help="Manage chat platform gateway")
 profile_app = typer.Typer(name="profile", help="Manage profiles and aliases")
+memory_app = typer.Typer(name="memory", help="Manage persistent memory store")
 
 app.add_typer(mcp_app)
 app.add_typer(plugin_app)
@@ -58,6 +59,7 @@ app.add_typer(auth_app)
 app.add_typer(cron_app)
 app.add_typer(gateway_app)
 app.add_typer(profile_app)
+app.add_typer(memory_app)
 
 
 # ---------------------------------------------------------------------------
@@ -626,6 +628,207 @@ def auth_logout() -> None:
     settings.api_key = None
     save_settings(settings)
     print("Authentication cleared.")
+
+
+# ---- memory subcommands ----
+
+@memory_app.command("setup")
+def memory_setup(
+    non_interactive: bool = typer.Option(
+        False,
+        "--non-interactive",
+        "--yes",
+        "-y",
+        help="Skip prompts and create an empty store non-interactively",
+    ),
+) -> None:
+    """Initialize the persistent memory store for the current project."""
+    from niaharness.memory import run_memory_setup_wizard
+
+    result = run_memory_setup_wizard(interactive=not non_interactive)
+    print()
+    print("Memory Setup Complete")
+    print("=" * 40)
+    print(f"Memory directory: {result['memory_dir']}")
+    print(f"Entrypoint:       {result['entrypoint']}")
+    print(f"Store:            {result['store_path']}")
+    if result["created"]:
+        print(f"Created:          {', '.join(result['created'])}")
+    print(f"Seeded entries:   {result['seeded_entries']}")
+    stats = result.get("stats", {})
+    if stats:
+        print(f"Total entries:    {stats.get('entry_count', 0)}")
+        print(f"Total chars:      {stats.get('total_chars', 0)}/{stats.get('max_total_chars', 0)}")
+    print()
+
+
+@memory_app.command("stats")
+def memory_stats() -> None:
+    """Show statistics about the persistent memory store."""
+    from niaharness.memory import MemoryStore
+    from niaharness.memory.paths import get_project_memory_dir
+
+    import os
+    store_path = get_project_memory_dir(os.getcwd()) / "STORE.md"
+    if not store_path.exists():
+        print("No memory store found. Run `nia memory setup` first.")
+        return
+    store = MemoryStore(path=store_path)
+    stats = store.stats()
+    print(f"Path:             {stats['path']}")
+    print(f"Entries:          {stats['entry_count']}")
+    print(f"Total chars:      {stats['total_chars']}/{stats['max_total_chars']}")
+    print(f"Max entry chars:  {stats['max_entry_chars']}")
+    print(f"Write-gate blocked:   {stats['write_gate_blocked']}")
+    print(f"Write-gate approved:  {stats['write_gate_approved']}")
+    if stats["categories"]:
+        print("Categories:")
+        for cat, count in sorted(stats["categories"].items()):
+            print(f"  {cat}: {count}")
+
+
+@memory_app.command("list")
+def memory_list(
+    category: str | None = typer.Option(
+        None, "--category", "-c", help="Filter by category"
+    ),
+    limit: int = typer.Option(
+        20, "--limit", "-n", help="Max results"
+    ),
+) -> None:
+    """List memory entries."""
+    from niaharness.memory import MemoryStore
+    from niaharness.memory.paths import get_project_memory_dir
+
+    import os
+    store_path = get_project_memory_dir(os.getcwd()) / "STORE.md"
+    if not store_path.exists():
+        print("No memory store found. Run `nia memory setup` first.")
+        return
+    store = MemoryStore(path=store_path)
+    entries = store.get_entries(category=category, limit=limit)
+    if not entries:
+        print("No entries found.")
+        return
+    for i, entry in enumerate(entries):
+        print(f"[{i}] [{entry.category}] {entry.content[:100]}")
+        print(f"    source={entry.source} ts={entry.timestamp:.0f}")
+
+
+@memory_app.command("search")
+def memory_search(
+    query: str = typer.Argument(..., help="Search query"),
+    limit: int = typer.Option(
+        5, "--limit", "-n", help="Max results"
+    ),
+) -> None:
+    """Search memory entries."""
+    from niaharness.memory import MemoryStore
+    from niaharness.memory.paths import get_project_memory_dir
+
+    import os
+    store_path = get_project_memory_dir(os.getcwd()) / "STORE.md"
+    if not store_path.exists():
+        print("No memory store found. Run `nia memory setup` first.")
+        return
+    store = MemoryStore(path=store_path)
+    entries = store.get_entries(query=query, limit=limit)
+    if not entries:
+        print("No matching entries found.")
+        return
+    for i, entry in enumerate(entries):
+        print(f"[{i}] [{entry.category}] {entry.content[:200]}")
+
+
+@memory_app.command("add")
+def memory_add(
+    content: str = typer.Argument(..., help="Memory entry content"),
+    category: str = typer.Option(
+        "note", "--category", "-c", help="Entry category"
+    ),
+) -> None:
+    """Add a memory entry."""
+    from niaharness.memory import MemoryEntry, MemoryStore
+    from niaharness.memory.paths import get_project_memory_dir
+
+    import os
+    store_path = get_project_memory_dir(os.getcwd()) / "STORE.md"
+    store = MemoryStore(path=store_path)
+    entry = MemoryEntry(content=content, category=category, source="user")
+    if store.add_entry(entry):
+        print(f"Added [{category}]: {content}")
+    else:
+        print("Write blocked by gate (threat scan or approval).")
+
+
+@memory_app.command("remove")
+def memory_remove(
+    index: int = typer.Argument(..., help="Entry index (from `nia memory list`)"),
+) -> None:
+    """Remove a memory entry by index."""
+    from niaharness.memory import MemoryStore
+    from niaharness.memory.paths import get_project_memory_dir
+
+    import os
+    store_path = get_project_memory_dir(os.getcwd()) / "STORE.md"
+    if not store_path.exists():
+        print("No memory store found.")
+        return
+    store = MemoryStore(path=store_path)
+    if store.remove_entry(index):
+        print(f"Removed entry {index}.")
+    else:
+        print(f"Could not remove entry {index} (not found or blocked).")
+
+
+@memory_app.command("drift")
+def memory_drift() -> None:
+    """Check if the memory store was modified externally."""
+    from niaharness.memory import MemoryStore
+    from niaharness.memory.paths import get_project_memory_dir
+
+    import os
+    store_path = get_project_memory_dir(os.getcwd()) / "STORE.md"
+    if not store_path.exists():
+        print("No memory store found.")
+        return
+    store = MemoryStore(path=store_path)
+    report = store.detect_drift()
+    if report.changed:
+        print("DRIFT DETECTED — the memory store was modified externally.")
+        if report.old_size is not None:
+            print(f"  Old size: {report.old_size} bytes")
+        print(f"  New size: {report.new_size} bytes")
+        if report.old_mtime is not None:
+            print(f"  Old mtime: {report.old_mtime:.0f}")
+        print(f"  New mtime: {report.new_mtime:.0f}")
+    else:
+        print("No drift detected — the store is unchanged since last access.")
+
+
+@memory_app.command("clear")
+def memory_clear() -> None:
+    """Remove all memory entries (requires confirmation)."""
+    from niaharness.memory import MemoryStore
+    from niaharness.memory.paths import get_project_memory_dir
+
+    import os
+    confirmed = typer.confirm(
+        "This will remove ALL memory entries. Are you sure?",
+        default=False,
+    )
+    if not confirmed:
+        print("Cancelled.")
+        return
+    store_path = get_project_memory_dir(os.getcwd()) / "STORE.md"
+    if not store_path.exists():
+        print("No memory store found.")
+        return
+    store = MemoryStore(path=store_path)
+    if store.clear():
+        print("Cleared all memory entries.")
+    else:
+        print("Clear blocked by gate.")
 
 
 # ---------------------------------------------------------------------------

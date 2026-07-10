@@ -46,10 +46,39 @@ class NiaMemoryTool(BaseTool):
 
     def __init__(self, memory: object | None = None) -> None:
         self._memory = memory
+        self._memory_manager: object | None = None
 
     def set_memory(self, memory: object) -> None:
         """Set the memory instance (called during NIA initialization)."""
         self._memory = memory
+
+    def set_memory_manager(self, manager: object) -> None:
+        """Set the MemoryManager instance (called during NIA initialization).
+
+        P1 fix: wires the MemoryManager into the tool so built-in memory
+        writes can mirror to external providers via
+        ``manager.on_memory_write(action, target, content)``.
+        """
+        self._memory_manager = manager
+
+    def _notify_memory_write(
+        self,
+        action: str,
+        target: str,
+        content: str,
+    ) -> None:
+        """Best-effort: notify the MemoryManager of a built-in write.
+
+        P1 fix: implements notify_memory_tool_write so external memory
+        providers (Honcho, mem0, etc.) can mirror writes from the
+        nia_memory tool.
+        """
+        if self._memory_manager is None:
+            return
+        try:
+            self._memory_manager.on_memory_write(action, target, content)
+        except Exception:
+            pass  # Best-effort — never break the tool call.
 
     async def execute(self, arguments: NiaMemoryInput, context: ToolExecutionContext) -> ToolResult:
         if self._memory is None:
@@ -72,12 +101,17 @@ class NiaMemoryTool(BaseTool):
             if not arguments.fact:
                 return ToolResult(output="fact is required for add_fact", is_error=True)
             self._memory.add_fact(arguments.fact)
+            # P1 fix: mirror to external providers via the MemoryManager.
+            self._notify_memory_write("add", "fact", arguments.fact)
             return ToolResult(output=f"Stored fact: {arguments.fact}")
 
         elif action == "add_preference":
             if not arguments.key or not arguments.value:
                 return ToolResult(output="key and value are required for add_preference", is_error=True)
             self._memory.add_preference(arguments.key, arguments.value)
+            # P1 fix: mirror to external providers via the MemoryManager.
+            pref_content = f"{arguments.key}: {arguments.value}"
+            self._notify_memory_write("add", "preference", pref_content)
             return ToolResult(output=f"Stored preference: {arguments.key} = {arguments.value}")
 
         elif action == "list_preferences":
