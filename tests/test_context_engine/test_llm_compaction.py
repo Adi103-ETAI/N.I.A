@@ -29,6 +29,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from niaharness.engine.llm_compaction import (
+    AUTO_FOCUS_MIN_WORD_LEN,
+    AUTO_FOCUS_RECENT_MESSAGES,
+    AUTO_FOCUS_TOP_N,
     AuxClientProtocol,
     CompactionRequest,
     CompactionResult,
@@ -38,21 +41,36 @@ from niaharness.engine.llm_compaction import (
     HISTORICAL_PENDING_ASKS_HEADING,
     HISTORICAL_REMAINING_WORK_HEADING,
     HISTORICAL_TASK_HEADING,
+    IMAGE_KEEP_RECENT,
     INEFFECTIVE_SAVINGS_PCT_THRESHOLD,
     LLMCompactor,
     LEGACY_SUMMARY_PREFIX,
     MAX_INEFFECTIVE_COMPRESSIONS,
     MAX_SUMMARY_TOKENS,
+    MIN_HEAD_PROTECT_TOKENS,
     STANDARD_COOLDOWN_SECONDS,
     SUMMARY_FAILURE_COOLDOWN_SECONDS,
     SUMMARY_PREFIX,
     TRANSIENT_COOLDOWN_SECONDS,
+    TOOL_ARGS_SUMMARY_MAX_CHARS,
+    _align_split_boundary,
     _build_summary_prompt,
     _build_summarizer_preamble,
     _build_template_sections,
     _build_temporal_anchoring_rule,
+    _collect_tool_result_refs,
+    _collect_tool_use_ids,
+    _derive_focus_topic,
+    _has_image,
+    _has_tool_result,
+    _has_tool_use,
+    _protect_head_size,
+    _sanitize_orphaned_tool_uses,
     _serialize_for_summary,
+    _strip_images_keep_recent,
     _strip_summary_prefix,
+    _truncate_tool_args_for_summary,
+    get_default_compactor,
     redact_sensitive_text,
 )
 from niaharness.engine.messages import ConversationMessage, TextBlock
@@ -892,6 +910,560 @@ class TestLLMContextEngine:
         engine.on_session_reset()
         assert engine._compactor._previous_summary is None
         assert engine._compactor._ineffective_compression_count == 0
+
+
+# ---------------------------------------------------------------------------
+# P1: Pre-compaction sanitization helpers
+# ---------------------------------------------------------------------------
+
+
+class TestBlockTypeDetection:
+    """Tests for _has_tool_use / _has_tool_result / _has_image."""
+
+    def test_has_tool_use_detects_tool_use_block(self):
+        from niaharness.engine.messages import ToolUseBlock
+        msg = ConversationMessage(
+            role="assistant",
+            content=[ToolUseBlock(name="bash", input={"command": "ls"})],
+        )
+        assert _has_tool_use(msg) is True
+        assert _has_tool_result(msg) is False
+        assert _has_image(msg) is False
+
+    def test_has_tool_result_detects_tool_result_block(self):
+        from niaharness.engine.messages import ToolResultBlock
+        msg = ConversationMessage(
+            role="user",
+            content=[ToolResultBlock(tool_use_id="call_1", content="output")],
+        )
+        assert _has_tool_result(msg) is True
+        assert _has_tool_use(msg) is False
+
+    def test_text_only_message_detected_as_none(self):
+        msg = ConversationMessage.from_user_text("just text")
+        assert _has_tool_use(msg) is False
+        assert _has_tool_result(msg) is False
+        assert _has_image(msg) is False
+
+
+class TestCollectToolIds:
+    """Tests for _collect_tool_use_ids and _collect_tool_result_refs."""
+
+    def test_collect_finds_all_ids(self):
+        from niaharness.engine.messages import ToolResultBlock, ToolUseBlock
+        messages = [
+            ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id="call_1", name="bash", input={})],
+            ),
+            ConversationMessage(
+                role="user",
+                content=[ToolResultBlock(tool_use_id="call_1", content="out")],
+            ),
+            ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id="call_2", name="bash", input={})],
+            ),
+        ]
+        # _collect_tool_use_ids returns the IDs emitted by tool_use blocks.
+        use_ids = _collect_tool_use_ids(messages)
+        assert use_ids == {"call_1", "call_2"}
+        # _collect_tool_result_refs returns the IDs referenced by tool_result blocks.
+        result_refs = _collect_tool_result_refs(messages)
+        assert result_refs == {"call_1"}
+
+    def test_collect_empty_for_text_only(self):
+        messages = [ConversationMessage.from_user_text("hi")]
+        assert _collect_tool_use_ids(messages) == set()
+        assert _collect_tool_result_refs(messages) == set()
+
+
+class TestAlignSplitBoundary:
+    """Tests for _align_split_boundary — prevent tool_use/tool_result splits."""
+
+    def _build_pair_messages(self, n_text_pairs: int = 2, n_tool_pairs: int = 1) -> list[ConversationMessage]:
+        """Build a message list with text pairs + a tool_use/tool_result pair."""
+        from niaharness.engine.messages import ToolResultBlock, ToolUseBlock
+        msgs: list[ConversationMessage] = []
+        for i in range(n_text_pairs):
+            msgs.append(ConversationMessage.from_user_text(f"q{i}"))
+            msgs.append(ConversationMessage(role="assistant", content=[TextBlock(text=f"a{i}")]))
+        for i in range(n_tool_pairs):
+            msgs.append(ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id=f"call_{i}", name="bash", input={"cmd": f"ls{i}"})],
+            ))
+            msgs.append(ConversationMessage(
+                role="user",
+                content=[ToolResultBlock(tool_use_id=f"call_{i}", content=f"out{i}")],
+            ))
+        return msgs
+
+    def test_no_change_when_boundary_is_safe(self):
+        """If the boundary doesn't split a pair, head/tail stay the same."""
+        msgs = self._build_pair_messages(n_text_pairs=4, n_tool_pairs=0)
+        # 8 messages, head=2, tail=2 — boundary at index 2 is between pairs.
+        h, t = _align_split_boundary(msgs, 2, 2)
+        assert h == 2
+        assert t == 2
+
+    def test_extends_head_past_tool_result(self):
+        """If head ends with a tool_use and middle starts with its result,
+        extend head to include the result."""
+        from niaharness.engine.messages import ToolResultBlock, ToolUseBlock
+        # Layout: 4 text msgs (2 pairs) + tool_use + tool_result + 2 text msgs
+        # = [u0, a0, u1, a1, tool_use, tool_result, u2, a2] (8 messages)
+        msgs: list[ConversationMessage] = []
+        for i in range(2):
+            msgs.append(ConversationMessage.from_user_text(f"q{i}"))
+            msgs.append(ConversationMessage(role="assistant", content=[TextBlock(text=f"a{i}")]))
+        msgs.append(ConversationMessage(
+            role="assistant",
+            content=[ToolUseBlock(id="call_0", name="bash", input={"cmd": "ls"})],
+        ))
+        msgs.append(ConversationMessage(
+            role="user",
+            content=[ToolResultBlock(tool_use_id="call_0", content="out")],
+        ))
+        msgs.append(ConversationMessage.from_user_text("q2"))
+        msgs.append(ConversationMessage(role="assistant", content=[TextBlock(text="a2")]))
+        # head=5 would put the tool_use in head and the tool_result in middle.
+        # After alignment, head should extend to 6 to include the tool_result.
+        h, t = _align_split_boundary(msgs, 5, 0)
+        assert h >= 6  # at least past the tool_result
+
+    def test_extends_tail_past_tool_use(self):
+        """If middle ends with a tool_use and tail starts with its result,
+        extend tail to include both."""
+        from niaharness.engine.messages import ToolResultBlock, ToolUseBlock
+        # Same 8-message layout as above.
+        msgs: list[ConversationMessage] = []
+        for i in range(2):
+            msgs.append(ConversationMessage.from_user_text(f"q{i}"))
+            msgs.append(ConversationMessage(role="assistant", content=[TextBlock(text=f"a{i}")]))
+        msgs.append(ConversationMessage(
+            role="assistant",
+            content=[ToolUseBlock(id="call_0", name="bash", input={"cmd": "ls"})],
+        ))
+        msgs.append(ConversationMessage(
+            role="user",
+            content=[ToolResultBlock(tool_use_id="call_0", content="out")],
+        ))
+        msgs.append(ConversationMessage.from_user_text("q2"))
+        msgs.append(ConversationMessage(role="assistant", content=[TextBlock(text="a2")]))
+        # tail=3 would put the tool_result in tail (messages[5:]) and the
+        # tool_use at the end of middle (messages[4]).
+        # tail = [tool_result, u2, a2], middle ends at tool_use → SPLIT.
+        # After alignment, tail should extend to 4 to include both
+        # tool_use and tool_result.
+        h, t = _align_split_boundary(msgs, 2, 3)
+        assert t >= 4  # tail should include both tool_use and tool_result
+
+    def test_empty_messages(self):
+        h, t = _align_split_boundary([], 2, 2)
+        assert h == 0
+        assert t == 0
+
+
+class TestSanitizeOrphanedToolUses:
+    """Tests for _sanitize_orphaned_tool_uses — drop orphaned tool calls after cuts."""
+
+    def test_drops_orphaned_tool_use(self):
+        """A tool_use with no matching tool_result should be dropped."""
+        from niaharness.engine.messages import ToolUseBlock
+        msg = ConversationMessage(
+            role="assistant",
+            content=[
+                ToolUseBlock(id="call_1", name="bash", input={}),
+                TextBlock(text="explanation"),
+            ],
+        )
+        sanitized = _sanitize_orphaned_tool_uses([msg])
+        # ToolUseBlock dropped, TextBlock kept.
+        assert len(sanitized) == 1
+        assert len(sanitized[0].content) == 1
+        assert isinstance(sanitized[0].content[0], TextBlock)
+
+    def test_drops_orphaned_tool_result(self):
+        """A tool_result with no matching tool_use should be dropped."""
+        from niaharness.engine.messages import ToolResultBlock
+        msg = ConversationMessage(
+            role="user",
+            content=[ToolResultBlock(tool_use_id="call_x", content="orphan")],
+        )
+        sanitized = _sanitize_orphaned_tool_uses([msg])
+        # The orphaned result was the only block — message becomes a text note.
+        assert len(sanitized) == 1
+        assert isinstance(sanitized[0].content[0], TextBlock)
+        assert "orphaned" in sanitized[0].content[0].text
+
+    def test_keeps_matched_pairs(self):
+        """A matching tool_use + tool_result pair is preserved."""
+        from niaharness.engine.messages import ToolResultBlock, ToolUseBlock
+        msgs = [
+            ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id="call_1", name="bash", input={})],
+            ),
+            ConversationMessage(
+                role="user",
+                content=[ToolResultBlock(tool_use_id="call_1", content="out")],
+            ),
+        ]
+        sanitized = _sanitize_orphaned_tool_uses(msgs)
+        assert len(sanitized) == 2
+        # Both messages retain their original block types.
+        from niaharness.engine.messages import ToolUseBlock, ToolResultBlock
+        assert isinstance(sanitized[0].content[0], ToolUseBlock)
+        assert isinstance(sanitized[1].content[0], ToolResultBlock)
+
+    def test_empty_messages_passthrough(self):
+        assert _sanitize_orphaned_tool_uses([]) == []
+
+    def test_text_only_passthrough(self):
+        msgs = [ConversationMessage.from_user_text("hello")]
+        sanitized = _sanitize_orphaned_tool_uses(msgs)
+        assert len(sanitized) == 1
+        assert sanitized[0].content[0].text == "hello"
+
+
+class TestProtectHeadSize:
+    """Tests for _protect_head_size — adaptive head protection."""
+
+    def test_no_growth_for_short_head(self):
+        """Short test messages (e.g. 'hi', 'hello') shouldn't trigger growth."""
+        msgs = [
+            ConversationMessage.from_user_text("hi"),
+            ConversationMessage(role="assistant", content=[TextBlock(text="hello")]),
+        ]
+        head = _protect_head_size(msgs, base_head_protect=2)
+        assert head == 2
+
+    def test_grows_for_long_system_anchored_head(self):
+        """If the first 2 messages have substantial content but < min_tokens,
+        grow head to reach min_tokens."""
+        long_text = "x" * 5000  # ~1250 tokens at 4 chars/token
+        msgs = [
+            ConversationMessage.from_user_text(long_text),
+            ConversationMessage(role="assistant", content=[TextBlock(text=long_text)]),
+        ]
+        # Add more messages to grow into.
+        for i in range(20):
+            msgs.append(ConversationMessage.from_user_text(f"msg {i}"))
+            msgs.append(ConversationMessage(role="assistant", content=[TextBlock(text=f"r{i}")]))
+        head = _protect_head_size(msgs, base_head_protect=2, min_tokens=500)
+        # Head should have grown past 2 (the base head had ~2500 tokens
+        # already, but the content_threshold is 100 — so growth kicks in
+        # only if head_tokens < min_tokens).
+        # 2 messages * ~1250 tokens = 2500 tokens > 500, so no growth needed.
+        assert head == 2
+
+    def test_grows_when_head_under_min_tokens(self):
+        """If base head has > 100 tokens but < min_tokens, grow."""
+        # 200 chars = ~50 tokens per message; 2 messages = ~100 tokens.
+        # That crosses the content_threshold (100) but is under min_tokens (500).
+        medium_text = "x" * 400  # ~100 tokens
+        msgs = [
+            ConversationMessage.from_user_text(medium_text),
+            ConversationMessage(role="assistant", content=[TextBlock(text=medium_text)]),
+        ]
+        for i in range(20):
+            msgs.append(ConversationMessage.from_user_text(f"msg {i} " * 30))
+            msgs.append(ConversationMessage(role="assistant", content=[TextBlock(text=f"reply {i} " * 30)]))
+        head = _protect_head_size(msgs, base_head_protect=2, min_tokens=500)
+        # Head should have grown past 2.
+        assert head > 2
+
+    def test_empty_messages(self):
+        assert _protect_head_size([], base_head_protect=2) == 0
+
+    def test_clamped_to_half(self):
+        """Head should never exceed n//2."""
+        medium_text = "x" * 400
+        msgs = [
+            ConversationMessage.from_user_text(medium_text),
+            ConversationMessage(role="assistant", content=[TextBlock(text=medium_text)]),
+        ]
+        # Only 4 messages total — n//2 = 2, so head stays at 2.
+        msgs.append(ConversationMessage.from_user_text("more"))
+        msgs.append(ConversationMessage(role="assistant", content=[TextBlock(text="more")]))
+        head = _protect_head_size(msgs, base_head_protect=2, min_tokens=10000)
+        assert head <= 2
+
+
+class TestStripImagesKeepRecent:
+    """Tests for _strip_images_keep_recent — keep recent images, strip old."""
+
+    def _build_image_msg(self, text: str = "see image") -> ConversationMessage:
+        """Build a message with a fake image block + a text block."""
+        class FakeImageBlock:
+            type = "image"
+
+        # We need a real ConversationMessage. Inject a fake image block
+        # alongside a real TextBlock. _strip_images_keep_recent checks
+        # block.type via getattr, so the fake block works.
+        msg = ConversationMessage.from_user_text(text)
+        msg.content.append(FakeImageBlock())
+        return msg
+
+    def test_text_only_passthrough(self):
+        """Text-only messages pass through unchanged."""
+        msgs = [ConversationMessage.from_user_text("hello")]
+        out = _strip_images_keep_recent(msgs, keep_recent=3)
+        assert len(out) == 1
+        assert isinstance(out[0].content[0], TextBlock)
+        assert out[0].content[0].text == "hello"
+
+    def test_strips_old_images_keeps_recent(self):
+        """With 5 image messages and keep_recent=3, the 2 oldest get stripped."""
+        msgs = [self._build_image_msg(f"img{i}") for i in range(5)]
+        out = _strip_images_keep_recent(msgs, keep_recent=3)
+        # Last 3 should be untouched (still have an image block).
+        # First 2 should have their image replaced with a placeholder text.
+        # All 5 messages are still in the list (none dropped).
+        assert len(out) == 5
+
+    def test_keep_zero_strips_all(self):
+        """keep_recent=0 strips all images (matches old _strip_images behavior)."""
+        msgs = [self._build_image_msg("img")]
+        out = _strip_images_keep_recent(msgs, keep_recent=0)
+        # Image block replaced with a placeholder TextBlock.
+        assert len(out) == 1
+        # The placeholder should be present.
+        placeholders = [b for b in out[0].content if isinstance(b, TextBlock) and "stripped" in b.text]
+        assert len(placeholders) >= 1
+
+    def test_empty_messages(self):
+        assert _strip_images_keep_recent([], keep_recent=3) == []
+
+
+class TestTruncateToolArgsForSummary:
+    """Tests for _truncate_tool_args_for_summary — truncate verbose tool_use args."""
+
+    def test_short_args_unchanged(self):
+        """Short tool args are preserved as a text annotation."""
+        from niaharness.engine.messages import ToolUseBlock
+        msg = ConversationMessage(
+            role="assistant",
+            content=[
+                ToolUseBlock(id="call_1", name="bash", input={"command": "ls"}),
+                TextBlock(text="running ls"),
+            ],
+        )
+        out = _truncate_tool_args_for_summary(msg, max_chars=800)
+        # The ToolUseBlock should be replaced with a TextBlock annotation.
+        # TextBlock is imported at the top of the file.
+        text_blocks = [b for b in out.content if isinstance(b, TextBlock)]
+        # Original TextBlock + new annotation TextBlock.
+        assert len(text_blocks) >= 1
+        joined = " ".join(b.text for b in text_blocks)
+        assert "tool_use" in joined
+        assert "bash" in joined
+
+    def test_long_args_truncated(self):
+        """Long tool args get truncated to max_chars with a marker."""
+        from niaharness.engine.messages import ToolUseBlock
+        huge_input = {"content": "x" * 5000}  # 5KB
+        msg = ConversationMessage(
+            role="assistant",
+            content=[ToolUseBlock(id="call_1", name="write_file", input=huge_input)],
+        )
+        out = _truncate_tool_args_for_summary(msg, max_chars=200)
+        # The annotation text should contain the truncation marker.
+        annotation = out.content[0]
+        assert isinstance(annotation, TextBlock)
+        assert "[truncated]" in annotation.text
+
+    def test_text_only_passthrough(self):
+        msg = ConversationMessage.from_user_text("hello")
+        out = _truncate_tool_args_for_summary(msg, max_chars=800)
+        assert len(out.content) == 1
+        assert isinstance(out.content[0], TextBlock)
+        assert out.content[0].text == "hello"
+
+
+class TestDeriveFocusTopic:
+    """Tests for _derive_focus_topic — auto-derive focus from recent user msgs."""
+
+    def test_derives_topic_from_repeated_words(self):
+        """Words that appear multiple times in recent user messages are surfaced."""
+        msgs = [
+            ConversationMessage.from_user_text("Please help with authentication"),
+            ConversationMessage.from_user_text("The authentication module is broken"),
+            ConversationMessage.from_user_text("Can you fix authentication?"),
+        ]
+        topic = _derive_focus_topic(msgs, recent_n=5, top_n=3)
+        assert topic is not None
+        assert "authentication" in topic
+
+    def test_returns_none_for_only_stop_words(self):
+        """If recent messages contain only stop words, return None."""
+        msgs = [
+            ConversationMessage.from_user_text("the and the for with"),
+            ConversationMessage.from_user_text("this that the then"),
+        ]
+        topic = _derive_focus_topic(msgs, recent_n=5, top_n=3)
+        assert topic is None
+
+    def test_returns_none_for_empty_messages(self):
+        assert _derive_focus_topic([], recent_n=5, top_n=3) is None
+
+    def test_returns_none_for_no_user_messages(self):
+        msgs = [ConversationMessage(role="assistant", content=[TextBlock(text="reply")])]
+        assert _derive_focus_topic(msgs, recent_n=5, top_n=3) is None
+
+    def test_filters_short_words(self):
+        """Words shorter than min_word_len are filtered out."""
+        msgs = [ConversationMessage.from_user_text("ab cd ef gh ij kl mn op")]
+        topic = _derive_focus_topic(msgs, recent_n=5, top_n=3, min_word_len=4)
+        assert topic is None
+
+    def test_respects_recent_n(self):
+        """Only the last N user messages are considered."""
+        msgs = [
+            ConversationMessage.from_user_text("old_topic old_topic old_topic"),
+            ConversationMessage.from_user_text("new_topic new_topic new_topic"),
+        ]
+        topic = _derive_focus_topic(msgs, recent_n=1, top_n=1)
+        assert topic is not None
+        assert "new_topic" in topic
+        assert "old_topic" not in topic
+
+
+# ---------------------------------------------------------------------------
+# P1: LLMCompactor integration — auto-focus + sanitization
+# ---------------------------------------------------------------------------
+
+
+class TestCompactAutoFocusAndSanitization:
+    """Integration tests for the P1 helpers wired into compact()."""
+
+    @pytest.mark.asyncio
+    async def test_auto_derived_focus_topic_appears_in_prompt(self):
+        """When no manual focus is provided, the derived focus should appear in the prompt."""
+        aux = FakeAuxClient("## Goal\nStuff")
+        compactor = LLMCompactor(aux_client=aux, head_protect=2, tail_protect=4)
+        messages = _build_messages(20)
+        # Make some user messages mention a specific topic repeatedly.
+        for i in range(0, 20, 2):
+            messages[i] = ConversationMessage.from_user_text(
+                f"please help with authentication module {i}"
+            )
+        request = CompactionRequest(
+            messages=messages,
+            context_window=10_000,
+            target_tokens=2000,
+            # focus_topic=None — auto-derive
+        )
+        await compactor.compact(request)
+        # The aux client should have received a prompt containing the derived focus.
+        assert len(aux.calls) == 1
+        assert "FOCUS TOPIC:" in aux.calls[0]
+        assert "authentication" in aux.calls[0]
+
+    @pytest.mark.asyncio
+    async def test_manual_focus_overrides_auto_derivation(self):
+        """Manual focus_topic should win over auto-derivation."""
+        aux = FakeAuxClient("## Goal\nStuff")
+        compactor = LLMCompactor(aux_client=aux, head_protect=2, tail_protect=4)
+        messages = _build_messages(20)
+        # Make user messages mention "authentication" repeatedly so auto-derive
+        # would pick it. But the manual focus is "billing".
+        for i in range(0, 20, 2):
+            messages[i] = ConversationMessage.from_user_text(
+                f"please help with authentication module {i}"
+            )
+        request = CompactionRequest(
+            messages=messages,
+            context_window=10_000,
+            target_tokens=2000,
+            focus_topic="billing",
+        )
+        await compactor.compact(request)
+        # The FOCUS TOPIC line should say "billing" — manual focus wins.
+        focus_line = next(
+            (line for line in aux.calls[0].splitlines() if "FOCUS TOPIC:" in line),
+            "",
+        )
+        assert "billing" in focus_line
+        assert "authentication" not in focus_line
+
+    @pytest.mark.asyncio
+    async def test_orphaned_tool_use_dropped_after_compaction(self):
+        """An orphaned tool_use in the head (no matching result) should be
+        dropped by _sanitize_orphaned_tool_uses during compaction."""
+        from niaharness.engine.messages import ToolUseBlock
+        aux = FakeAuxClient("## Goal\nDone")
+        compactor = LLMCompactor(aux_client=aux, head_protect=2, tail_protect=2)
+        # Build messages where the head contains a tool_use with no matching
+        # tool_result (because the result was in the middle, which gets summarized).
+        messages = [
+            ConversationMessage.from_user_text("system prompt"),
+            ConversationMessage(
+                role="assistant",
+                content=[
+                    ToolUseBlock(id="orphan_call", name="bash", input={"cmd": "ls"}),
+                    TextBlock(text="running ls"),
+                ],
+            ),
+        ]
+        # Add a bunch of middle messages.
+        for i in range(20):
+            messages.append(ConversationMessage.from_user_text(f"middle {i}"))
+            messages.append(ConversationMessage(role="assistant", content=[TextBlock(text=f"r{i}")]))
+        # Tail.
+        messages.append(ConversationMessage.from_user_text("final question"))
+        messages.append(ConversationMessage(role="assistant", content=[TextBlock(text="final answer")]))
+
+        request = CompactionRequest(
+            messages=messages,
+            context_window=10_000,
+            target_tokens=500,
+        )
+        result = await compactor.compact(request)
+        assert result.success is True
+        # The orphaned tool_use should have been dropped.
+        # Scan all messages for any ToolUseBlock — none should have id="orphan_call".
+        from niaharness.engine.messages import ToolUseBlock as TUB
+        for msg in result.compacted_messages:
+            for block in msg.content:
+                if isinstance(block, TUB):
+                    assert block.id != "orphan_call", \
+                        "Orphaned tool_use was not sanitized out"
+
+    @pytest.mark.asyncio
+    async def test_text_flatten_path_also_sanitizes(self):
+        """The text-flatten fallback path should also run sanitization."""
+        from niaharness.engine.messages import ToolUseBlock
+        # No aux client → text-flatten fallback.
+        compactor = LLMCompactor(aux_client=None, head_protect=2, tail_protect=2)
+        messages = [
+            ConversationMessage.from_user_text("sys"),
+            ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id="orphan", name="bash", input={})],
+            ),
+        ]
+        for i in range(20):
+            messages.append(ConversationMessage.from_user_text(f"m{i}"))
+            messages.append(ConversationMessage(role="assistant", content=[TextBlock(text=f"r{i}")]))
+        messages.append(ConversationMessage.from_user_text("tail q"))
+        messages.append(ConversationMessage(role="assistant", content=[TextBlock(text="tail a")]))
+
+        request = CompactionRequest(
+            messages=messages,
+            context_window=10_000,
+            target_tokens=500,
+        )
+        result = await compactor.compact(request)
+        assert result.success is True
+        assert result.method == "text_flatten"
+        # Orphaned tool_use should have been dropped.
+        from niaharness.engine.messages import ToolUseBlock as TUB
+        for msg in result.compacted_messages:
+            for block in msg.content:
+                if isinstance(block, TUB):
+                    assert block.id != "orphan"
 
 
 if __name__ == "__main__":

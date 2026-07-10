@@ -109,6 +109,27 @@ MAX_INEFFECTIVE_COMPRESSIONS = 2  # >= 2 consecutive ineffective → skip
 _IMAGE_TOKEN_ESTIMATE = 1600
 _CHARS_PER_TOKEN = 4
 
+# P1: Historical media stripping — keep most recent N images, strip older ones.
+# Hermes keeps 3 by default; stripping all loses visual context the model
+# may still need (e.g. a screenshot the user shared 5 turns ago).
+IMAGE_KEEP_RECENT = 3
+
+# P1: Tool-call args truncation — when building the summarizer input, truncate
+# verbose tool_use.input JSON to this many chars so a single huge tool call
+# (e.g. a 50KB file write) doesn't blow the summarizer prompt budget.
+TOOL_ARGS_SUMMARY_MAX_CHARS = 800
+
+# P1: Adaptive head protection — never let head protection drop below this
+# many tokens. System-prompt-anchored first turns (long system messages or
+# pinned first user messages) must survive compaction.
+MIN_HEAD_PROTECT_TOKENS = 500
+
+# P1: Auto-focus-topic derivation — look at this many recent user messages
+# to derive a focus topic when none is provided manually.
+AUTO_FOCUS_RECENT_MESSAGES = 5
+AUTO_FOCUS_MIN_WORD_LEN = 4
+AUTO_FOCUS_TOP_N = 3
+
 
 # ---------------------------------------------------------------------------
 # Heading strings (historical / reference-only framing)
@@ -535,6 +556,424 @@ def _serialize_for_summary(messages: List[ConversationMessage]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# P1: Pre-compaction sanitization helpers
+#
+# These functions implement the missing context-engine features from the audit:
+#   - boundary alignment (don't split tool_use/tool_result pairs)
+#   - tool-pair sanitization (no orphaned tool_use after cuts)
+#   - adaptive head protection
+#   - image stripping that keeps recent images
+#   - tool-arg truncation for the summarizer input
+#   - auto focus-topic derivation
+# ---------------------------------------------------------------------------
+
+
+# Block types that count as "image" for stripping purposes.
+_IMAGE_BLOCK_TYPES = frozenset({"image", "image_url", "input_image", "input_image_url"})
+
+
+def _block_type(block: Any) -> str:
+    """Return the block's type tag, or '' if it has none."""
+    return getattr(block, "type", "") or ""
+
+
+def _has_tool_use(msg: ConversationMessage) -> bool:
+    """True if the message contains any ToolUseBlock."""
+    return any(_block_type(b) == "tool_use" for b in msg.content)
+
+
+def _has_tool_result(msg: ConversationMessage) -> bool:
+    """True if the message contains any ToolResultBlock."""
+    return any(_block_type(b) == "tool_result" for b in msg.content)
+
+
+def _has_image(msg: ConversationMessage) -> bool:
+    """True if the message contains any image-type content block."""
+    return any(_block_type(b) in _IMAGE_BLOCK_TYPES for b in msg.content)
+
+
+def _collect_tool_result_refs(messages: Sequence[ConversationMessage]) -> set[str]:
+    """Return the set of tool_use IDs that have a corresponding tool_result
+    block in `messages`.
+
+    Used to detect orphaned tool_use blocks (no matching result) after a cut.
+    Reads the `tool_use_id` field from each ToolResultBlock.
+    """
+    ids: set[str] = set()
+    for msg in messages:
+        for block in msg.content:
+            if _block_type(block) == "tool_result":
+                tid = getattr(block, "tool_use_id", None)
+                if tid:
+                    ids.add(tid)
+    return ids
+
+
+def _collect_tool_use_ids(messages: Sequence[ConversationMessage]) -> set[str]:
+    """Return the set of IDs emitted by tool_use blocks in `messages`.
+
+    Used to detect orphaned tool_result blocks (no matching tool_use) after
+    a cut. Reads the `id` field from each ToolUseBlock.
+    """
+    ids: set[str] = set()
+    for msg in messages:
+        for block in msg.content:
+            if _block_type(block) == "tool_use":
+                tid = getattr(block, "id", None)
+                if tid:
+                    ids.add(tid)
+    return ids
+
+
+def _align_split_boundary(
+    messages: Sequence[ConversationMessage],
+    head_count: int,
+    tail_count: int,
+) -> tuple[int, int]:
+    """Adjust head_count / tail_count so the head/middle and middle/tail
+    boundaries don't fall in the middle of a tool_use → tool_result pair.
+
+    A tool_use block in an assistant message must be followed by a matching
+    tool_result block in a subsequent user message. If the head ends with an
+    assistant message containing a tool_use whose result is in the middle,
+    the API will reject the request with HTTP 400.
+
+    Strategy:
+      - Head boundary: if messages[head_count-1] has a tool_use AND
+        messages[head_count] has a tool_result, extend head_count to include
+        the result (and any subsequent tool_use/result pair in the same
+        exchange). Conversely, if the boundary would orphan a tool_result
+        (result in head, use in middle), shrink head_count.
+      - Tail boundary: same logic applied to the middle/tail split.
+
+    Returns:
+        (adjusted_head_count, adjusted_tail_count). Always within [0, len(messages)].
+    """
+    n = len(messages)
+    head_count = max(0, min(head_count, n))
+    tail_count = max(0, min(tail_count, n - head_count))
+
+    if head_count == 0 or head_count >= n:
+        return head_count, tail_count
+
+    # Walk head_count forward past any tool_use → tool_result pair that
+    # would otherwise be split.
+    # An assistant message with a tool_use at the boundary needs its
+    # matching tool_result on the same side (head).
+    while head_count < n - tail_count:
+        last_head = messages[head_count - 1]
+        first_middle = messages[head_count]
+        # If the last head message has a tool_use AND the first middle
+        # message has a tool_result, we're splitting a pair — extend head.
+        if _has_tool_use(last_head) and _has_tool_result(first_middle):
+            head_count += 1
+            continue
+        # If the last head message has a tool_result AND the first middle
+        # message has a tool_use, the result is orphaned (no use in head).
+        # Shrink head to put both in the middle.
+        if _has_tool_result(last_head) and _has_tool_use(first_middle):
+            head_count -= 1
+            if head_count == 0:
+                break
+            continue
+        break
+
+    # Now align the tail boundary similarly. The middle ends at n - tail_count.
+    middle_end = n - tail_count
+    while tail_count > 0 and middle_end > head_count:
+        last_middle = messages[middle_end - 1]
+        first_tail = messages[middle_end]
+        if _has_tool_use(last_middle) and _has_tool_result(first_tail):
+            # Split pair — extend tail to include both.
+            tail_count += 1
+            middle_end = n - tail_count
+            continue
+        if _has_tool_result(last_middle) and _has_tool_use(first_tail):
+            # Orphaned result in middle — shrink tail.
+            tail_count -= 1
+            middle_end = n - tail_count
+            continue
+        break
+
+    # Final clamp.
+    tail_count = max(0, min(tail_count, n - head_count))
+    return head_count, tail_count
+
+
+def _sanitize_orphaned_tool_uses(
+    messages: List[ConversationMessage],
+) -> List[ConversationMessage]:
+    """Drop or stub tool_use blocks whose matching tool_result was cut.
+
+    After compaction, the head+summary+tail list may contain an assistant
+    message with a tool_use block whose tool_result was in the summarized
+    middle. Sending this to the API triggers HTTP 400 ("each tool_use must
+    have a corresponding tool_result").
+
+    This pass:
+      1. Collects all tool_use IDs (the `id` field of ToolUseBlock) and
+         all tool_result references (the `tool_use_id` field of ToolResultBlock).
+      2. For each tool_use without a matching tool_result, either:
+         a. Drops the tool_use block from its message (preferred), OR
+         b. If dropping would leave the message empty, replaces the entire
+            message with a short text note.
+      3. For each tool_result without a matching tool_use, drops the block
+         (the model can't see what it's a result of).
+
+    Returns a NEW list; the input is not mutated.
+    """
+    if not messages:
+        return list(messages)
+
+    # IDs emitted by tool_use blocks (the `id` field).
+    use_block_ids = _collect_tool_use_ids(messages)
+    # IDs referenced by tool_result blocks (the `tool_use_id` field).
+    result_ref_ids = _collect_tool_result_refs(messages)
+
+    # An ID is "matched" if both sides are present.
+    matched = use_block_ids & result_ref_ids
+    # orphan_use_ids = tool_use blocks whose result was cut.
+    orphan_use_ids = use_block_ids - matched
+    # orphan_result_ref_ids = tool_result blocks whose use was cut.
+    orphan_result_ref_ids = result_ref_ids - matched
+
+    if not orphan_use_ids and not orphan_result_ref_ids:
+        return list(messages)
+
+    out: List[ConversationMessage] = []
+    for msg in messages:
+        new_content = []
+        for block in msg.content:
+            bt = _block_type(block)
+            if bt == "tool_use":
+                bid = getattr(block, "id", None)
+                if bid in orphan_use_ids:
+                    # Drop the orphaned tool_use block.
+                    continue
+                new_content.append(block)
+            elif bt == "tool_result":
+                tid = getattr(block, "tool_use_id", None)
+                if tid in orphan_result_ref_ids:
+                    # Drop the orphaned tool_result block.
+                    continue
+                new_content.append(block)
+            else:
+                new_content.append(block)
+        if new_content:
+            out.append(ConversationMessage(role=msg.role, content=new_content))
+        else:
+            # Message became empty after dropping orphaned blocks — replace
+            # with a short text note so role alternation isn't broken.
+            out.append(ConversationMessage(
+                role=msg.role,
+                content=[TextBlock(text="[compacted — orphaned tool calls removed]")],
+            ))
+    return out
+
+
+def _protect_head_size(
+    messages: Sequence[ConversationMessage],
+    base_head_protect: int,
+    *,
+    min_tokens: int = MIN_HEAD_PROTECT_TOKENS,
+    content_threshold: int = 100,
+) -> int:
+    """Adaptively grow head_protect if the base value would prune
+    system-prompt-anchored first turns.
+
+    The base value (DEFAULT_HEAD_PROTECT = 2) protects the system prompt +
+    first user message. But if the first exchange is long (e.g. a long
+    system message, a pinned first user message with a big file, or a
+    long assistant reply with thinking blocks), 2 messages may be far less
+    than min_tokens worth of protection. This function grows head_protect
+    until the protected head has at least min_tokens worth of content,
+    without exceeding len(messages) // 2.
+
+    The growth only kicks in when the base head already has substantial
+    content (>= ``content_threshold`` tokens). This prevents growing
+    head_protect for tiny test conversations where the head is just
+    "hi" + "hello" — there's nothing worth protecting there, and growing
+    would shrink the middle below what's needed for a meaningful summary.
+    """
+    n = len(messages)
+    if n == 0:
+        return 0
+    head = max(1, min(base_head_protect, n))
+    head_tokens = sum(estimate_message_tokens(m) for m in messages[:head])
+    # If the base head has very little content, don't try to grow —
+    # there's nothing system-prompt-anchored to protect.
+    if head_tokens < content_threshold:
+        return head
+    # Don't grow beyond half the conversation — that would leave nothing
+    # to summarize.
+    max_head = max(1, n // 2)
+    while head < max_head and head_tokens < min_tokens:
+        head += 1
+        head_tokens += estimate_message_tokens(messages[head - 1])
+    return head
+
+
+def _strip_images_keep_recent(
+    messages: List[ConversationMessage],
+    keep_recent: int = IMAGE_KEEP_RECENT,
+) -> List[ConversationMessage]:
+    """Replace image blocks with a placeholder, EXCEPT for the most recent
+    `keep_recent` images which are preserved.
+
+    Older images consume ~1600 tokens each but the model has already
+    reasoned about them. The most recent images may still be needed for
+    the active task (e.g. a screenshot the user just shared).
+
+    Args:
+        messages: The middle slice (already head/tail protected).
+        keep_recent: Number of recent images to preserve. 0 = strip all
+            (matches the old behavior).
+
+    Returns:
+        A NEW list of messages with older images replaced by placeholders.
+    """
+    if not messages:
+        return list(messages)
+
+    # First pass: find the indices of messages containing images.
+    image_msg_indices = [
+        i for i, msg in enumerate(messages) if _has_image(msg)
+    ]
+    if not image_msg_indices:
+        return list(messages)
+
+    # The "recent" images are the last `keep_recent` image-bearing messages.
+    if keep_recent <= 0:
+        keep_set: set[int] = set()
+    else:
+        keep_set = set(image_msg_indices[-keep_recent:])
+
+    out: List[ConversationMessage] = []
+    for i, msg in enumerate(messages):
+        if i in keep_set:
+            out.append(msg)
+            continue
+        new_content = []
+        for block in msg.content:
+            if _block_type(block) in _IMAGE_BLOCK_TYPES:
+                new_content.append(TextBlock(text="[older image stripped to save context]"))
+            else:
+                new_content.append(block)
+        out.append(ConversationMessage(role=msg.role, content=new_content))
+    return out
+
+
+def _truncate_tool_args_for_summary(
+    msg: ConversationMessage,
+    *,
+    max_chars: int = TOOL_ARGS_SUMMARY_MAX_CHARS,
+) -> ConversationMessage:
+    """Return a copy of `msg` where each tool_use block's `input` JSON is
+    truncated to `max_chars` for the summarizer input.
+
+    The truncation only affects the summarizer's view of the message —
+    the original message list is not mutated. Tool calls with huge args
+    (e.g. a 50KB file_write) would otherwise blow the summarizer prompt
+    budget. We keep the first/last chars of the JSON so the LLM still sees
+    the tool name + the structure of the args.
+    """
+    new_content = []
+    for block in msg.content:
+        if _block_type(block) == "tool_use":
+            input_dict = getattr(block, "input", None) or {}
+            try:
+                args_json = json.dumps(input_dict, default=str, ensure_ascii=False)
+            except (TypeError, ValueError):
+                args_json = str(input_dict)
+            if len(args_json) > max_chars:
+                half = max_chars // 2
+                args_json = args_json[:half] + "...[truncated]..." + args_json[-half:]
+            # Build a shallow copy of the block with the truncated input
+            # represented as a text annotation. We can't mutate the
+            # ToolUseBlock.input directly because it's a typed dict; instead
+            # we replace the block with a TextBlock annotation that
+            # preserves the tool name + truncated args.
+            tool_name = getattr(block, "name", "unknown")
+            tool_id = getattr(block, "id", "")
+            new_content.append(TextBlock(
+                text=f"[tool_use {tool_name} ({tool_id}) args: {args_json}]"
+            ))
+        else:
+            new_content.append(block)
+    return ConversationMessage(role=msg.role, content=new_content)
+
+
+# Stop words for auto-focus-topic derivation. Minimal set — we want to
+# filter the most common English noise without accidentally dropping
+# domain-relevant words (e.g. "error" is a stop word in some lists but
+# is exactly what we want to surface as a focus topic here).
+_AUTO_FOCUS_STOP_WORDS = frozenset({
+    "the", "and", "for", "with", "this", "that", "from", "have", "has",
+    "are", "was", "were", "been", "being", "have", "had", "did", "does",
+    "done", "what", "when", "where", "which", "while", "your", "yours",
+    "theirs", "them", "they", "their", "there", "then", "than", "into",
+    "onto", "upon", "about", "above", "below", "after", "before", "just",
+    "also", "only", "very", "much", "more", "most", "some", "such", "any",
+    "all", "both", "each", "other", "another", "same", "different", "make",
+    "made", "like", "want", "need", "know", "think", "feel", "look", "take",
+    "get", "got", "put", "set", "let", "try", "use", "used", "uses", "using",
+    "you", "your", "i", "me", "my", "we", "us", "our", "it", "its", "is",
+    "to", "of", "in", "on", "at", "by", "or", "as", "be", "do", "if", "so",
+    "no", "not", "but", "can", "will", "would", "should", "could", "may",
+    "might", "must", "shall", "how", "why", "who", "whom",
+})
+
+
+def _derive_focus_topic(
+    messages: Sequence[ConversationMessage],
+    *,
+    recent_n: int = AUTO_FOCUS_RECENT_MESSAGES,
+    top_n: int = AUTO_FOCUS_TOP_N,
+    min_word_len: int = AUTO_FOCUS_MIN_WORD_LEN,
+) -> Optional[str]:
+    """Derive a focus topic from the most recent user messages.
+
+    Uses simple word-frequency extraction: take the last `recent_n` user
+    messages, tokenize, drop stop words + short tokens, count frequency,
+    and return the top `top_n` words joined with " / ".
+
+    Returns None if no suitable words are found (e.g. only stop words in
+    the recent messages). The caller should treat None as "no auto focus".
+    """
+    if not messages:
+        return None
+
+    # Collect the last `recent_n` user messages.
+    user_msgs = [m for m in messages if getattr(m, "role", "") == "user"]
+    if not user_msgs:
+        return None
+    recent = user_msgs[-recent_n:]
+
+    # Tokenize + count.
+    word_counts: dict[str, int] = {}
+    for msg in recent:
+        text = _extract_text(msg).lower()
+        # Split on non-alphanumeric (preserves identifiers like "auth_token").
+        for token in re.split(r"[^a-z0-9_]+", text):
+            if not token:
+                continue
+            if len(token) < min_word_len:
+                continue
+            if token in _AUTO_FOCUS_STOP_WORDS:
+                continue
+            word_counts[token] = word_counts.get(token, 0) + 1
+
+    if not word_counts:
+        return None
+
+    # Sort by frequency (desc), then alphabetically for determinism.
+    top = sorted(word_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]
+    if not top:
+        return None
+    return " / ".join(word for word, _ in top)
+
+
+# ---------------------------------------------------------------------------
 # LLM Compactor
 # ---------------------------------------------------------------------------
 
@@ -715,6 +1154,19 @@ class LLMCompactor:
                 method="none",
             )
 
+        # P1: auto-derive focus_topic from recent user messages when none
+        # was provided. This gives the LLM summarizer a hint about what
+        # the active task is, so it can preserve the right details.
+        # Manual focus (from /compress <topic>) always wins.
+        effective_focus = request.focus_topic
+        if effective_focus is None:
+            derived = _derive_focus_topic(request.messages)
+            if derived:
+                effective_focus = derived
+                # Mutate the request in-place so downstream _compact_with_llm
+                # sees the derived topic (it reads request.focus_topic).
+                request.focus_topic = derived
+
         # Try LLM summarization first (if not in cooldown and aux client available).
         if self._aux_client is not None and not self._is_in_cooldown():
             try:
@@ -880,7 +1332,12 @@ class LLMCompactor:
         self, request: CompactionRequest, tokens_before: int, target: int
     ) -> CompactionResult:
         """Compact using LLM summarization with the 13-section template."""
-        head_protect = min(self._head_protect, len(request.messages))
+        # P1: adaptive head protection — grow head_protect if the first
+        # exchange is short on tokens (system-prompt-anchored turns must
+        # survive compaction).
+        head_protect = _protect_head_size(
+            request.messages, self._head_protect
+        )
         tail_protect = min(self._tail_protect, len(request.messages) - head_protect)
 
         if tail_protect <= 0:
@@ -891,6 +1348,12 @@ class LLMCompactor:
                 tokens_after=tokens_before,
                 method="none",
             )
+
+        # P1: align the head/middle and middle/tail boundaries so we don't
+        # split a tool_use → tool_result pair (would cause API 400).
+        head_protect, tail_protect = _align_split_boundary(
+            request.messages, head_protect, tail_protect
+        )
 
         head = request.messages[:head_protect]
         middle = request.messages[head_protect:-tail_protect] if tail_protect > 0 else request.messages[head_protect:]
@@ -908,8 +1371,16 @@ class LLMCompactor:
         # Prune old tool results from middle (cheap, no LLM call).
         pruned_middle = self._prune_tool_results(middle)
 
-        # Strip images from old messages.
-        pruned_middle = self._strip_images(pruned_middle)
+        # P1: strip older images but keep the most recent few (vs old behavior
+        # of stripping ALL images, which lost visual context the model may
+        # still need).
+        pruned_middle = _strip_images_keep_recent(pruned_middle, IMAGE_KEEP_RECENT)
+
+        # P1: truncate verbose tool_use.input JSON so a single huge tool
+        # call doesn't blow the summarizer prompt budget. This only affects
+        # the summarizer's view; the actual conversation messages aren't
+        # mutated.
+        pruned_middle = [_truncate_tool_args_for_summary(m) for m in pruned_middle]
 
         # Build the structured LLM prompt.
         summary_budget = min(MAX_SUMMARY_TOKENS, target)
@@ -939,6 +1410,13 @@ class LLMCompactor:
             content=[TextBlock(text=summary_text)],
         )
         compacted = list(head) + [summary_message] + list(tail)
+
+        # P1: sanitize orphaned tool_use / tool_result blocks that may have
+        # been split by the head/middle/tail cut. Without this, the API
+        # rejects the request with HTTP 400 ("each tool_use must have a
+        # corresponding tool_result").
+        compacted = _sanitize_orphaned_tool_uses(compacted)
+
         tokens_after = sum(estimate_message_tokens(m) for m in compacted)
 
         return CompactionResult(
@@ -958,7 +1436,10 @@ class LLMCompactor:
         self, request: CompactionRequest, tokens_before: int, target: int
     ) -> CompactionResult:
         """Fallback: flatten middle messages into a text summary (no LLM call)."""
-        head_protect = min(self._head_protect, len(request.messages))
+        # P1: adaptive head protection + boundary alignment (same as LLM path).
+        head_protect = _protect_head_size(
+            request.messages, self._head_protect
+        )
         tail_protect = min(self._tail_protect, len(request.messages) - head_protect)
 
         if tail_protect <= 0:
@@ -969,6 +1450,10 @@ class LLMCompactor:
                 tokens_after=tokens_before,
                 method="none",
             )
+
+        head_protect, tail_protect = _align_split_boundary(
+            request.messages, head_protect, tail_protect
+        )
 
         head = request.messages[:head_protect]
         middle = request.messages[head_protect:-tail_protect] if tail_protect > 0 else request.messages[head_protect:]
@@ -1001,6 +1486,10 @@ class LLMCompactor:
             content=[TextBlock(text=summary)],
         )
         compacted = list(head) + [summary_message] + list(tail)
+
+        # P1: sanitize orphaned tool_use / tool_result blocks (same as LLM path).
+        compacted = _sanitize_orphaned_tool_uses(compacted)
+
         tokens_after = sum(estimate_message_tokens(m) for m in compacted)
 
         return CompactionResult(
@@ -1127,6 +1616,9 @@ def get_default_compactor() -> LLMCompactor:
 
 __all__ = [
     "AuxClientProtocol",
+    "AUTO_FOCUS_MIN_WORD_LEN",
+    "AUTO_FOCUS_RECENT_MESSAGES",
+    "AUTO_FOCUS_TOP_N",
     "CompactionRequest",
     "CompactionResult",
     "DEFAULT_HEAD_PROTECT",
@@ -1135,21 +1627,35 @@ __all__ = [
     "HISTORICAL_PENDING_ASKS_HEADING",
     "HISTORICAL_REMAINING_WORK_HEADING",
     "HISTORICAL_TASK_HEADING",
+    "IMAGE_KEEP_RECENT",
     "INEFFECTIVE_SAVINGS_PCT_THRESHOLD",
     "LLMCompactor",
     "LEGACY_SUMMARY_PREFIX",
     "MAX_INEFFECTIVE_COMPRESSIONS",
     "MAX_SUMMARY_TOKENS",
+    "MIN_HEAD_PROTECT_TOKENS",
     "STANDARD_COOLDOWN_SECONDS",
     "SUMMARY_FAILURE_COOLDOWN_SECONDS",
     "SUMMARY_PREFIX",
     "TRANSIENT_COOLDOWN_SECONDS",
+    "TOOL_ARGS_SUMMARY_MAX_CHARS",
+    "_align_split_boundary",
     "_build_summary_prompt",
     "_build_summarizer_preamble",
     "_build_template_sections",
     "_build_temporal_anchoring_rule",
+    "_collect_tool_result_refs",
+    "_collect_tool_use_ids",
+    "_derive_focus_topic",
+    "_has_image",
+    "_has_tool_result",
+    "_has_tool_use",
+    "_protect_head_size",
+    "_sanitize_orphaned_tool_uses",
     "_serialize_for_summary",
+    "_strip_images_keep_recent",
     "_strip_summary_prefix",
+    "_truncate_tool_args_for_summary",
     "get_default_compactor",
     "redact_sensitive_text",
 ]
