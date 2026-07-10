@@ -337,6 +337,26 @@ from niaharness.auxiliary.chain import (  # noqa: E402
     try_payment_fallback,
 )
 
+# Re-export P1 extension functions
+from niaharness.auxiliary.extensions import (  # noqa: E402
+    ADDITIONAL_PROVIDER_ENV_VARS,
+    VisionBackend,
+    call_llm,
+    cleanup_stale_async_clients,
+    complete_stream,
+    complete_with_tools,
+    detect_additional_providers,
+    get_available_vision_backends,
+    get_cached_client_count,
+    get_per_task_defaults,
+    get_runtime_main,
+    refresh_credentials_for_client,
+    reset_runtime_main,
+    resolve_vision_provider_client,
+    set_runtime_main,
+    shutdown_cached_clients,
+)
+
 
 __all__ = [
     "AuxConfig",
@@ -354,4 +374,21 @@ __all__ = [
     "is_provider_unhealthy",
     "try_payment_fallback",
     "reset_unhealthy_cache",
+    # P1 extensions
+    "ADDITIONAL_PROVIDER_ENV_VARS",
+    "VisionBackend",
+    "call_llm",
+    "cleanup_stale_async_clients",
+    "complete_stream",
+    "complete_with_tools",
+    "detect_additional_providers",
+    "get_available_vision_backends",
+    "get_cached_client_count",
+    "get_per_task_defaults",
+    "get_runtime_main",
+    "refresh_credentials_for_client",
+    "reset_runtime_main",
+    "resolve_vision_provider_client",
+    "set_runtime_main",
+    "shutdown_cached_clients",
 ]
