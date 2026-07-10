@@ -1019,6 +1019,238 @@ class SessionDB:
                 except sqlite3.OperationalError:
                     pass
 
+    # ------------------------------------------------------------------
+    # Compaction cooldown persistence (durable across restarts)
+    # ------------------------------------------------------------------
+
+    def record_compression_failure_cooldown(
+        self,
+        session_id: str,
+        cooldown_until: float,
+        error: Optional[str] = None,
+    ) -> None:
+        """Persist a compaction failure cooldown for a session.
+
+        Args:
+            session_id: The session that hit a compaction failure.
+            cooldown_until: Wall-clock epoch seconds when the cooldown expires.
+            error: Optional error message describing the failure.
+        """
+        import time as _time
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE sessions SET "
+                "  compression_failure_cooldown_until = ?, "
+                "  compression_failure_error = ? "
+                "WHERE id = ?",
+                (cooldown_until, error, session_id),
+            )
+            conn.commit()
+
+        try:
+            self._execute_write(_do)
+        except Exception as exc:
+            logger.debug("record_compression_failure_cooldown failed: %s", exc)
+
+    def get_compression_failure_cooldown(
+        self,
+        session_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Return the active cooldown for a session, or None if expired/missing.
+
+        Returns:
+            Dict with ``cooldown_until``, ``remaining_seconds``, ``error``
+            if an active cooldown exists; ``None`` otherwise.
+        """
+        import time as _time
+
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT compression_failure_cooldown_until, compression_failure_error "
+                    "FROM sessions WHERE id = ?",
+                    (session_id,),
+                ).fetchone()
+        except Exception as exc:
+            logger.debug("get_compression_failure_cooldown failed: %s", exc)
+            return None
+
+        if row is None:
+            return None
+
+        cooldown_until = row[0] if row[0] else 0
+        error = row[1] if len(row) > 1 else None
+
+        if not cooldown_until:
+            return None
+
+        now = _time.time()
+        remaining = cooldown_until - now
+        if remaining <= 0:
+            return None
+
+        return {
+            "cooldown_until": cooldown_until,
+            "remaining_seconds": remaining,
+            "error": error,
+        }
+
+    def clear_compression_failure_cooldown(self, session_id: str) -> None:
+        """Clear the compaction failure cooldown for a session."""
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE sessions SET "
+                "  compression_failure_cooldown_until = NULL, "
+                "  compression_failure_error = NULL "
+                "WHERE id = ?",
+                (session_id,),
+            )
+            conn.commit()
+
+        try:
+            self._execute_write(_do)
+        except Exception as exc:
+            logger.debug("clear_compression_failure_cooldown failed: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Compaction locks (cross-process mutex via SQLite)
+    # ------------------------------------------------------------------
+
+    def try_acquire_compression_lock(
+        self,
+        session_id: str,
+        holder: str,
+        ttl_seconds: float = 300.0,
+    ) -> bool:
+        """Try to acquire a compression lock for a session.
+
+        Args:
+            session_id: The session to lock.
+            holder: A unique identifier for the lock holder (e.g. PID + thread ID).
+            ttl_seconds: Lock auto-expires after this many seconds.
+
+        Returns:
+            True if the lock was acquired, False if another holder has it.
+        """
+        import time as _time
+
+        now = _time.time()
+        expires_at = now + ttl_seconds
+
+        def _do(conn: sqlite3.Connection) -> bool:
+            # Check for existing lock.
+            row = conn.execute(
+                "SELECT holder, expires_at FROM compression_locks WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is not None:
+                existing_holder, existing_expires = row[0], row[1]
+                if existing_expires and existing_expires > now and existing_holder != holder:
+                    return False  # Active lock by another holder.
+                # Expired or same holder — overwrite.
+                conn.execute(
+                    "UPDATE compression_locks SET holder = ?, acquired_at = ?, expires_at = ? "
+                    "WHERE session_id = ?",
+                    (holder, now, expires_at, session_id),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO compression_locks (session_id, holder, acquired_at, expires_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (session_id, holder, now, expires_at),
+                )
+            conn.commit()
+            return True
+
+        try:
+            return self._execute_write(_do)
+        except Exception as exc:
+            logger.debug("try_acquire_compression_lock failed: %s", exc)
+            return False
+
+    def refresh_compression_lock(
+        self,
+        session_id: str,
+        holder: str,
+        ttl_seconds: float = 300.0,
+    ) -> bool:
+        """Refresh an existing compression lock (extend its TTL).
+
+        Returns True if the lock was refreshed, False if it was taken by another holder.
+        """
+        import time as _time
+
+        now = _time.time()
+        expires_at = now + ttl_seconds
+
+        def _do(conn: sqlite3.Connection) -> bool:
+            row = conn.execute(
+                "SELECT holder FROM compression_locks WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None or row[0] != holder:
+                return False
+            conn.execute(
+                "UPDATE compression_locks SET acquired_at = ?, expires_at = ? "
+                "WHERE session_id = ? AND holder = ?",
+                (now, expires_at, session_id, holder),
+            )
+            conn.commit()
+            return True
+
+        try:
+            return self._execute_write(_do)
+        except Exception as exc:
+            logger.debug("refresh_compression_lock failed: %s", exc)
+            return False
+
+    def release_compression_lock(self, session_id: str) -> None:
+        """Release the compression lock for a session."""
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "DELETE FROM compression_locks WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.commit()
+
+        try:
+            self._execute_write(_do)
+        except Exception as exc:
+            logger.debug("release_compression_lock failed: %s", exc)
+
+    def get_compression_lock_holder(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Return the current lock holder for a session, or None.
+
+        Returns:
+            Dict with ``holder``, ``acquired_at``, ``expires_at`` if an
+            active lock exists; ``None`` otherwise.
+        """
+        import time as _time
+
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT holder, acquired_at, expires_at "
+                    "FROM compression_locks WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+        except Exception:
+            return None
+
+        if row is None:
+            return None
+
+        holder, acquired_at, expires_at = row[0], row[1], row[2]
+        if expires_at and expires_at <= _time.time():
+            return None  # Expired.
+
+        return {
+            "holder": holder,
+            "acquired_at": acquired_at,
+            "expires_at": expires_at,
+        }
+
 
 # ---------------------------------------------------------------------------
 # Backward-compatible module-level API

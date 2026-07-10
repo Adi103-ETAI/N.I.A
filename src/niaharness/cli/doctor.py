@@ -592,17 +592,18 @@ def _check_config(fix: bool, result: DoctorResult, lines: List[str]) -> None:
             lines.append(_check_warn(f"Config not found: {config_path}"))
             result.issues.append("Create config file")
 
-    # Check .env.
-    from niaharness.prompts.soul import get_nia_home
-    env_path = get_nia_home() / ".env"
+    # Check .env — verify the file exists AND the keys are loaded into os.environ.
+    from niaharness.config.env_loader import get_env_path, load_nia_env
+    env_path = get_env_path()
     if env_path.exists():
-        # Check if any provider env hints are present.
-        content = env_path.read_text(encoding="utf-8")
-        has_provider = any(hint in content for hint in _PROVIDER_ENV_HINTS)
+        # Force-reload to pick up any changes since startup.
+        load_nia_env()
+        # Check if any provider env hints are present in os.environ (not just the file).
+        has_provider = any(os.environ.get(hint) for hint in _PROVIDER_ENV_HINTS)
         if has_provider:
-            lines.append(_check_ok(".env: found with provider configuration"))
+            lines.append(_check_ok(f".env: loaded from {env_path} with provider keys active"))
         else:
-            lines.append(_check_warn(".env: found but no provider API keys detected"))
+            lines.append(_check_warn(".env: file exists but no provider API keys found in environment"))
     else:
         if fix:
             try:

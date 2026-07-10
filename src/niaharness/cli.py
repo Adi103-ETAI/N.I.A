@@ -7,6 +7,15 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+# Load ~/.nia/.env BEFORE anything else — this is the single most critical
+# startup step. Without it, API keys saved by `nia setup` never reach
+# os.environ and every provider probe / API call fails with "no key".
+try:
+    from niaharness.config.env_loader import load_nia_env
+    load_nia_env()
+except Exception:
+    pass  # Best-effort — don't crash if .env doesn't exist yet.
+
 import typer
 
 app = typer.Typer(
@@ -82,21 +91,16 @@ def setup_command() -> None:
             env_var = "OPENAI_API_KEY"
             provider = "OpenAI"
         else:
-            env_var = "ANTHROPIC_API_KEY"
+            # Generic — ask which env var to use.
+            env_var = "OPENAI_API_KEY"
             provider = "auto-detect"
 
-        # Write to ~/.nia/.env
-        from niaharness.prompts.soul import get_nia_home
-        env_path = get_nia_home() / ".env"
-        env_path.parent.mkdir(parents=True, exist_ok=True)
-        existing = env_path.read_text() if env_path.exists() else ""
-        # Remove old key if present.
-        lines = [l for l in existing.splitlines() if not l.startswith(f"{env_var}=")]
-        lines.append(f"{env_var}={key}")
-        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        import os as _os
-        _os.chmod(str(env_path), 0o600)
+        # Save to ~/.nia/.env using the env_loader (also sets in os.environ immediately).
+        from niaharness.config.env_loader import save_env_value, get_env_path
+        save_env_value(env_var, key)
+        env_path = get_env_path()
         print(f"\n  ✓ API key saved to {env_path} ({provider})")
+        print(f"  ✓ Available in this session immediately (no restart needed)")
     else:
         print("  ⚠ Skipped — set ANTHROPIC_API_KEY or OPENAI_API_KEY manually later.")
     print()
