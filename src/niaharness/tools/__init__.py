@@ -60,6 +60,22 @@ from niaharness.tools.nia_memory_tool import NiaMemoryTool
 from niaharness.tools.nia_context_tool import NiaContextTool
 from niaharness.tools.nia_voice_tool import NiaVoiceTool
 from niaharness.tools.nia_session_tool import NiaSessionTool
+# P1: Missing tools from AUDIT.md.
+from niaharness.tools.missing_tools import (
+    ClarifyTool,
+    CloseTerminalTool,
+    MemoryBatchTool,
+    ProjectCreateTool,
+    ProjectListTool,
+    ProjectSwitchTool,
+    ReadTerminalTool,
+    SearchFilesTool,
+    TextToSpeechTool,
+    VideoAnalyzeTool,
+    VideoGenerateTool,
+    WebExtractTool,
+    XSearchTool,
+)
 
 
 def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
@@ -124,6 +140,20 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         RunCodeTool(),
         SpeakTool(),
         ExecuteCodeTool(),
+        # P1: Missing tools from AUDIT.md.
+        WebExtractTool(),
+        VideoAnalyzeTool(),
+        VideoGenerateTool(),
+        ClarifyTool(),
+        ProjectCreateTool(),
+        ProjectListTool(),
+        ProjectSwitchTool(),
+        MemoryBatchTool(),
+        SearchFilesTool(),
+        ReadTerminalTool(),
+        CloseTerminalTool(),
+        XSearchTool(),
+        TextToSpeechTool(),
     ):
         registry.register(tool)
     if mcp_manager is not None:
