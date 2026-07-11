@@ -232,6 +232,11 @@ def upsert_cron_job(job: dict[str, Any]) -> dict[str, Any]:
     ``created_at``, and ``last_run=None``.  On update, mutable fields are
     overwritten but ``enabled``, ``last_run``, ``last_status`` are preserved
     unless explicitly set in ``job``.
+
+    P1: now calls ``check_gateway_lifecycle`` to reject jobs whose prompt
+    or script contains a gateway-lifecycle command (restart/stop/kill).
+    This prevents agent-driven SIGTERM-respawn loops under launchd/systemd
+    supervision.
     """
     name = job.get("name")
     if not name:
@@ -239,6 +244,31 @@ def upsert_cron_job(job: dict[str, Any]) -> dict[str, Any]:
     schedule = job.get("schedule")
     if not validate_cron_expression(schedule or ""):
         raise ValueError(f"invalid cron expression: {schedule!r}")
+
+    # P1: Gateway lifecycle guard — reject jobs that would restart/stop
+    # the gateway (prevents SIGTERM-respawn loops).
+    try:
+        from niaharness.cron.lifecycle_guard import check_gateway_lifecycle
+        check_gateway_lifecycle(
+            prompt=job.get("prompt") or job.get("command"),
+            script=job.get("script"),
+        )
+    except RuntimeError:
+        raise  # Re-raise safety blocks (GatewayLifecycleBlocked is a ValueError).
+    except ValueError:
+        raise  # Re-raise safety blocks (GatewayLifecycleBlocked is a ValueError).
+    except Exception:
+        pass  # Best-effort — don't block job creation on guard import failure.
+
+    # P1: Credential exfil guard — reject jobs with an unsafe
+    # provider/base_url pair that could exfiltrate a stored credential.
+    try:
+        from niaharness.cron.credential_guard import guard_job_credential_exfil
+        guard_job_credential_exfil(job)
+    except RuntimeError:
+        raise  # Re-raise the safety block.
+    except Exception:
+        pass  # Best-effort — don't block on guard import failure.
 
     jobs = load_cron_jobs()
     existing_idx = next((i for i, j in enumerate(jobs) if j.get("name") == name), None)
