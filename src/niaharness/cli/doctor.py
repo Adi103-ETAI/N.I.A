@@ -748,6 +748,37 @@ def run_doctor(
     lines.append(_section("External Tools"))
     _check_external_tools(lines)
 
+    # P1: Extension checks (10 new sections).
+    try:
+        from niaharness.cli.doctor_extensions import EXTENSION_SECTIONS, OK, WARN, FAIL, INFO
+
+        _status_icons = {
+            OK: "✓",
+            WARN: "⚠",
+            FAIL: "✗",
+            INFO: "ℹ",
+        }
+        for section_title, check_fn in EXTENSION_SECTIONS:
+            lines.append(_section(section_title))
+            try:
+                for status, message, detail in check_fn():
+                    icon = _status_icons.get(status, "?")
+                    line = f"  {icon} {message}"
+                    if detail:
+                        line += f" ({detail})"
+                    lines.append(line)
+                    if status == OK:
+                        result.checks_passed += 1
+                    elif status == WARN:
+                        result.checks_passed += 1  # warnings don't count as failures
+                    elif status == FAIL:
+                        result.checks_failed += 1
+                        result.issues.append(message)
+            except Exception as exc:
+                lines.append(_check_warn(f"{section_title} check failed: {exc}"))
+    except Exception:
+        pass  # Best-effort — don't break doctor on extension import failure.
+
     # Summary.
     lines.append(_section("Summary"))
     total = result.total_issues

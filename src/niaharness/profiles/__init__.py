@@ -300,15 +300,36 @@ def get_profile_cron_dir(name: Optional[str] = None) -> Path:
     return d
 
 
+# P1: Re-export profile extensions.
+from niaharness.profiles.extensions import (  # noqa: E402
+    backfill_profile_envs,
+    export_profile,
+    get_distribution_meta,
+    has_bundled_skills_opt_out,
+    import_profile,
+    maybe_register_gateway_service,
+    maybe_unregister_gateway_service,
+    profiles_to_serve,
+    read_profile_meta,
+    rename_profile,
+    seed_profile_skills,
+    set_distribution_meta,
+    write_profile_meta,
+)
+
+
 __all__ = [
     "ACTIVE_PROFILE_FILE",
     "DEFAULT_PROFILE",
     "PROFILES_DIR",
     "Profile",
+    "backfill_profile_envs",
     "create_profile",
     "delete_profile",
+    "export_profile",
     "get_active_profile",
     "get_active_profile_name",
+    "get_distribution_meta",
     "get_profile",
     "get_profile_credentials_dir",
     "get_profile_cron_dir",
@@ -316,6 +337,16 @@ __all__ = [
     "get_profile_sessions_db_path",
     "get_profile_skills_dir",
     "get_profile_soul_md_path",
+    "has_bundled_skills_opt_out",
+    "import_profile",
     "list_profiles",
+    "maybe_register_gateway_service",
+    "maybe_unregister_gateway_service",
+    "profiles_to_serve",
+    "read_profile_meta",
+    "rename_profile",
+    "seed_profile_skills",
+    "set_distribution_meta",
     "switch_profile",
+    "write_profile_meta",
 ]

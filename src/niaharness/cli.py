@@ -453,6 +453,65 @@ def profile_alias(
         raise typer.Exit(1)
 
 
+@profile_app.command("export")
+def profile_export(
+    name: str = typer.Argument(..., help="Profile name to export"),
+    output: str = typer.Argument(..., help="Output .tar.gz file path"),
+) -> None:
+    """Export a profile to a tar.gz archive (excludes credentials)."""
+    from niaharness.profiles import export_profile
+    try:
+        path = export_profile(name, output)
+        print(f"✓ Exported profile '{name}' to {path}")
+        print("  (Credentials and runtime state excluded — safe to share.)")
+    except Exception as exc:
+        print(f"✗ Failed: {exc}", file=sys.stderr)
+        raise typer.Exit(1)
+
+
+@profile_app.command("import")
+def profile_import(
+    archive: str = typer.Argument(..., help="Path to .tar.gz archive"),
+    name: str = typer.Option(None, "--name", help="Profile name (inferred from archive if not set)"),
+) -> None:
+    """Import a profile from a tar.gz archive."""
+    from niaharness.profiles import import_profile
+    try:
+        path = import_profile(archive, name=name)
+        print(f"✓ Imported profile to {path}")
+    except Exception as exc:
+        print(f"✗ Failed: {exc}", file=sys.stderr)
+        raise typer.Exit(1)
+
+
+@profile_app.command("rename")
+def profile_rename(
+    old_name: str = typer.Argument(..., help="Current profile name"),
+    new_name: str = typer.Argument(..., help="New profile name"),
+) -> None:
+    """Rename a profile."""
+    from niaharness.profiles import rename_profile
+    try:
+        path = rename_profile(old_name, new_name)
+        print(f"✓ Renamed '{old_name}' → '{new_name}' ({path})")
+    except Exception as exc:
+        print(f"✗ Failed: {exc}", file=sys.stderr)
+        raise typer.Exit(1)
+
+
+@profile_app.command("backfill-envs")
+def profile_backfill_envs() -> None:
+    """Give every named profile that lacks a .env file one (migration helper)."""
+    from niaharness.profiles import backfill_profile_envs
+    backfilled = backfill_profile_envs()
+    if backfilled:
+        print(f"✓ Backfilled .env for {len(backfilled)} profile(s):")
+        for name in backfilled:
+            print(f"  - {name}")
+    else:
+        print("All profiles already have a .env file (nothing to backfill).")
+
+
 # ---- mcp subcommands ----
 
 @mcp_app.command("list")
