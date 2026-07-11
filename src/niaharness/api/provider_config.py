@@ -536,6 +536,29 @@ def get_provider_config(
 
     config = detect_provider_from_url(resolved_base_url)
 
+    # P1: Also check the new provider profiles for auto-detection.
+    try:
+        from niaharness.api.provider_profiles import detect_provider_from_url as _detect_profile
+        profile = _detect_profile(resolved_base_url)
+        if profile is not None and profile.name not in (
+            "openai", "azure-openai", "gemini", "ollama", "bedrock",
+            "vertex", "mistral", "groq", "together", "deepseek",
+            "fireworks", "nvidia-nim", "cerebras", "openrouter", "local",
+        ):
+            # This is a new provider — update the config.
+            config.provider_name = profile.name
+            if profile.base_url and not base_url:
+                config.base_url = profile.base_url
+            # Resolve API key from the profile's env vars.
+            if not config.api_key:
+                for env_var in profile.env_vars:
+                    key = os.environ.get(env_var, "").strip()
+                    if key:
+                        config.api_key = key
+                        break
+    except Exception:
+        pass  # Best-effort — don't break provider detection on profile import failure.
+
     # Override with explicit parameters
     if model:
         config.model = model
