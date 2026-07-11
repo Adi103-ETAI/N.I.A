@@ -1,4 +1,9 @@
-"""NIA TUI Gateway server — JSON-RPC dispatcher with 117 methods.
+#!/usr/bin/env python3
+"""Generate the rewritten tui_gateway/server.py with real implementations."""
+
+import textwrap
+
+OUTPUT = r'''"""NIA TUI Gateway server — JSON-RPC dispatcher with 117 methods.
 
 Ported from Hermes Agent's tui_gateway/server.py (13,897 LOC), adapted to
 NIA's infrastructure (QueryEngine, SessionDB, ToolRegistry, Commands,
@@ -3035,3 +3040,12 @@ __all__ = [
     "_image_meta",
     "_save_cfg_key",
 ]
+'''
+
+with open("/home/z/my-project/nia-insight/src/niaharness/tui_gateway/server.py", "w") as f:
+    f.write(OUTPUT)
+
+# Count lines
+with open("/home/z/my-project/nia-insight/src/niaharness/tui_gateway/server.py") as f:
+    lines = f.readlines()
+print(f"server.py rewritten: {len(lines)} lines")
