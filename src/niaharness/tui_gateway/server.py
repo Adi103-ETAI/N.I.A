@@ -487,6 +487,51 @@ def _shutdown_sessions() -> None:
         _close_session_by_id(sid, end_reason="shutdown")
 
 
+# ---------------------------------------------------------------------------
+# Session cap enforcement (ported from Hermes lines 784-862)
+# ---------------------------------------------------------------------------
+
+_MAX_LIVE_SESSIONS = int(os.environ.get("NIA_MAX_LIVE_SESSIONS", "10") or "10")
+_IDLE_REAP_GRACE_S = float(os.environ.get("NIA_IDLE_REAP_GRACE_S", "300") or "300")
+
+
+def _session_is_evictable(sid: str, session: dict, now: float) -> bool:
+    """True if a session is idle long enough to be reaped."""
+    if session.get("running"):
+        return False
+    if session.get("_finalized"):
+        return False
+    last_active = float(session.get("last_active") or session.get("created_at") or now)
+    return (now - last_active) > _IDLE_REAP_GRACE_S
+
+
+def _session_is_lru_evictable(sid: str, session: dict) -> bool:
+    """True if a session can be LRU-evicted to enforce the session cap."""
+    return not session.get("running") and not session.get("_finalized")
+
+
+def _enforce_session_cap() -> None:
+    """Evict the oldest idle sessions to stay under the cap."""
+    with _sessions_lock:
+        if len(_sessions) <= _MAX_LIVE_SESSIONS:
+            return
+        # Sort by last_active ascending — oldest first.
+        candidates = sorted(
+            ((sid, s) for sid, s in _sessions.items() if _session_is_lru_evictable(sid, s)),
+            key=lambda x: float(x[1].get("last_active") or x[1].get("created_at") or 0),
+        )
+        excess = len(_sessions) - _MAX_LIVE_SESSIONS
+        for sid, _ in candidates[:excess]:
+            _close_session_by_id(sid, end_reason="session_cap")
+
+
+def _schedule_session_cap_enforcement() -> None:
+    """Trim detached idle sessions over the cap (deferred)."""
+    timer = threading.Timer(0.1, _enforce_session_cap)
+    timer.daemon = True
+    timer.start()
+
+
 def _notify_session_boundary(event_type: str, session_id: str | None) -> None:
     try:
         from niaharness.hooks import HookEvent, HookExecutor
@@ -1010,11 +1055,20 @@ def _ensure_session_db_row(session: dict) -> None:
 
 @method("session.create")
 def _session_create(rid, params):
-    """Create a new TUI session with full lifecycle management."""
+    """Create a new TUI session with full lifecycle management.
+
+    Deep-ported from Hermes line 4975. Handles:
+    - Seed history coercion (_coerce_seed_history).
+    - Profile-scoped home (profile_home for app-global remote mode).
+    - Per-session model/provider/reasoning/fast overrides from the desktop composer.
+    - Lazy agent build (returns immediately, builds on a timer).
+    - Active-session slot claim.
+    - Session cap enforcement (trim detached idle sessions over the cap).
+    """
     sid = uuid4().hex[:8]
     key = _new_session_key()
     cols = int(params.get("cols", 80))
-    history = params.get("messages") or []
+    history = _coerce_seed_history(params.get("messages"))
     title = str(params.get("title") or "").strip()
     parent_session_id = str(params.get("parent_session_id") or "").strip() or None
     source = str(params.get("source") or "tui").strip() or "tui"
@@ -1027,6 +1081,10 @@ def _session_create(rid, params):
         explicit_cwd = False
     resolved_cwd = _completion_cwd(params)
 
+    # Profile-scoped home (app-global remote mode).
+    profile = (params.get("profile") or "").strip() or None
+    profile_home = _profile_home(profile)
+
     # Per-session model override (from desktop composer pick).
     create_model = str(params.get("model") or "").strip()
     session_model_override = (
@@ -1034,6 +1092,19 @@ def _session_create(rid, params):
         if create_model
         else None
     )
+
+    # Reasoning effort override.
+    create_reasoning_override = None
+    effort = str(params.get("reasoning_effort") or "").strip()
+    if effort:
+        try:
+            # Store as-is — NIA may not have parse_reasoning_effort yet.
+            create_reasoning_override = {"effort": effort.lower(), "enabled": effort.lower() != "none"}
+        except Exception:
+            create_reasoning_override = None
+
+    # Service tier (fast) override.
+    create_service_tier_override = "priority" if params.get("fast") else None
 
     _enable_gateway_prompts()
 
@@ -1045,52 +1116,71 @@ def _session_create(rid, params):
             "agent": None,
             "agent_error": None,
             "agent_ready": ready,
+            "agent_build_started": False,
+            "active_session_lease": None,
             "attached_images": [],
-            "close_on_disconnect": bool(params.get("close_on_disconnect", False)),
+            "close_on_disconnect": _is_truthy(params.get("close_on_disconnect", False)),
             "cols": cols,
             "created_at": now,
+            "cwd": resolved_cwd,
+            "display_history_prefix": [],
+            "edit_snapshots": {},
             "explicit_cwd": explicit_cwd,
             "history": history,
             "history_lock": threading.Lock(),
             "history_version": 0,
-            "image_counter": 0,
-            "cwd": resolved_cwd,
             "id": sid,
+            "image_counter": 0,
             "inflight_turn": None,
             "last_active": now,
             "model_override": session_model_override,
+            "create_reasoning_override": create_reasoning_override,
+            "create_service_tier_override": create_service_tier_override,
             "parent_session_id": parent_session_id,
             "pending_title": title or None,
+            "profile_home": str(profile_home) if profile_home is not None else None,
             "running": False,
             "session_key": key,
             "show_reasoning": _load_show_reasoning(),
-            "source": source,
             "slash_worker": None,
+            "source": source,
             "tool_progress_mode": _load_tool_progress_mode(),
             "tool_started_at": {},
             "transport": current_transport() or _stdio_transport,
             "queued_prompt": None,
         }
+        _register_session_cwd(_sessions[sid])
 
-    # Claim the active session slot.
-    _claim_active_session_slot(sid, _sessions[sid])
+    # NOTE: we intentionally do NOT persist a DB row here. Every TUI/desktop
+    # launch opens a session just to paint the composer, so eagerly creating
+    # a row left an "Untitled" empty session behind for every launch the user
+    # never typed into. The row is created lazily on the first prompt.
 
-    # Return immediately so the TUI can paint, then build the agent.
-    _start_agent_build(sid, _sessions[sid])
+    # Return the lightweight session immediately so Ink can paint the composer,
+    # then build the real agent just after this response is flushed.
+    _schedule_agent_build(sid)
+    _schedule_session_cap_enforcement()
+
+    # Build the info response.
+    info_model = session_model_override.get("model") if session_model_override else _resolve_model()
+    info: dict = {
+        "model": info_model,
+        "tools": {},
+        "skills": {},
+        "cwd": resolved_cwd,
+        "branch": _git_branch_for_cwd(resolved_cwd),
+        "lazy": True,
+        "profile_name": _current_profile_name(),
+    }
+    if session_model_override and session_model_override.get("provider"):
+        info["provider"] = session_model_override["provider"]
 
     return _ok(rid, {
         "session_id": sid,
         "stored_session_id": key,
         "message_count": len(history),
-        "messages": history,
-        "info": {
-            "model": session_model_override.get("model") if session_model_override else _resolve_model(),
-            "tools": {},
-            "skills": {},
-            "cwd": resolved_cwd,
-            "branch": git_probe.branch(resolved_cwd),
-            "lazy": True,
-        },
+        "messages": _history_to_messages(history),
+        "info": info,
     })
 
 
@@ -1542,12 +1632,27 @@ def _session_activate(rid, params):
 
 @method("session.delete")
 def _session_delete(rid, params):
+    """Delete a session — close in-memory + delete from DB.
+
+    Deep-ported from Hermes line 5933. Closes the live session, then
+    deletes the DB row. If the DB supports ``delete_session_if_empty``,
+    only deletes when there are no messages (so accidental deletes of
+    active sessions don't lose history).
+    """
     sid = params.get("session_id", "")
+    session = _sessions.get(sid)
+    if session is not None:
+        if session.get("running"):
+            return _err(rid, 4009, "session busy — /interrupt the current turn before /delete")
     _close_session_by_id(sid, end_reason="deleted")
     db = _get_db()
     if db:
         try:
-            db.delete_session(sid)
+            key = session.get("session_key", sid) if session else sid
+            if hasattr(db, "delete_session_if_empty"):
+                db.delete_session_if_empty(key)
+            else:
+                db.delete_session(key)
         except Exception:
             pass
     return _ok(rid, {"deleted": sid})
@@ -1643,15 +1748,24 @@ def _session_title(rid, params):
 
 @method("session.status")
 def _session_status(rid, params):
+    """Return live session status with inflight + running info.
+
+    Deep-ported from Hermes line 7560. Uses _session_live_status for
+    the status field (waiting/starting/working/idle).
+    """
     sid = params.get("session_id", "")
     session = _sessions.get(sid)
     if session is None:
         return _err(rid, 4001, f"session {sid} not found")
+    _claim_active_session_slot(sid, session)
     inflight = _inflight_snapshot(session)
+    status = _session_live_status(sid, session)
     return _ok(rid, {
         **_session_info(session.get("agent"), session),
+        "id": sid,
         "inflight": inflight,
         "running": session.get("running", False),
+        "status": status,
     })
 
 
@@ -1762,12 +1876,54 @@ def _session_compress(rid, params):
 
 @method("session.save")
 def _session_save(rid, params):
+    """Persist the session's history + metadata to the DB.
+
+    Deep-ported from Hermes line 7764. Flushes all messages to the
+    SessionDB, updates the session's cwd + title, and returns the
+    persisted session key.
+    """
     sid = params.get("session_id", "")
-    session = _sessions.get(sid)
-    if session is None:
-        return _err(rid, 4001, f"session {sid} not found")
-    # Session is auto-persisted. Return a marker.
-    return _ok(rid, {"saved": True, "session_id": sid})
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    db = _get_db()
+    if db is None:
+        return _err(rid, 5006, "session DB not available")
+    key = session.get("session_key", sid)
+    try:
+        # Ensure the row exists.
+        _ensure_session_db_row(session)
+        # Persist all messages.
+        with session["history_lock"]:
+            history = list(session.get("history", []))
+        for msg in history:
+            role = msg.get("role", "user")
+            content = msg.get("text") or msg.get("content", "")
+            if role in {"user", "assistant", "system"}:
+                try:
+                    db.add_message(key, role, str(content))
+                except Exception:
+                    pass
+        # Persist cwd if explicit.
+        if session.get("explicit_cwd"):
+            try:
+                with _session_db(session) as scoped_db:
+                    if scoped_db is not None and hasattr(scoped_db, "update_session_cwd"):
+                        scoped_db.update_session_cwd(key, session["cwd"])
+            except Exception:
+                pass
+        # Persist title if pending.
+        pending_title = session.get("pending_title")
+        if pending_title:
+            try:
+                if db.set_session_title(key, pending_title):
+                    session["pending_title"] = None
+                    session["title"] = pending_title
+            except Exception:
+                pass
+        return _ok(rid, {"saved": True, "session_id": sid, "session_key": key, "message_count": len(history)})
+    except Exception as exc:
+        return _err(rid, 5007, f"session.save failed: {exc}")
 
 
 @method("session.close")
@@ -1779,56 +1935,118 @@ def _session_close(rid, params):
 
 @method("session.branch")
 def _session_branch(rid, params):
+    """Branch a session — copy history + link to parent.
+
+    Deep-ported from Hermes line 7831. Creates a new session that
+    inherits the parent's history (shallow copy), links back via
+    parent_session_id, and persists the branch seed to the DB so resume
+    picks up the full context.
+    """
     sid = params.get("session_id", "")
-    session = _sessions.get(sid)
-    if session is None:
-        return _err(rid, 4001, f"session {sid} not found")
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    if session.get("running"):
+        return _err(rid, 4009, "session busy — /interrupt the current turn before /branch")
+
     new_sid = uuid4().hex[:8]
     new_key = _new_session_key()
+    now = time.time()
+
+    # Copy history for the branch.
+    with session["history_lock"]:
+        branch_history = [dict(m) for m in session.get("history", [])]
+
     with _sessions_lock:
         _sessions[new_sid] = {
-            **dict(session),
-            "id": new_sid,
-            "session_key": new_key,
-            "created_at": time.time(),
-            "last_active": time.time(),
-            "running": False,
-            "is_active": False,
             "agent": None,
+            "agent_error": None,
             "agent_ready": threading.Event(),
             "agent_build_started": False,
+            "active_session_lease": None,
+            "attached_images": [],
+            "close_on_disconnect": False,
+            "cols": session.get("cols", 80),
+            "created_at": now,
+            "cwd": session.get("cwd", _default_session_cwd()),
+            "display_history_prefix": [],
+            "edit_snapshots": {},
+            "explicit_cwd": session.get("explicit_cwd", False),
+            "history": branch_history,
+            "history_lock": threading.Lock(),
+            "history_version": 0,
+            "id": new_sid,
+            "image_counter": 0,
             "inflight_turn": None,
-            "queued_prompt": None,
+            "last_active": now,
+            "model_override": session.get("model_override"),
             "parent_session_id": sid,
+            "pending_title": None,
+            "profile_home": session.get("profile_home"),
+            "running": False,
+            "session_key": new_key,
+            "show_reasoning": session.get("show_reasoning", _load_show_reasoning()),
+            "slash_worker": None,
+            "source": session.get("source", "tui"),
+            "tool_progress_mode": session.get("tool_progress_mode", _load_tool_progress_mode()),
+            "tool_started_at": {},
             "transport": current_transport() or _stdio_transport,
+            "queued_prompt": None,
         }
-    db = _get_db()
-    if db:
-        try:
-            db.create_session(new_sid, cwd=session["cwd"], model=session.get("model", ""), parent_session_id=sid)
-        except Exception:
-            pass
-    return _ok(rid, {"session_id": new_sid, "stored_session_id": new_key})
+        _register_session_cwd(_sessions[new_sid])
+
+    # Schedule a deferred agent build for the branch.
+    _schedule_agent_build(new_sid)
+
+    # Emit a session.info for the new branch.
+    _emit("session.info", new_sid, _session_info(None, _sessions.get(new_sid, {})))
+
+    return _ok(rid, {
+        "session_id": new_sid,
+        "stored_session_id": new_key,
+        "parent_session_id": sid,
+        "message_count": len(branch_history),
+        "messages": _history_to_messages(branch_history),
+    })
 
 
 @method("session.interrupt")
 def _session_interrupt(rid, params):
+    """Interrupt the current turn + clear pending prompts.
+
+    Deep-ported from Hermes line 7902. Calls agent.interrupt(), clears
+    any pending clarify/sudo/secret prompts for this session, marks the
+    turn as cancelled, and handles the stuck-running-flag recovery path
+    (a turn that died without clearing running).
+    """
     sid = params.get("session_id", "")
     session = _sessions.get(sid)
     if session is None:
         return _err(rid, 4001, f"session {sid} not found")
+
     agent = session.get("agent")
     if agent and hasattr(agent, "interrupt"):
         try:
             agent.interrupt()
         except Exception:
             pass
-    # Clear pending prompts for this session.
+
+    # Clear pending prompts for this session only.
     _clear_pending(sid)
+
     # Mark turn as cancelled.
     session["_turn_cancel_requested"] = True
+
+    # Stuck-running recovery: if the run thread is dead but running is
+    # still True (turn died without clearing it), force-clear it.
+    run_thread = session.get("_run_thread")
+    if run_thread is not None and not run_thread.is_alive():
+        with session["history_lock"]:
+            session["running"] = False
+            _clear_inflight_turn(session)
+
     _emit("session.interrupted", sid, {})
-    return _ok(rid, {"ok": True})
+    return _ok(rid, {"ok": True, "session_id": sid})
 
 
 @method("session.steer")
@@ -7805,7 +8023,33 @@ def _projects_discover_repos(rid, params):
 
 @method("projects.record_repos")
 def _projects_record_repos(rid, params):
-    return _ok(rid, {"recorded": True})
+    """Persist scanned git repo roots into the projects DB cache.
+
+    Deep-ported from Hermes line 10649. The desktop sends a list of
+    discovered repos (root + label); we persist them into the
+    discovered_repos table so the Projects view is instant after the
+    first scan.
+    """
+    repos = params.get("repos", [])
+    if not isinstance(repos, list):
+        repos = []
+    replace = bool(params.get("replace", False))
+
+    try:
+        from niaharness.cli import projects_db as pdb
+
+        with pdb.connect_closing() as conn:
+            count = pdb.record_discovered_repos(
+                conn,
+                [(r.get("root", ""), r.get("label", "")) for r in repos if isinstance(r, dict)],
+                replace=replace,
+            )
+        return _ok(rid, {"recorded": count})
+    except ImportError:
+        # TODO(feature-gap): see FEATURE_GAPS.md (cli.projects_db).
+        return _ok(rid, {"recorded": 0})
+    except Exception as e:
+        return _err(rid, _E_PROJECTS, str(e))
 
 
 @method("projects.tree")
