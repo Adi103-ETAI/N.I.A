@@ -1334,16 +1334,24 @@ class SessionDB:
     # ------------------------------------------------------------------
 
     def set_session_title(self, session_id: str, title: str) -> bool:
-        """Set the human-readable title for a session."""
+        """Set the human-readable title for a session.
+
+        Returns True if the row was updated, False if no row matched
+        ``session_id`` (or on error). Uses ``cursor.rowcount`` rather than
+        ``conn.total_changes`` because the latter is cumulative across the
+        connection's lifetime — a prior unrelated write would falsely report
+        success here, masking the missing-row case that callers depend on
+        (e.g. session.title's ensure-row-then-retry fallback).
+        """
         title = (title or "").strip()[:200]  # Cap at 200 chars.
 
         def _do(conn: sqlite3.Connection) -> bool:
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE sessions SET title = ? WHERE id = ?",
                 (title, session_id),
             )
             conn.commit()
-            return conn.total_changes > 0
+            return cur.rowcount > 0
 
         try:
             return self._execute_write(_do)
