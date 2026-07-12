@@ -915,13 +915,86 @@ __all__ = [
     "complete_stream",
     "complete_with_tools",
     "detect_additional_providers",
+    "get_auxiliary_extra_body",
     "get_available_vision_backends",
     "get_cached_client_count",
     "get_per_task_defaults",
     "get_runtime_main",
+    "get_text_auxiliary_client",
     "refresh_credentials_for_client",
     "reset_runtime_main",
     "resolve_vision_provider_client",
     "set_runtime_main",
     "shutdown_cached_clients",
 ]
+
+
+# ---------------------------------------------------------------------------
+# get_text_auxiliary_client — sync wrapper for callers that need a (client, model) pair
+# ---------------------------------------------------------------------------
+
+
+def get_text_auxiliary_client(task: str = "default") -> tuple[Any, str]:
+    """Return a (client, model_name) pair for the given auxiliary task.
+
+    Ported from Hermes agent/auxiliary_client.py get_text_auxiliary_client.
+
+    This is a sync wrapper around the async client cache, used by callers
+    like the goal judge that need a raw OpenAI-compatible client object
+    (with ``client.chat.completions.create``) rather than the high-level
+    call_llm function.
+
+    Returns (None, "") if no aux model is configured.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # We're inside an event loop — run in a helper thread.
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                client = pool.submit(
+                    asyncio.run, _get_or_create_client(task)
+                ).result(timeout=10)
+        else:
+            client = asyncio.run(_get_or_create_client(task))
+    except Exception:
+        client = None
+
+    if client is None:
+        return None, ""
+
+    # Extract the model name from the client's config.
+    model = ""
+    try:
+        config = getattr(client, "config", None)
+        if config is not None:
+            model = str(getattr(config, "model", "") or "")
+    except Exception:
+        pass
+
+    return client, model
+
+
+def get_auxiliary_extra_body() -> dict:
+    """Return the extra_body dict for auxiliary API calls.
+
+    Ported from Hermes agent/auxiliary_client.py get_auxiliary_extra_body.
+
+    Returns a dict of extra parameters to pass to the API call (e.g.
+    reasoning_effort, service_tier). Returns an empty dict if no
+    overrides are configured.
+    """
+    extra: dict = {}
+    try:
+        # Check for reasoning effort override.
+        reasoning = os.environ.get("NIA_AUX_REASONING_EFFORT", "").strip().lower()
+        if reasoning and reasoning in {"low", "medium", "high", "none"}:
+            if reasoning != "none":
+                extra["reasoning_effort"] = reasoning
+        # Check for service tier override.
+        tier = os.environ.get("NIA_AUX_SERVICE_TIER", "").strip().lower()
+        if tier:
+            extra["service_tier"] = tier
+    except Exception:
+        pass
+    return extra
