@@ -1186,21 +1186,38 @@ def _session_create(rid, params):
 
 @method("session.list")
 def _session_list(rid, params):
-    """List sessions with proper filtering."""
+    """List sessions with proper filtering.
+
+    Deep-ported from Hermes line 5119. Deny-lists noisy internal sources
+    (``tool`` sub-agent runs) rather than allow-listing fixed platform
+    names. Over-fetches modestly so per-source filtering doesn't leave
+    the list short. Uses ``list_sessions_rich`` with order_by_last_active.
+    """
     db = _get_db()
     if db is None:
         return _err(rid, 5006, "session DB not available")
     try:
+        # Deny-list noisy internal sources (tool sub-agent runs).
+        deny = frozenset({"tool"})
+
         limit = int(params.get("limit", 200) or 200)
         include_archived = bool(params.get("include_archived", False))
-        # Use list_sessions_rich for preview + last_active.
+        # Over-fetch modestly so per-source filtering doesn't leave us short.
+        fetch_limit = max(limit * 2, 200)
+
         try:
             rows = db.list_sessions_rich(
-                limit=limit,
+                limit=fetch_limit,
                 include_archived=include_archived,
             )
+            # Filter out denied sources.
+            rows = [
+                s for s in rows
+                if (s.get("source") or "").strip().lower() not in deny
+            ][:limit]
         except Exception:
             rows = db.list_sessions(limit=limit, include_archived=include_archived)
+
         return _ok(rid, {
             "sessions": [
                 {
@@ -1210,6 +1227,9 @@ def _session_list(rid, params):
                     "started_at": s.get("started_at") or 0,
                     "message_count": s.get("message_count") or 0,
                     "source": s.get("source") or "",
+                    "model": s.get("model") or "",
+                    "cwd": s.get("cwd") or s.get("project_path") or "",
+                    "last_active": s.get("last_active") or s.get("started_at") or 0,
                 }
                 for s in rows
             ]
@@ -1600,23 +1620,22 @@ def _session_cwd_set(rid, params):
 
 @method("session.active_list")
 def _session_active_list(rid, params):
-    return _ok(rid, {
-        "sessions": [
-            {
-                "id": s.get("id", ""),
-                "session_key": s.get("session_key", ""),
-                "model": s.get("model", ""),
-                "cwd": s.get("cwd", ""),
-                "started_at": s.get("created_at", 0),
-                "last_active": s.get("last_active", 0),
-                "message_count": len(s.get("history", [])),
-                "status": "working" if s.get("running") else "idle",
-                "title": s.get("title", ""),
-                "current": s.get("is_active", False),
-            }
-            for s in _sessions.values()
-        ]
-    })
+    """Return live TUI sessions in this gateway process.
+
+    Deep-ported from Hermes line 5871. Unlike ``session.list`` this is not
+    a historical DB browser: it reports only sessions with in-memory
+    agents/workers that the current TUI can switch to without closing
+    siblings. Uses ``_session_live_item`` for rich status/preview/title.
+    """
+    current = str(params.get("current_session_id") or "")
+    with _sessions_lock:
+        snapshot = list(_sessions.items())
+    items = [
+        _session_live_item(sid, session, current_sid=current)
+        for sid, session in snapshot
+        if not session.get("_finalized")
+    ]
+    return _ok(rid, {"sessions": items})
 
 
 @method("session.activate")
