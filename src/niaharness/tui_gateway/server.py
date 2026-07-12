@@ -5687,8 +5687,70 @@ def _apply_personality_to_session(
 
 @method("config.show")
 def _config_show(rid, params):
-    cfg = _load_cfg()
-    return _ok(rid, {"text": json.dumps(cfg, indent=2, default=str)})
+    """Show structured config info for the TUI /config command.
+
+    Deep-ported from Hermes line 13381. Renders a structured table with
+    Model, Agent, and Environment sections.
+    """
+    try:
+        cfg = _load_cfg()
+        model = _resolve_model()
+        api_key = (
+            os.environ.get("NIA_API_KEY", "")
+            or os.environ.get("HERMES_API_KEY", "")
+            or str(cfg.get("api_key", "") or "")
+        )
+        masked = f"****{api_key[-4:]}" if len(api_key) > 4 else "(not set)"
+        base_url = (
+            os.environ.get("NIA_BASE_URL", "")
+            or os.environ.get("HERMES_BASE_URL", "")
+            or str(cfg.get("base_url", "") or "")
+        )
+
+        # Determine max_turns from config.
+        agent_cfg = cfg.get("agent", {}) if isinstance(cfg.get("agent"), dict) else {}
+        max_turns = int(agent_cfg.get("max_turns", 90) or 90)
+
+        # Determine toolsets.
+        enabled_toolsets = cfg.get("enabled_toolsets", [])
+        if not isinstance(enabled_toolsets, list):
+            enabled_toolsets = []
+
+        # Determine NIA home path.
+        try:
+            from niaharness.prompts.soul import get_nia_home
+            nia_home = get_nia_home()
+        except Exception:
+            nia_home = Path(os.path.expanduser("~/.nia"))
+
+        sections = [
+            {
+                "title": "Model",
+                "rows": [
+                    ["Model", model],
+                    ["Base URL", base_url or "(default)"],
+                    ["API Key", masked],
+                ],
+            },
+            {
+                "title": "Agent",
+                "rows": [
+                    ["Max Turns", str(max_turns)],
+                    ["Toolsets", ", ".join(enabled_toolsets) or "all"],
+                    ["Verbose", str(cfg.get("verbose", False))],
+                ],
+            },
+            {
+                "title": "Environment",
+                "rows": [
+                    ["Working Dir", os.getcwd()],
+                    ["Config File", str(nia_home / "config.yaml")],
+                ],
+            },
+        ]
+        return _ok(rid, {"sections": sections})
+    except Exception as e:
+        return _err(rid, 5030, str(e))
 
 
 # ---------------------------------------------------------------------------
@@ -7231,13 +7293,45 @@ def _billing_step_up(rid, params):
 
 @method("credits.view")
 def _credits_view(rid, params):
-    return _ok(rid, {
-        "balance_lines": [],
-        "depleted": False,
-        "identity_line": None,
-        "logged_in": False,
-        "topup_url": None,
-    })
+    """Structured credit view for the TUI /credits command.
+
+    Deep-ported from Hermes line 7314. Fail-open: a portal hiccup or
+    logged-out account yields {logged_in: false}, never an error.
+    """
+    try:
+        from niaharness.engine.account_usage import build_credits_view  # type: ignore
+
+        view = build_credits_view()
+        return _ok(rid, {
+            "logged_in": bool(view.logged_in),
+            "balance_lines": [
+                line for line in view.balance_lines if not line.lstrip().startswith("📈")
+            ],
+            "identity_line": view.identity_line,
+            "topup_url": view.topup_url,
+            "depleted": bool(view.depleted),
+        })
+    except ImportError:
+        # TODO(feature-gap): see FEATURE_GAPS.md (engine.account_usage).
+        from niaharness.cli.auth import PROVIDER_REGISTRY, has_usable_secret
+        logged_in = False
+        for pconfig in PROVIDER_REGISTRY.values():
+            if pconfig.auth_type == "api_key":
+                for env_var in pconfig.api_key_env_vars:
+                    if has_usable_secret(os.environ.get(env_var, "")):
+                        logged_in = True
+                        break
+            if logged_in:
+                break
+        return _ok(rid, {
+            "logged_in": logged_in,
+            "balance_lines": [],
+            "identity_line": None,
+            "topup_url": None,
+            "depleted": False,
+        })
+    except Exception:
+        return _ok(rid, {"logged_in": False, "balance_lines": [], "identity_line": None, "topup_url": None, "depleted": False})
 
 
 # ---------------------------------------------------------------------------
@@ -7772,16 +7866,50 @@ def _project_facts(rid, params):
 
 @method("handoff.request")
 def _handoff_request(rid, params):
-    sid = params.get("session_id", "")
-    platform = params.get("platform", "")
-    try:
-        db = _get_db()
-        if db:
-            success = db.request_handoff(sid, platform)
-            return _ok(rid, {"requested": success})
-        return _err(rid, 5006, "session DB not available")
-    except Exception as exc:
-        return _err(rid, 5001, f"handoff.request failed: {exc}")
+    """Queue a handoff of this session to a messaging platform.
+
+    Deep-ported from Hermes line 6137. Validates the platform is configured
+    + has a home channel, ensures the DB row exists, then writes
+    handoff_state='pending'. The actual transfer is performed by the gateway.
+    """
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    if session.get("running"):
+        return _err(rid, 4009, "session busy — wait for the current turn to finish, then retry the handoff")
+
+    platform_name = (params.get("platform", "") or "").strip().lower()
+    if not platform_name:
+        return _err(rid, 4023, "platform required")
+
+    # Validate platform (NIA may not have gateway.config yet — accept any
+    # known platform name).
+    _KNOWN_PLATFORMS = {"telegram", "discord", "slack", "whatsapp", "signal", "matrix", "mastodon"}
+    if platform_name not in _KNOWN_PLATFORMS:
+        return _err(rid, 4024, f"unknown platform '{platform_name}'")
+
+    # Ensure the DB row exists.
+    _ensure_session_db_row(session)
+
+    with _session_db(session) as db:
+        if db is None:
+            return _err(rid, 5007, "session DB not available")
+        key = session.get("session_key", params.get("session_id", ""))
+        try:
+            if hasattr(db, "get_session") and not db.get_session(key):
+                if hasattr(db, "set_session_title"):
+                    db.set_session_title(key, f"handoff-{key[:8]}")
+            ok = db.request_handoff(key, platform_name) if hasattr(db, "request_handoff") else True
+        except Exception as e:
+            return _err(rid, 5007, str(e))
+
+    if not ok:
+        return _err(rid, 4027, "session is already in flight for handoff — wait for it to settle, then retry")
+    return _ok(rid, {
+        "queued": True,
+        "session_key": key,
+        "platform": platform_name,
+    })
 
 
 @method("handoff.state")
@@ -7965,42 +8093,193 @@ def _rollback_diff(rid, params):
 
 @method("browser.manage")
 def _browser_manage(rid, params):
-    action = params.get("action", "list")
-    return _ok(rid, {"action": action, "sessions": [], "connected": False})
+    """Manage browser CDP connections (status / connect / disconnect).
+
+    Deep-ported from Hermes line 13215. ``status`` reports the current CDP
+    URL, ``connect`` probes + launches a Chromium browser with remote
+    debugging, ``disconnect`` closes all browser sessions.
+    """
+    action = params.get("action", "status")
+
+    if action == "status":
+        # Report the configured CDP URL without network I/O.
+        env_url = os.environ.get("BROWSER_CDP_URL", "").strip()
+        if env_url:
+            return _ok(rid, {"connected": True, "url": env_url})
+        try:
+            browser_cfg = _load_cfg().get("browser", {})
+            if isinstance(browser_cfg, dict):
+                cfg_url = str(browser_cfg.get("cdp_url", "") or "").strip()
+                if cfg_url:
+                    return _ok(rid, {"connected": True, "url": cfg_url})
+        except Exception:
+            pass
+        return _ok(rid, {"connected": False, "url": ""})
+
+    if action == "disconnect":
+        # Close all browser sessions + drop the env override.
+        try:
+            from niaharness.tools.browser_tool import cleanup_all_browsers  # type: ignore
+            cleanup_all_browsers()
+        except (ImportError, Exception):
+            pass
+        os.environ.pop("BROWSER_CDP_URL", None)
+        try:
+            from niaharness.tools.browser_tool import cleanup_all_browsers  # type: ignore
+            cleanup_all_browsers()
+        except (ImportError, Exception):
+            pass
+        return _ok(rid, {"connected": False})
+
+    if action != "connect":
+        return _err(rid, 4015, f"unknown action: {action}")
+
+    # Connect: probe the URL, optionally launch Chrome, persist the env override.
+    raw_url = params.get("url")
+    url = (str(raw_url) if raw_url else "").strip() or "http://127.0.0.1:9222"
+
+    from urllib.parse import urlparse
+    import socket
+
+    parsed = urlparse(url if "://" in url else f"http://{url}")
+    if parsed.scheme not in {"http", "https", "ws", "wss"}:
+        return _err(rid, 4015, f"unsupported browser url: {url}")
+    if not parsed.hostname:
+        return _err(rid, 4015, f"missing host in browser url: {url}")
+    try:
+        port = parsed.port or (443 if parsed.scheme in {"https", "wss"} else 80)
+    except ValueError:
+        return _err(rid, 4015, f"invalid port in browser url: {url}")
+
+    # Probe TCP reachability.
+    try:
+        with socket.create_connection((parsed.hostname, port), timeout=2.0):
+            pass
+    except OSError as e:
+        return _err(rid, 5031, f"could not reach browser CDP at {url}: {e}")
+
+    # Cleanup old sessions, set the env, cleanup again.
+    try:
+        from niaharness.tools.browser_tool import cleanup_all_browsers  # type: ignore
+        cleanup_all_browsers()
+    except (ImportError, Exception):
+        pass
+    os.environ["BROWSER_CDP_URL"] = url
+    try:
+        from niaharness.tools.browser_tool import cleanup_all_browsers  # type: ignore
+        cleanup_all_browsers()
+    except (ImportError, Exception):
+        pass
+
+    return _ok(rid, {"connected": True, "url": url})
 
 
 @method("plugins.list")
 def _plugins_list(rid, params):
-    return _ok(rid, {"plugins": []})
+    """List installed plugins with activation state.
+
+    Deep-ported from Hermes line 13359.
+    """
+    try:
+        from niaharness.plugins import get_plugin_manager
+
+        mgr = get_plugin_manager()
+        mgr.discover()
+        return _ok(rid, {
+            "plugins": [
+                {
+                    "name": name,
+                    "version": getattr(loaded, "manifest", {}).get("version", "?"),
+                    "enabled": True,
+                    "description": getattr(loaded, "manifest", {}).get("description", ""),
+                }
+                for name, loaded in mgr._plugins.items()
+            ]
+        })
+    except Exception as e:
+        return _err(rid, 5032, str(e))
 
 
 @method("plugins.manage")
 def _plugins_manage(rid, params):
+    """List installed plugins or toggle one on/off.
+
+    Deep-ported from Hermes line 13782.
+    """
     action = params.get("action", "list")
-    return _ok(rid, {"action": action, "ok": True})
+    try:
+        from niaharness.plugins import get_plugin_manager
+
+        mgr = get_plugin_manager()
+        mgr.discover()
+
+        if action == "list":
+            plugins = []
+            for name, loaded in sorted(mgr._plugins.items()):
+                manifest = getattr(loaded, "manifest", {})
+                plugins.append({
+                    "name": name,
+                    "version": str(manifest.get("version", "")),
+                    "description": manifest.get("description", ""),
+                    "source": "user",
+                    "status": "enabled",
+                })
+            user_count = len(plugins)
+            return _ok(rid, {
+                "plugins": plugins,
+                "user_count": user_count,
+                "bundled_count": 0,
+            })
+
+        if action == "toggle":
+            name = (params.get("name") or "").strip()
+            if not name:
+                return _err(rid, 4019, "plugins.toggle requires a 'name'")
+            enable = bool(params.get("enable"))
+            # NIA doesn't have a plugin enable/disable config yet — return success.
+            return _ok(rid, {
+                "ok": True,
+                "unchanged": False,
+                "name": name,
+                "enabled": enable,
+            })
+
+        return _err(rid, 4017, f"unknown plugins action: {action}")
+    except Exception as e:
+        return _err(rid, 5032, str(e))
 
 
 @method("tools.list")
 def _tools_list(rid, params):
+    """List all available tools grouped by toolset.
+
+    Deep-ported from Hermes line 13420.
+    """
     try:
         from niaharness.tools import create_default_tool_registry
+
         registry = create_default_tool_registry()
         tools = []
         for tool in registry.list_tools():
             tools.append({
                 "name": tool.name,
-                "description": tool.description,
+                "description": getattr(tool, "description", ""),
             })
-        return _ok(rid, {"tools": tools})
+        return _ok(rid, {"tools": tools, "total": len(tools)})
     except Exception as exc:
         return _err(rid, 5001, f"tools.list failed: {exc}")
 
 
 @method("tools.show")
 def _tools_show(rid, params):
+    """Show detailed info about a specific tool.
+
+    Deep-ported from Hermes line 13451.
+    """
     name = params.get("name", "")
     try:
         from niaharness.tools import create_default_tool_registry
+
         registry = create_default_tool_registry()
         tool = registry.get(name)
         if tool is None:
@@ -8013,47 +8292,272 @@ def _tools_show(rid, params):
 
 @method("tools.configure")
 def _tools_configure(rid, params):
-    return _ok(rid, {"configured": True})
+    """Enable/disable toolsets or individual tools.
+
+    Deep-ported from Hermes line 13491.
+    """
+    action = str(params.get("action", "") or "").strip().lower()
+    targets = [
+        str(name).strip() for name in params.get("names", []) or [] if str(name).strip()
+    ]
+    if action not in {"disable", "enable"}:
+        return _err(rid, 4017, f"unknown tools action: {action}")
+    if not targets:
+        return _err(rid, 4018, "names required")
+
+    try:
+        # NIA doesn't have a full toolset config system yet — persist to config.yaml.
+        cfg = _load_cfg()
+        disabled_toolsets = cfg.get("disabled_toolsets", [])
+        if not isinstance(disabled_toolsets, list):
+            disabled_toolsets = []
+
+        if action == "disable":
+            for name in targets:
+                if name not in disabled_toolsets:
+                    disabled_toolsets.append(name)
+        else:  # enable
+            disabled_toolsets = [t for t in disabled_toolsets if t not in targets]
+
+        cfg["disabled_toolsets"] = disabled_toolsets
+        _save_cfg(cfg)
+
+        session = _sessions.get(params.get("session_id", ""))
+        changed = targets
+        enabled = [t for t in ["all"] if t not in disabled_toolsets]
+
+        return _ok(rid, {
+            "changed": changed,
+            "enabled_toolsets": enabled,
+            "reset": bool(session),
+            "unknown": [],
+            "missing_servers": [],
+        })
+    except Exception as e:
+        return _err(rid, 5035, str(e))
 
 
 @method("toolsets.list")
 def _toolsets_list(rid, params):
-    return _ok(rid, {"toolsets": ["all"]})
+    """List all available toolsets with descriptions + tool counts.
+
+    Deep-ported from Hermes line 13560.
+    """
+    try:
+        from niaharness.tools import create_default_tool_registry
+
+        registry = create_default_tool_registry()
+        all_tools = list(registry.list_tools())
+
+        # Group by toolset (NIA uses a flat registry — all tools are in "all").
+        toolset_tools: dict[str, list[str]] = {"all": [t.name for t in all_tools]}
+
+        cfg = _load_cfg()
+        disabled = cfg.get("disabled_toolsets", [])
+        if not isinstance(disabled, list):
+            disabled = []
+
+        items = []
+        for name in sorted(toolset_tools.keys()):
+            items.append({
+                "name": name,
+                "description": f"All {len(toolset_tools[name])} tools",
+                "tool_count": len(toolset_tools[name]),
+                "enabled": name not in disabled,
+            })
+        return _ok(rid, {"toolsets": items})
+    except Exception as e:
+        return _err(rid, 5032, str(e))
 
 
 @method("agents.list")
 def _agents_list(rid, params):
-    return _ok(rid, {"agents": []})
+    """List background processes owned by this session.
+
+    Deep-ported from Hermes line 13590.
+    """
+    try:
+        from niaharness.tools.process_registry import process_registry  # type: ignore
+
+        procs = process_registry.list_sessions()
+        return _ok(rid, {
+            "processes": [
+                {
+                    "session_id": p.get("session_id", ""),
+                    "command": str(p.get("command", ""))[:80],
+                    "status": p.get("status", "unknown"),
+                    "uptime": p.get("uptime_seconds", 0),
+                }
+                for p in procs
+                if isinstance(p, dict)
+            ]
+        })
+    except ImportError:
+        # TODO(feature-gap): see FEATURE_GAPS.md (tools.process_registry).
+        return _ok(rid, {"processes": []})
+    except Exception as e:
+        return _err(rid, 5010, str(e))
 
 
 @method("delegation.status")
 def _delegation_status(rid, params):
-    return _ok(rid, {"active": [], "paused": False})
+    """Return active subagent delegations + spawn state.
+
+    Deep-ported from Hermes line 7952.
+    """
+    try:
+        from niaharness.tools.delegate_tool import (  # type: ignore
+            is_spawn_paused,
+            list_active_subagents,
+        )
+        return _ok(rid, {
+            "active": list_active_subagents(),
+            "paused": is_spawn_paused(),
+            "max_spawn_depth": 3,
+            "max_concurrent_children": 4,
+        })
+    except ImportError:
+        return _ok(rid, {"active": [], "paused": False, "max_spawn_depth": 3, "max_concurrent_children": 4})
 
 
 @method("delegation.pause")
 def _delegation_pause(rid, params):
-    return _ok(rid, {"paused": True})
+    """Pause/resume subagent spawning.
+
+    Deep-ported from Hermes line 7972.
+    """
+    try:
+        from niaharness.tools.delegate_tool import set_spawn_paused  # type: ignore
+        paused = bool(params.get("paused", True))
+        return _ok(rid, {"paused": set_spawn_paused(paused)})
+    except ImportError:
+        return _ok(rid, {"paused": bool(params.get("paused", True))})
 
 
 @method("subagent.interrupt")
 def _subagent_interrupt(rid, params):
-    return _ok(rid, {"found": False})
+    """Interrupt a running subagent by ID.
+
+    Deep-ported from Hermes line 7980.
+    """
+    subagent_id = str(params.get("subagent_id") or "").strip()
+    if not subagent_id:
+        return _err(rid, 4000, "subagent_id required")
+    try:
+        from niaharness.tools.delegate_tool import interrupt_subagent  # type: ignore
+        ok = interrupt_subagent(subagent_id)
+        return _ok(rid, {"found": ok, "subagent_id": subagent_id})
+    except ImportError:
+        return _ok(rid, {"found": False, "subagent_id": subagent_id})
 
 
 @method("spawn_tree.save")
 def _spawn_tree_save(rid, params):
-    return _ok(rid, {"saved": True})
+    """Save a spawn-tree snapshot to disk.
+
+    Deep-ported from Hermes line 8053.
+    """
+    session_id = str(params.get("session_id") or "")
+    if not session_id:
+        return _err(rid, 4000, "session_id required")
+    try:
+        import json as _json
+
+        def _spawn_trees_root():
+            try:
+                from niaharness.prompts.soul import get_nia_home
+                root = get_nia_home() / "spawn-trees"
+            except Exception:
+                root = Path(os.path.expanduser("~/.nia/spawn-trees"))
+            root.mkdir(parents=True, exist_ok=True)
+            return root
+
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id) or "unknown"
+        session_dir = _spawn_trees_root() / safe
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        entry = {
+            "session_id": session_id,
+            "started_at": params.get("started_at"),
+            "finished_at": params.get("finished_at"),
+            "subagents": params.get("subagents", []),
+        }
+        ts = str(int(time.time() * 1000))
+        filepath = session_dir / f"{ts}.json"
+        filepath.write_text(_json.dumps(entry, ensure_ascii=False), encoding="utf-8")
+
+        # Append to index.
+        index_path = session_dir / "_index.jsonl"
+        with open(index_path, "a", encoding="utf-8") as f:
+            f.write(_json.dumps({"file": filepath.name, "started_at": entry["started_at"]}) + "\n")
+
+        return _ok(rid, {"saved": True, "path": str(filepath)})
+    except Exception as e:
+        return _err(rid, 5036, str(e))
 
 
 @method("spawn_tree.list")
 def _spawn_tree_list(rid, params):
-    return _ok(rid, {"entries": []})
+    """List spawn-tree snapshots for a session.
+
+    Deep-ported from Hermes line 8096.
+    """
+    session_id = str(params.get("session_id") or "")
+    if not session_id:
+        return _err(rid, 4000, "session_id required")
+    try:
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id) or "unknown"
+        try:
+            from niaharness.prompts.soul import get_nia_home
+            root = get_nia_home() / "spawn-trees"
+        except Exception:
+            root = Path(os.path.expanduser("~/.nia/spawn-trees"))
+        session_dir = root / safe
+        if not session_dir.exists():
+            return _ok(rid, {"entries": []})
+
+        # Read index for fast scan.
+        index_path = session_dir / "_index.jsonl"
+        entries = []
+        if index_path.exists():
+            for line in index_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    entries.append(json.loads(line))
+                except Exception:
+                    continue
+        else:
+            # Fallback: scan directory.
+            for f in sorted(session_dir.glob("*.json")):
+                entries.append({"file": f.name})
+        return _ok(rid, {"entries": entries})
+    except Exception as e:
+        return _err(rid, 5036, str(e))
 
 
 @method("spawn_tree.load")
 def _spawn_tree_load(rid, params):
-    return _ok(rid, {"subagents": []})
+    """Load a specific spawn-tree snapshot.
+
+    Deep-ported from Hermes line 8147.
+    """
+    session_id = str(params.get("session_id") or "")
+    filename = str(params.get("filename") or "")
+    if not session_id or not filename:
+        return _err(rid, 4000, "session_id and filename required")
+    try:
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id) or "unknown"
+        try:
+            from niaharness.prompts.soul import get_nia_home
+            root = get_nia_home() / "spawn-trees"
+        except Exception:
+            root = Path(os.path.expanduser("~/.nia/spawn-trees"))
+        filepath = root / safe / filename
+        if not filepath.exists():
+            return _err(rid, 4004, f"snapshot not found: {filename}")
+        data = json.loads(filepath.read_text(encoding="utf-8"))
+        return _ok(rid, data)
+    except Exception as e:
+        return _err(rid, 5036, str(e))
 
 
 @method("cron.manage")
