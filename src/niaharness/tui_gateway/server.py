@@ -5826,7 +5826,13 @@ def _model_disconnect(rid, params):
 
 @method("slash.exec")
 def _slash_exec(rid, params):
-    """Execute a slash command via the slash worker subprocess."""
+    """Execute a slash command via the slash worker or command.dispatch.
+
+    Deep-ported from Hermes line 12633. Routes pending-input commands and
+    skill commands to ``command.dispatch`` instead of the slash worker.
+    Plugin commands are handled inline. Falls back to the command registry
+    when the slash worker is unavailable.
+    """
     session, err = _sess(params, rid)
     if err:
         return err
@@ -5837,17 +5843,67 @@ def _slash_exec(rid, params):
     if not cmd.startswith("/"):
         cmd = f"/{cmd}"
 
-    # Try the slash worker first.
+    # Parse the command name + arg.
+    _cmd_text = cmd.lstrip("/")
+    _cmd_parts = _cmd_text.split(maxsplit=1)
+    _cmd_base = (_cmd_parts[0].lower() if _cmd_parts else "")
+    _cmd_arg = _cmd_parts[1] if len(_cmd_parts) > 1 else ""
+
+    # Route pending-input commands to command.dispatch.
+    _PENDING_INPUT_COMMANDS = {
+        "queue", "q", "learn", "moa", "retry", "steer", "goal",
+        "undo", "snapshot", "snap",
+    }
+    if _cmd_base in _PENDING_INPUT_COMMANDS:
+        return _methods["command.dispatch"](
+            rid,
+            {
+                "name": _cmd_base,
+                "arg": _cmd_arg,
+                "session_id": params.get("session_id", ""),
+            },
+        )
+
+    # Check for skill commands.
+    try:
+        from niaharness.skills.skill_commands import get_skill_commands
+
+        _cmd_key = f"/{_cmd_base}"
+        if _cmd_key in get_skill_commands():
+            return _err(rid, 4018, f"skill command: use command.dispatch for {_cmd_key}")
+    except Exception:
+        pass
+
+    # Check for plugin commands.
+    try:
+        from niaharness.plugins import get_plugin_command_handler, resolve_plugin_command_result
+
+        plugin_handler = get_plugin_command_handler(_cmd_base)
+        if plugin_handler:
+            try:
+                result = resolve_plugin_command_result(plugin_handler(_cmd_arg))
+                return _ok(rid, {"output": str(result or "(no output)")})
+            except Exception as e:
+                return _ok(rid, {"output": f"Plugin command error: {e}"})
+    except Exception:
+        pass
+
+    # Try the slash worker.
     worker = _slash_workers.get(params.get("session_id", ""))
     if worker is not None:
         try:
             output = worker.run(cmd)
-            return _ok(rid, {"output": output})
-        except Exception as exc:
+            # Apply slash side effects (model switch, yolo, etc.).
+            warning = _mirror_slash_side_effects(params.get("session_id", ""), session, cmd)
+            payload: dict = {"output": output or "(no output)"}
+            if warning:
+                payload["warning"] = warning
+            return _ok(rid, payload)
+        except Exception:
             # Fall through to inline execution.
             pass
 
-    # Fallback: inline execution.
+    # Fallback: inline execution via command registry.
     try:
         from niaharness.commands import create_default_command_registry
         registry = create_default_command_registry()
@@ -5863,22 +5919,154 @@ def _slash_exec(rid, params):
         return _err(rid, 5001, f"slash.exec failed: {exc}")
 
 
+# Commands that mutate agent/session state and must be mirrored after slash.exec.
+_AGENT_MUTATING_COMMANDS = frozenset({
+    "model", "reasoning", "fast", "yolo", "prompt", "personality",
+    "verbose", "details", "details_mode", "thinking_mode",
+})
+
+
+def _mirror_slash_side_effects(sid: str, session: dict, command: str) -> str:
+    """Apply side effects that must also hit the gateway's live agent.
+
+    Ported from hermes-agent/tui_gateway/server.py line 12539.
+    Returns a warning string if any side effects were applied.
+    """
+    parts = command.lstrip("/").split(None, 1)
+    if not parts:
+        return ""
+    name = parts[0].lower()
+    arg = (parts[1].strip() if len(parts) > 1 else "")
+    agent = session.get("agent")
+    warning = ""
+
+    # Reject agent-mutating commands during an in-flight turn.
+    if name in _AGENT_MUTATING_COMMANDS and session.get("running"):
+        return f"session busy — /interrupt the current turn before /{name}"
+
+    # Model switch: re-apply to the live agent.
+    if name == "model" and arg and agent is not None:
+        try:
+            _apply_model_switch(sid, session, arg, confirm_expensive_model=True)
+            warning = f"model switched to {arg}"
+        except Exception as exc:
+            warning = f"model switch failed: {exc}"
+
+    # Yolo toggle: re-apply to the live agent.
+    if name == "yolo" and agent is not None:
+        try:
+            from niaharness.permissions.approval import (
+                is_session_yolo_enabled,
+                enable_session_yolo,
+                disable_session_yolo,
+            )
+            session_key = session.get("session_key", sid)
+            current = is_session_yolo_enabled(session_key)
+            if arg.lower() in {"on", "1", "true"}:
+                enable_session_yolo(session_key)
+            elif arg.lower() in {"off", "0", "false"}:
+                disable_session_yolo(session_key)
+            else:
+                if current:
+                    disable_session_yolo(session_key)
+                else:
+                    enable_session_yolo(session_key)
+            _emit("session.info", sid, _session_info(agent, session))
+        except Exception:
+            pass
+
+    return warning
+
+
 @method("commands.catalog")
 def _commands_catalog(rid, params):
+    """Registry-backed slash metadata for the TUI — categorized, no aliases.
+
+    Deep-ported from Hermes line 11274. Builds a categorized command catalog
+    from the command registry + quick_commands config + skill commands.
+    """
     try:
         from niaharness.commands import create_default_command_registry
+
         registry = create_default_command_registry()
         commands = registry.list_commands()
-        pairs = [(c.name, c.description) for c in commands]
+
+        all_pairs: list[list[str]] = []
+        canon: dict[str, str] = {}
+        categories: list[dict] = []
+        cat_map: dict[str, list[list[str]]] = {}
+        cat_order: list[str] = []
+
+        for cmd in commands:
+            c = f"/{cmd.name}"
+            canon[c.lower()] = c
+            # Aliases.
+            for a in getattr(cmd, "aliases", []):
+                canon[f"/{a}".lower()] = c
+
+            desc = getattr(cmd, "description", "") or ""
+            all_pairs.append([c, desc])
+
+            cat = getattr(cmd, "category", "General")
+            if cat not in cat_map:
+                cat_map[cat] = []
+                cat_order.append(cat)
+            cat_map[cat].append([c, desc])
+
+        # Quick commands from config.
+        warning = ""
+        try:
+            qcmds = _load_cfg().get("quick_commands", {}) or {}
+            if isinstance(qcmds, dict) and qcmds:
+                bucket = "User commands"
+                if bucket not in cat_map:
+                    cat_map[bucket] = []
+                    cat_order.append(bucket)
+                for qname, qc in sorted(qcmds.items()):
+                    if not isinstance(qc, dict):
+                        continue
+                    key = f"/{qname}"
+                    canon[key.lower()] = key
+                    qtype = qc.get("type", "")
+                    if qtype == "exec":
+                        default_desc = f"exec: {qc.get('command', '')}"
+                    elif qtype == "alias":
+                        default_desc = f"alias → {qc.get('target', '')}"
+                    else:
+                        default_desc = qtype or "quick command"
+                    qdesc = str(qc.get("description") or default_desc)
+                    qdesc = qdesc[:120] + ("…" if len(qdesc) > 120 else "")
+                    all_pairs.append([key, qdesc])
+                    cat_map[bucket].append([key, qdesc])
+        except Exception as e:
+            if not warning:
+                warning = f"quick_commands discovery unavailable: {e}"
+
+        # Skill commands.
+        skill_count = 0
+        try:
+            from niaharness.skills.skill_commands import scan_skill_commands
+
+            for k, info in sorted(scan_skill_commands().items()):
+                d = str(info.get("description", "Skill"))
+                all_pairs.append([k, d[:120] + ("…" if len(d) > 120 else "")])
+                skill_count += 1
+        except Exception as e:
+            warning = f"skill discovery unavailable: {e}"
+
+        for cat in cat_order:
+            categories.append({"name": cat, "pairs": cat_map[cat]})
+
         return _ok(rid, {
-            "pairs": pairs,
-            "categories": [],
-            "canon": {},
+            "pairs": all_pairs,
+            "categories": categories,
+            "canon": canon,
             "sub": {},
-            "skill_count": 0,
+            "skill_count": skill_count,
+            "warning": warning,
         })
-    except Exception:
-        return _ok(rid, {"pairs": [], "categories": [], "canon": {}, "sub": {}, "skill_count": 0})
+    except Exception as e:
+        return _ok(rid, {"pairs": [], "categories": [], "canon": {}, "sub": {}, "skill_count": 0, "warning": str(e)})
 
 
 @method("command.resolve")
@@ -6856,7 +7044,7 @@ def _voice_toggle(rid, params):
         }
         # Best-effort: probe voice requirements if NIA exposes them.
         try:
-            from niaharness.tools.voice_mode import check_voice_requirements  # type: ignore
+            from niaharness.voice_mode import check_voice_requirements  # type: ignore
 
             reqs = check_voice_requirements()
             payload["available"] = bool(reqs.get("available"))
@@ -7119,26 +7307,99 @@ def _process_kill(rid, params):
 
 @method("reload.mcp")
 def _reload_mcp(rid, params):
+    """Reload MCP server connections + refresh agent tool snapshot.
+
+    Deep-ported from Hermes line 11121. Includes the confirm gate
+    (``approvals.mcp_reload_confirm``), the shutdown + discover cycle,
+    the agent tool refresh, and the ``always=true`` config persistence.
+    """
+    session = _sessions.get(params.get("session_id", ""))
     try:
-        from niaharness.mcp.client import McpClientManager
-        # Reload MCP servers — best effort.
-        return _ok(rid, {"reloaded": True, "status": "ok"})
-    except Exception as exc:
-        return _err(rid, 5001, f"reload.mcp failed: {exc}")
+        # Gate: /reload-mcp invalidates the prompt cache for this session.
+        user_confirm = bool(params.get("confirm", False))
+        if not user_confirm:
+            _cfg = _load_cfg()
+            _approvals = _cfg.get("approvals") if isinstance(_cfg, dict) else None
+            _confirm_required = True
+            if isinstance(_approvals, dict):
+                _confirm_required = bool(_approvals.get("mcp_reload_confirm", True))
+            if _confirm_required:
+                return _ok(rid, {
+                    "status": "confirm_required",
+                    "message": (
+                        "⚠️  /reload-mcp invalidates the prompt cache (next "
+                        "message re-sends full input tokens). Reply `/reload-mcp "
+                        "now` to proceed, or `/reload-mcp always` to proceed and "
+                        "silence this prompt permanently."
+                    ),
+                })
+
+        # Shutdown + discover MCP servers.
+        try:
+            from niaharness.mcp.client import McpClientManager  # type: ignore
+            # Best-effort: try shutdown + discover if the MCP module exposes them.
+            if hasattr(McpClientManager, "shutdown_all"):
+                McpClientManager.shutdown_all()
+            if hasattr(McpClientManager, "discover"):
+                McpClientManager.discover()
+        except ImportError:
+            pass
+
+        # Refresh the agent's tool snapshot so the current session picks up
+        # added/removed MCP tools.
+        if session:
+            agent = session.get("agent")
+            if agent is not None:
+                try:
+                    from niaharness.mcp.client import refresh_agent_mcp_tools  # type: ignore
+                    refresh_agent_mcp_tools(agent, quiet_mode=True)
+                except ImportError:
+                    pass
+                except Exception as _exc:
+                    logger.warning("Failed to refresh cached agent tools after /reload-mcp: %s", _exc)
+                _emit("session.info", params.get("session_id", ""), _session_info(agent, session))
+
+        # Honor `always=true` by persisting the opt-out to config.
+        if bool(params.get("always", False)):
+            try:
+                _write_config_key("approvals.mcp_reload_confirm", False)
+            except Exception as _exc:
+                logger.warning("Failed to persist mcp_reload_confirm=false: %s", _exc)
+
+        return _ok(rid, {"status": "reloaded"})
+    except Exception as e:
+        return _err(rid, 5015, str(e))
 
 
 @method("reload.env")
 def _reload_env(rid, params):
+    """Re-read ``~/.nia/.env`` into the gateway process.
+
+    Deep-ported from Hermes line 11210. Newly added API keys take effect on
+    the next agent call without restarting the TUI.
+    """
     try:
-        from dotenv import load_dotenv
-        from niaharness.config.paths import get_nia_home
-        env_path = get_nia_home() / ".env"
-        if env_path.exists():
-            load_dotenv(env_path, override=True)
-            return _ok(rid, {"reloaded": True})
-        return _ok(rid, {"reloaded": False, "reason": "no .env file"})
-    except Exception as exc:
-        return _err(rid, 5001, f"reload.env failed: {exc}")
+        from niaharness.config.env_loader import load_nia_dotenv  # type: ignore
+        from niaharness.prompts.soul import get_nia_home  # type: ignore
+
+        nia_home = get_nia_home()
+        count = load_nia_dotenv(nia_home=nia_home)
+        return _ok(rid, {"updated": int(count) if count else 0})
+    except ImportError:
+        # Fallback: use python-dotenv directly.
+        try:
+            from dotenv import load_dotenv
+            from niaharness.prompts.soul import get_nia_home
+
+            env_path = get_nia_home() / ".env"
+            if env_path.exists():
+                load_dotenv(env_path, override=True)
+                return _ok(rid, {"updated": 1})
+            return _ok(rid, {"updated": 0})
+        except Exception as e:
+            return _err(rid, 5015, str(e))
+    except Exception as e:
+        return _err(rid, 5015, str(e))
 
 
 # ---------------------------------------------------------------------------

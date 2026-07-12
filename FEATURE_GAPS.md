@@ -71,6 +71,32 @@
 
 <!-- Append tui-gateway gaps here as you find them -->
 
+> **Status Update (Phase 3 complete):** All gaps marked ✅ below have backing
+> modules built. The tui_gateway deep-ports now import real implementations
+> instead of falling back to stubs. Remaining gaps (set_nia_home_override,
+> gateway.session_context, tools.terminal_tool, engine.context_references,
+> engine.image_routing, MoA) require deeper subsystem work and are left
+> as guarded try/except fallbacks.
+
+- [✅] TUI Gateway: `cli.projects_db` — **BUILT** (niaharness.cli.projects_db, 840 LOC)
+- [✅] TUI Gateway: `engine.checkpoint_manager` — **BUILT** (niaharness.engine.checkpoint_manager, 1052 LOC)
+- [✅] TUI Gateway: `engine.redact.redact_sensitive_text` — **BUILT** (niaharness.engine.redact, 384 LOC)
+- [✅] TUI Gateway: `engine.replay_cleanup.sanitize_replay_history` — **BUILT** (niaharness.engine.replay_cleanup, 144 LOC)
+- [✅] TUI Gateway: `engine.learn_prompt.build_learn_prompt` — **BUILT** (niaharness.engine.learn_prompt, 154 LOC)
+- [✅] TUI Gateway: `goals.GoalManager` — **BUILT** (niaharness.goals, 1110 LOC)
+- [✅] TUI Gateway: `engine.verification_evidence.verification_status` — **BUILT** (niaharness.engine.verification_evidence, 607 LOC)
+- [✅] TUI Gateway: `cli.clipboard.has_clipboard_image` / `save_clipboard_image` — **BUILT** (niaharness.cli.clipboard, 454 LOC)
+- [✅] TUI Gateway: `skills.skill_commands` — **BUILT** (niaharness.skills.skill_commands, 471 LOC)
+- [✅] TUI Gateway: `cli.auth.PROVIDER_REGISTRY` / `clear_provider_auth` — **BUILT** (niaharness.cli.auth, 409 LOC)
+- [✅] TUI Gateway: `cli.runtime_provider.resolve_runtime_provider` — **BUILT** (niaharness.cli.runtime_provider, 242 LOC)
+- [✅] TUI Gateway: `plugins.get_plugin_command_handler` — **BUILT** (niaharness.plugins, 299 LOC)
+- [✅] TUI Gateway: `cli._detect_file_drop` / `_resolve_attachment_path` / `_split_path_input` — **BUILT** (niaharness.cli.attachment_paths, 155 LOC)
+- [✅] TUI Gateway: `voice_mode.check_voice_requirements` — **BUILT** (niaharness.voice_mode, 165 LOC)
+- [✅] TUI Gateway: `cli.voice.start_continuous` / `stop_continuous` / `speak_text` — **BUILT** (niaharness.cli.voice, 210 LOC)
+- [✅] TUI Gateway: `engine.preview_restart` — **BUILT** (niaharness.engine.preview_restart, 125 LOC)
+- [✅] TUI Gateway: `engine.redact.redact_sensitive_text` — **BUILT** (regex fallback replaced by full implementation)
+
+
 - [ ] TUI Gateway: `set_nia_home_override` / `reset_nia_home_override` — per-turn NIA_HOME override for resumed remote profiles is a no-op
       Reference: hermes-agent/tui_gateway/server.py:8572
       Context: When a session is resumed from a remote profile, Hermes swaps HERMES_HOME for the duration of the turn so the agent loads the profile's config/SOUL.md. NIA has `get_nia_home` (in `niaharness.prompts.soul`) but no setter/resetter pair. The deep-port of `prompt.submit` guards the call with try/except ImportError so the turn still runs, but profile-scoped config is silently ignored.
